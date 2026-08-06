@@ -185,16 +185,16 @@ test('ToolContext keeps approval and sandbox policy in one reusable object', () 
         agentRole: 'persona_orchestrator',
         contextMode: 'persona',
         agent_path: '/root',
-        parentSessionId: 'persona_session_1',
-        taskAgentThreadId: 'thread_1',
-        taskAgentTurnId: 'turn_1',
         approved: true,
         allowOutsideWorkspace: true,
         permissionProfile: 'full-access',
+        answerOnly: true,
+        exactAnswerMode: true,
         directToolExecutor: true,
         nativeDirectTools: true,
         directToolLimit: 35,
         requireTaskExecution: true,
+        requireExecutionEvidence: true,
         desktopRealEval: true,
         desktopRealEvalTaskId: 'toolsandbox-scenario-1',
         desktopRealEvalTaskText: 'Run the official scenario.',
@@ -204,6 +204,7 @@ test('ToolContext keeps approval and sandbox policy in one reusable object', () 
             source: 'toolsandbox_benchmark_clock',
             current_date: '2026-07-17'
         },
+        executionProfile: { kind: 'exact_answer_eval' },
         evaluationTaskId: 'gaia-task-1',
         evaluationName: 'gaia_desktop_real',
         memoryPolicy: 'disabled',
@@ -217,19 +218,16 @@ test('ToolContext keeps approval and sandbox policy in one reusable object', () 
     assert.equal(context.agentRole, 'persona_orchestrator');
     assert.equal(context.contextMode, 'persona');
     assert.equal(context.agent_path, '/root');
-    assert.equal(context.parentSessionId, 'persona_session_1');
-    assert.equal(context.taskAgentThreadId, 'thread_1');
-    assert.equal(context.taskAgentTurnId, 'turn_1');
     assert.equal(context.approved, true);
     assert.equal(context.allowOutsideWorkspace, true);
     assert.equal(context.permissionProfile, 'full-access');
-    assert.equal(Object.hasOwn(context, 'answerOnly'), false);
-    assert.equal(Object.hasOwn(context, 'exactAnswerMode'), false);
+    assert.equal(context.answerOnly, true);
+    assert.equal(context.exactAnswerMode, true);
     assert.equal(context.directToolExecutor, true);
     assert.equal(context.nativeDirectTools, true);
     assert.equal(context.directToolLimit, 35);
     assert.equal(context.requireTaskExecution, true);
-    assert.equal(Object.hasOwn(context, 'requireExecutionEvidence'), false);
+    assert.equal(context.requireExecutionEvidence, true);
     assert.equal(context.desktopRealEval, true);
     assert.equal(context.desktopRealEvalTaskId, 'toolsandbox-scenario-1');
     assert.equal(context.desktopRealEvalTaskText, 'Run the official scenario.');
@@ -239,7 +237,7 @@ test('ToolContext keeps approval and sandbox policy in one reusable object', () 
         source: 'toolsandbox_benchmark_clock',
         current_date: '2026-07-17'
     });
-    assert.equal(Object.hasOwn(context, 'executionProfile'), false);
+    assert.deepEqual(context.executionProfile, { kind: 'exact_answer_eval' });
     assert.equal(context.evaluationTaskId, 'gaia-task-1');
     assert.equal(context.evaluationName, 'gaia_desktop_real');
     assert.equal(context.memoryPolicy, 'disabled');
@@ -285,18 +283,18 @@ test('ToolExecutor executes one step and lets AgentRunner decorate the result', 
         decorateStepResult(stepResult) {
             return {
                 ...stepResult,
-                outputArtifacts: [{ id: 'out_1' }]
+                evidenceArtifacts: [{ id: 'ev_1' }]
             };
         },
         finishedPayload(stepResult) {
             return {
-                outputRefs: stepResult.outputArtifacts.map((artifact) => artifact.id)
+                evidenceRefs: stepResult.evidenceArtifacts.map((artifact) => artifact.id)
             };
         }
     });
 
     assert.equal(result.response.ok, true);
-    assert.deepEqual(result.outputArtifacts, [{ id: 'out_1' }]);
+    assert.deepEqual(result.evidenceArtifacts, [{ id: 'ev_1' }]);
     assert.equal(calls.length, 1);
     assert.equal(calls[0].tool, 'read');
     assert.equal(calls[0].timeoutMs, 5000);
@@ -305,5 +303,5 @@ test('ToolExecutor executes one step and lets AgentRunner decorate the result', 
     assert.equal(calls[0].context.sessionId, 'session_1');
     assert.equal(calls[0].context.iteration, 1);
     assert.deepEqual(events.map((event) => event.type), ['agent.step.started', 'agent.step.finished']);
-    assert.deepEqual(events[1].payload.outputRefs, ['out_1']);
+    assert.deepEqual(events[1].payload.evidenceRefs, ['ev_1']);
 });

@@ -202,10 +202,10 @@ const ROUTING_PROFILES = Object.freeze([
         tools: ['transcribe_audio'],
         bonus: 88,
         webPenalty: 80,
-        advice: 'Use transcribe_audio for local audio content before web_search.'
+        advice: 'Use transcribe_audio for local audio evidence before web_search.'
     }),
     Object.freeze({
-        id: 'video_visual_facts',
+        id: 'video_visual_evidence',
         patterns: [
             /\b(video|youtube|youtu\.be|youtube\.com)\b.*\b(frame|visual|visible|on[- ]?screen|simultaneous|at once|species|count)\b/i,
             /\b(frame|visual|visible|on[- ]?screen|simultaneous|at once)\b.*\b(video|youtube|youtu\.be|youtube\.com)\b/i,
@@ -264,7 +264,7 @@ const ROUTING_PROFILES = Object.freeze([
         bonus: 86,
         primaryBonus: 28,
         webPenalty: 0,
-        advice: 'Use web_research for public/current web tasks such as latest competitions, leaderboards, news, strategy, and guide requests because it searches, fetches, and ranks relevant pages. Use bare web_search only for discovery-only result lists.'
+        advice: 'Use web_research for public/current web evidence tasks such as latest competitions, leaderboards, news, strategy, and guide requests because it plans queries, searches, fetches, ranks evidence pages, and stops for clarification when ambiguous. Use bare web_search only for discovery-only result lists.'
     })
 ]);
 

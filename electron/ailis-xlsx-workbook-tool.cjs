@@ -268,7 +268,7 @@ function truncateMiddle(text = '', maxChars = DEFAULT_PREVIEW_CHARS) {
     if (source.length <= budget) {
         return source;
     }
-    const marker = '\n... [preview truncated; use artifact_query with artifactId for narrower data] ...\n';
+    const marker = '\n... [preview truncated; use artifact_query with artifactId for narrower evidence] ...\n';
     const remaining = Math.max(0, budget - marker.length);
     const head = Math.ceil(remaining * 0.65);
     const tail = remaining - head;
@@ -445,7 +445,7 @@ function buildPreview(payload, maxChars = DEFAULT_PREVIEW_CHARS) {
         `selectedSheets=${payload.workbook.sheets.map((sheet) => sheet.name).join(', ')}`,
         payload.contextArtifact?.id ? `artifactId=${payload.contextArtifact.id}` : '',
         payload.contextArtifact?.id ? 'queryWith=artifact_query actions summary/grid/range/search/runtime_schema/chunk_search' : '',
-        'result_status=complete:true'
+        'observation_contract=complete:true reasoning_ready:true'
     ].filter(Boolean);
     for (const sheet of payload.workbook.sheets) {
         lines.push('');
@@ -549,9 +549,10 @@ function publicStructuredContent(payload = {}) {
         observationContract: {
             complete: payload.completeness?.allSelectedSheetsComplete !== false,
             truncated: payload.completeness?.allSelectedSheetsComplete === false,
+            reasoning_ready: true,
             next: payload.contextArtifact?.id
-                ? 'Use artifact_query for localized data or RAGFlow-lite chunk_search; do not raw-read artifact payload files.'
-                : 'Use a narrower read_xlsx_workbook range if more data is needed.'
+                ? 'Use artifact_query for localized evidence or RAGFlow-lite chunk_search; do not raw-read artifact payload files.'
+                : 'Use narrower read_xlsx_workbook range if more evidence is needed.'
         }
     };
 }

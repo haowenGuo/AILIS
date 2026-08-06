@@ -193,7 +193,7 @@ test('AILIS thread items keep web_search snippets neutral instead of adding evid
 
     assert.equal(items.length, 1);
     assert.equal(items[0].status, 'completed');
-    assert.equal(Object.hasOwn(items[0], 'evidence_gap'), false);
+    assert.equal(items[0].evidence_gap, null);
     assert.equal(items[0].recovery_hint, undefined);
     assert.equal(items[0].alternatives, undefined);
 });
@@ -303,4 +303,134 @@ test('Observation ledger preserves artifact_tools preview-only query observation
     assert.match(promptObject.items[0].preview, /rowNumber": 11/);
     assert.match(promptObject.items[0].preview, /END/);
     assert.doesNotMatch(promptObject.items[0].preview, /truncated for model budget/);
+});
+
+test('AILIS thread items classify nested low-confidence web_search as requiring user clarification', () => {
+    const items = buildAilisThreadItems({
+        stepResults: [
+            {
+                id: 'step-ambiguous-search',
+                title: 'Search short game nickname',
+                tool: 'mcp__ailis_research__web_search',
+                args: { query: '做一个小光的攻略' },
+                iteration: 1,
+                response: {
+                    ok: true,
+                    status: 'completed',
+                    result: {
+                        content: [{
+                            type: 'text',
+                            text: 'Evidence gap: Search confidence is low; the query appears ambiguous and should be clarified before following any result.'
+                        }],
+                        structuredContent: {
+                            result: {
+                                structuredContent: {
+                                    status: 'completed',
+                                    query: '做一个小光的攻略',
+                                    clarificationRequired: true,
+                                    searchConfidence: {
+                                        level: 'low',
+                                        shouldAskUser: true,
+                                        clarificationRequired: true,
+                                        clarificationQuestion: '你说的“小光”具体指哪一个？请补充游戏名或角色全名。',
+                                        candidateChoices: [
+                                            { label: '绝区零 / 叶瞬光', url: 'https://www.bilibili.com/video/BV1rXBoBoEv1/' },
+                                            { label: '光遇 / 小光', url: 'https://example.com/sky/xiaoguang-guide' }
+                                        ]
+                                    },
+                                    suggestedNextCalls: []
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        ]
+    });
+
+    assert.equal(items.length, 1);
+    assert.equal(items[0].status, 'completed');
+    assert.equal(items[0].evidence_gap, 'ambiguous_search_requires_clarification');
+    assert.match(items[0].preview, /具体指哪一个|补充游戏名/);
+    assert.equal(items[0].recovery_hint, undefined);
+    assert.equal(items[0].alternatives, undefined);
+});
+
+test('AILIS thread items classify web_fetch JavaScript shells as unusable evidence', () => {
+    const items = buildAilisThreadItems({
+        stepResults: [
+            {
+                id: 'step-js-shell',
+                title: 'Fetch Miyoushe guide',
+                tool: 'mcp__ailis_research__web_fetch',
+                args: { url: 'https://www.miyoushe.com/zzz/article/59714036' },
+                iteration: 2,
+                response: {
+                    ok: true,
+                    status: 'completed',
+                    result: {
+                        content: [{ type: 'text', text: 'Evidence gap: The fetched page is only a JavaScript loading shell.\n\nContent excerpt:\n米游社 Loading...' }],
+                        details: {
+                            status: 'completed',
+                            evidenceQuality: 'js_shell',
+                            isEvidence: false,
+                            observationContract: {
+                                complete: false,
+                                truncated: false,
+                                reasoning_ready: false,
+                                is_evidence: false,
+                                evidence_quality: 'js_shell'
+                            }
+                        }
+                    }
+                }
+            }
+        ]
+    });
+
+    assert.equal(items.length, 1);
+    assert.equal(items[0].evidence_gap, 'js_shell_no_content');
+    assert.match(items[0].preview, /JavaScript loading shell/);
+    assert.equal(items[0].recovery_hint, undefined);
+    assert.equal(items[0].alternatives, undefined);
+});
+
+test('AILIS thread items do not add an evidence gap for sufficient web_fetch evidence', () => {
+    const items = buildAilisThreadItems({
+        stepResults: [
+            {
+                id: 'step-ready-page',
+                title: 'Fetch BWiki guide',
+                tool: 'mcp__ailis_research__web_fetch',
+                args: { url: 'https://wiki.biligame.com/zzz/%E8%8E%B1%E7%89%B9' },
+                iteration: 4,
+                response: {
+                    ok: true,
+                    status: 'completed',
+                    result: {
+                        content: [{ type: 'text', text: 'Content excerpt:\n莱特 - 绝区零WIKI_BWIKI 技能加点 配队 驱动盘' }],
+                        details: {
+                            status: 'completed',
+                            evidenceQuality: 'sufficient_evidence',
+                            isEvidence: true,
+                            complete: true,
+                            truncated: false,
+                            reasoningReady: true,
+                            observationContract: {
+                                complete: true,
+                                truncated: false,
+                                reasoning_ready: true,
+                                is_evidence: true,
+                                evidence_quality: 'sufficient_evidence'
+                            }
+                        }
+                    }
+                }
+            }
+        ]
+    });
+
+    assert.equal(items.length, 1);
+    assert.equal(items[0].evidence_gap, null);
+    assert.equal(items[0].recovery_hint, undefined);
 });

@@ -39,6 +39,16 @@ const NOT_READY_CODES = new Set([
     'provider_unavailable'
 ]);
 
+const PARTIAL_EVIDENCE_QUALITIES = new Set([
+    'encoding_failure',
+    'js_shell',
+    'link_hub',
+    'metadata_only',
+    'off_target_evidence',
+    'partial_evidence',
+    'thin_content'
+]);
+
 function normalizeString(value, fallback = '') {
     if (typeof value !== 'string') {
         return fallback;
@@ -271,6 +281,23 @@ function inferSemanticLevel({ toolId = '', details = {}, text = '' } = {}) {
     return text ? 'text' : 'metadata';
 }
 
+function collectNextActions(details = {}) {
+    const values = [
+        details.nextActions,
+        details.next_actions,
+        details.suggestedNextCalls,
+        details.suggested_next_calls,
+        details.observationContract?.next_actions,
+        details.observation_contract?.next_actions
+    ];
+    for (const value of values) {
+        if (Array.isArray(value)) {
+            return cloneJson(value.slice(0, 8));
+        }
+    }
+    return [];
+}
+
 function buildObservationContract(output = {}, { toolId = '' } = {}) {
     const text = collectTextContent(output);
     const parsedText = parseWholeJsonText(text);
@@ -307,6 +334,12 @@ function buildObservationContract(output = {}, { toolId = '' } = {}) {
         failure = selectFailure(nestedFailures);
     }
 
+    const evidenceQuality = normalizeStatus(
+        existing.evidence_quality ||
+        existing.evidenceQuality ||
+        details.evidenceQuality ||
+        details.evidence_quality
+    );
     const sourceStatus = normalizeStatus(
         existing.status ||
         details.status ||
@@ -316,7 +349,8 @@ function buildObservationContract(output = {}, { toolId = '' } = {}) {
         details.search?.status ||
         details.webSearchOutput?.search?.status
     );
-    const partial = ['empty', 'partial'].includes(searchStatus) ||
+    const partial = PARTIAL_EVIDENCE_QUALITIES.has(evidenceQuality) ||
+        ['empty', 'partial', 'partial_evidence'].includes(searchStatus) ||
         ['partial', 'degraded'].includes(sourceStatus);
     const status = failure?.status || (partial ? 'partial' : 'completed');
     const errorCode = normalizeStatus(
@@ -339,6 +373,11 @@ function buildObservationContract(output = {}, { toolId = '' } = {}) {
         existing.complete !== false &&
         details.complete !== false
     );
+    const reasoningReady = existing.reasoning_ready === true ||
+        existing.reasoningReady === true ||
+        details.reasoningReady === true ||
+        details.reasoning_ready === true ||
+        (status === 'completed' && complete && evidenceQuality === 'sufficient_evidence');
     const matchMode = normalizeStatus(
         existing.match_mode ||
         existing.matchMode ||
@@ -347,21 +386,26 @@ function buildObservationContract(output = {}, { toolId = '' } = {}) {
     );
     const coverage = firstObject(
         existing.coverage,
-        details.coverage
+        details.coverage,
+        details.evidence?.coverage
     );
     return {
+        ...cloneJson(existing),
         schema: OBSERVATION_CONTRACT_SCHEMA,
         status,
         transport_ok: output.isError !== true,
         content_ok: !failure,
         capability_ready: capabilityReady,
         semantic_level: inferSemanticLevel({ toolId, details, text }),
+        evidence_quality: evidenceQuality || (reasoningReady ? 'sufficient_evidence' : ''),
         complete,
         truncated,
+        reasoning_ready: reasoningReady,
         ...(matchMode ? { match_mode: matchMode } : {}),
         ...(coverage ? { coverage: cloneJson(coverage) } : {}),
         ...(errorCode ? { error_code: errorCode } : {}),
-        ...(failure?.error ? { error: failure.error } : {})
+        ...(failure?.error ? { error: failure.error } : {}),
+        next_actions: collectNextActions(details)
     };
 }
 
@@ -378,7 +422,10 @@ function compactObservationContract(contract = {}) {
         match_mode: contract.match_mode || undefined,
         coverage: contract.coverage || undefined,
         error_code: contract.error_code || undefined,
-        error: contract.error || undefined
+        error: contract.error || undefined,
+        next_actions: Array.isArray(contract.next_actions) && contract.next_actions.length
+            ? contract.next_actions
+            : undefined
     };
 }
 

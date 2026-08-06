@@ -254,7 +254,7 @@ const STANDARD_TOOL_PACKS = Object.freeze([
                         pages: arrayProp('Per-page extraction metadata.', { type: 'object' })
                     }
                 }),
-                whenToUse: Object.freeze(['Use for local PDF/DOCX/PPTX/XLSX documents where layout, tables, OCR, or page-level content matter.']),
+                whenToUse: Object.freeze(['Use for local PDF/DOCX/PPTX/XLSX documents where layout, tables, OCR, or page-level evidence matter.']),
                 whenNotToUse: Object.freeze(['Do not use for plain text/Markdown files that the read tool can read directly.']),
                 preconditions: Object.freeze(['The local file exists.', 'Docling runtime is installed or this contract is backed by an installed tool.']),
                 examples: Object.freeze([Object.freeze({ path: 'F:/AILIS/input/report.pdf', output_format: 'json', ocr: 'auto' })]),
@@ -495,7 +495,7 @@ const STANDARD_TOOL_PACKS = Object.freeze([
                     Object.freeze({ filter: 'authorships.author.id:A5047423326,to_publication_date:2014-12-31', sort: 'publication_date:asc', 'per-page': 10 })
                 ]),
                 badExamples: Object.freeze([Object.freeze({ q: 'paper' }), Object.freeze({ search: 'Pietro Murano', filter: 'authorships.author.id:A5047423326' })]),
-                alternatives: Object.freeze(['Use paper_metadata_lookup for author identity resolution and multi-hop publication chronology.', 'Use Crossref for DOI-first lookups.', 'Use pdf_find_and_extract for full text.']),
+                alternatives: Object.freeze(['Use paper_metadata_lookup for author identity resolution and multi-hop publication chronology.', 'Use Crossref for DOI-first lookups.', 'Use pdf_find_and_extract for full text evidence.']),
                 errors: Object.freeze({
                     low_confidence_match: Object.freeze({ recoverable: true, nextActions: Object.freeze(['add author/year/venue terms or use exact title']) }),
                     rate_limited: Object.freeze({ recoverable: true, nextActions: Object.freeze(['retry later or query Crossref']) })
@@ -577,15 +577,15 @@ const STANDARD_TOOL_PACKS = Object.freeze([
                         url: stringProp('YouTube video URL.'),
                         language: stringProp('Preferred transcript/ASR language such as en or zh.', { default: 'auto' }),
                         allow_cookies: { type: 'boolean', description: 'Whether browser cookies may be used for anti-bot protected videos.' },
-                        sample_frames: { type: 'boolean', description: 'Whether to sample frames when transcript/audio content is insufficient.' }
+                        sample_frames: { type: 'boolean', description: 'Whether to sample frames when transcript/audio evidence is insufficient.' }
                     }
                 }),
-                whenToUse: Object.freeze(['Use for YouTube/video questions that need transcript, speech, visible text, or frame inspection.']),
+                whenToUse: Object.freeze(['Use for YouTube/video questions that need transcript, speech, visible text, or frame evidence.']),
                 whenNotToUse: Object.freeze(['Do not keep retrying youtube_transcript after anti-bot/captcha; switch to cookies, ASR, or report blocked.']),
                 preconditions: Object.freeze(['A video URL is known.', 'ASR/download dependencies are installed for fallback paths.']),
                 examples: Object.freeze([Object.freeze({ url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ', language: 'en', allow_cookies: false, sample_frames: true })]),
                 badExamples: Object.freeze([Object.freeze({ query: 'funny video' })]),
-                alternatives: Object.freeze(['Use web_search to find the video URL first.', 'Use browser/vision tools for visible on-page content.']),
+                alternatives: Object.freeze(['Use web_search to find the video URL first.', 'Use browser/vision tools for visible on-page evidence.']),
                 errors: Object.freeze({
                     anti_bot_blocked: Object.freeze({ recoverable: true, nextActions: Object.freeze(['use cookies if approved', 'fallback to ASR/frame sampling', 'stop looping transcript requests']) }),
                     transcript_unavailable: Object.freeze({ recoverable: true, nextActions: Object.freeze(['download audio and run ASR']) })

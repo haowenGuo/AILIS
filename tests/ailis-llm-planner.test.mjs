@@ -112,17 +112,6 @@ function parseModelContextPayload(call) {
             // Ignore non-JSON user goal messages.
         }
     }
-    for (const message of messages) {
-        const match = String(message.content || '').match(
-            /<task_agent_session_state>\s*([\s\S]*?)\s*<\/task_agent_session_state>/i
-        );
-        if (!match) continue;
-        try {
-            return JSON.parse(match[1]);
-        } catch {
-            // Ignore malformed state envelopes in this test helper.
-        }
-    }
     return {};
 }
 
@@ -137,7 +126,7 @@ async function waitFor(predicate, { timeoutMs = 2000, intervalMs = 25 } = {}) {
     return false;
 }
 
-test('Agent turn items keep successful web fetches as ordinary observations', () => {
+test('Agent turn items mark successful web fetches with structured API evidence gaps', () => {
     const turnItems = buildObservationLedgerPromptObject({
         stepResults: [
             {
@@ -163,9 +152,9 @@ test('Agent turn items keep successful web fetches as ordinary observations', ()
             }
         ]
     });
-    assert.equal(Object.hasOwn(turnItems.latest_observation, 'evidence_gap'), false);
-    assert.match(turnItems.latest_observation.preview, /ClinicalTrials\.gov/);
-    assert.doesNotMatch(JSON.stringify(turnItems.items), /structured_api_preferred/);
+    assert.equal(turnItems.latest_observation.evidence_gap, 'structured_api_preferred');
+    assert.match(turnItems.latest_observation.preview, /ClinicalTrials\.gov|structured ClinicalTrials/);
+    assert.match(JSON.stringify(turnItems.items), /structured_api_preferred|ClinicalTrials\.gov/);
 });
 
 test('Agent prompt profile uses compact budgets for Ollama without changing cloud providers', () => {
@@ -180,12 +169,13 @@ test('Agent prompt profile uses compact budgets for Ollama without changing clou
     assert.equal(cloudProfile.compact, false);
     assert.ok(cloudProfile.memoryChars >= 20000);
 
-    const legacyExactAnswerProfile = resolveAgentPromptProfile(
+    const exactAnswerProfile = resolveAgentPromptProfile(
         { provider: 'openai-compatible' },
         { exactAnswerMode: true }
     );
-    assert.equal(legacyExactAnswerProfile.id, 'full');
-    assert.equal(legacyExactAnswerProfile.compact, false);
+    assert.equal(exactAnswerProfile.id, 'local_compact');
+    assert.equal(exactAnswerProfile.compact, true);
+    assert.equal(exactAnswerProfile.reason, 'exact_answer_task');
 
     const artifactQuestionProfile = resolveAgentPromptProfile(
         { provider: 'openai-compatible' },
@@ -313,7 +303,7 @@ test('TaskAgent main loop semantically compacts over-budget history and preserve
         assert.match(checkpointText, /Use the official source/);
         assert.match(checkpointText, /Verify the official publication date/);
         assert.match(checkpointText, /official publication date remains unresolved/);
-        assert.doesNotMatch(checkpointText, /evidenceManifest|pinnedEvidenceManifest|evidenceRefs/);
+        assert.match(checkpointText, /Official release date evidence/);
         assert.match(checkpointText, /checkpoint-output-15/);
     } finally {
         await gateway.stop();
@@ -485,48 +475,6 @@ async function createDelayedChatCompletionsServer(delayMs = 5000) {
         get closedByClient() {
             return closedByClient;
         },
-        close: () => new Promise((resolve) => server.close(resolve))
-    };
-}
-
-async function createSteerAwareChatCompletionsServer(firstResponseDelayMs = 250) {
-    const calls = [];
-    const server = http.createServer((req, res) => {
-        let raw = '';
-        req.on('data', (chunk) => {
-            raw += chunk;
-        });
-        req.on('end', () => {
-            const payload = raw ? JSON.parse(raw) : {};
-            calls.push({ url: req.url, payload });
-            const callNumber = calls.length;
-            const respond = () => {
-                const message = decisionObjectToChatMessage({
-                    mode: 'task',
-                    intent: 'turn_steer_probe',
-                    action: 'final',
-                    final_answer: callNumber === 1
-                        ? '旧请求的答案'
-                        : '已按补充要求完成'
-                }, `steer-aware-${callNumber}`);
-                res.writeHead(200, { 'content-type': 'application/json' });
-                res.end(JSON.stringify({
-                    choices: [{ message }],
-                    usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 }
-                }));
-            };
-            if (callNumber === 1) {
-                setTimeout(respond, firstResponseDelayMs);
-            } else {
-                respond();
-            }
-        });
-    });
-    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
-    const address = server.address();
-    return {
-        url: `http://127.0.0.1:${address.port}/v1`,
-        calls,
         close: () => new Promise((resolve) => server.close(resolve))
     };
 }
@@ -846,15 +794,12 @@ test('Persona hands one exact request to the system TaskAgent and renders its co
         assert.equal(result.body.taskResult?.schema, 'ailis.task_result.v1');
         assert.equal(taskCalls.length, 1);
         assert.equal(taskCalls[0].agent.task, '核对官方资料并只给出类名。');
-        assert.equal(taskCalls[0].context.originalUserGoal, undefined);
-        assert.equal(taskCalls[0].context.currentTaskRequest, '核对官方资料并只给出类名。');
-        assert.ok(taskCalls[0].context.taskAgentThreadId);
-        assert.ok(taskCalls[0].context.taskAgentTurnId);
+        assert.equal(taskCalls[0].context.originalUserGoal, '核对官方资料并只给出类名。');
         assert.equal(taskCalls[0].context.desktopRealEval, true);
         assert.equal(taskCalls[0].context.benchmarkName, 'Apple ToolSandbox');
         assert.equal(taskCalls[0].context.benchmarkScenario, 'toolsandbox-scenario-1');
         assert.equal(taskCalls[0].context.directToolLimit, 35);
-        assert.equal(Object.hasOwn(taskCalls[0].context, 'requireExecutionEvidence'), false);
+        assert.equal(taskCalls[0].context.requireExecutionEvidence, true);
         assert.deepEqual(taskCalls[0].context.runtimeEnvironmentOverride, {
             source: 'toolsandbox_benchmark_clock',
             current_date: '2026-07-17',
@@ -1321,143 +1266,6 @@ test('AILIS Agent run can be interrupted while preserving transcript data', asyn
     } finally {
         await gateway.stop().catch(() => {});
         await llmServer.close().catch(() => {});
-    }
-});
-
-test('active Turn steer is appended before a TaskAgent final can commit', async () => {
-    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-turn-steer-test-'));
-    const llmServer = await createSteerAwareChatCompletionsServer(300);
-    const gateway = new AILISGateway({
-        port: 0,
-        workspaceRoot,
-        projectRoot: path.resolve('.'),
-        auditDir: path.join(workspaceRoot, '.audit')
-    });
-    const runId = 'active-turn-steer-run';
-    const sessionId = 'active-turn-steer-session';
-
-    try {
-        const status = await gateway.start();
-        const runPromise = runAgent(status.url, {
-            runId,
-            sessionId,
-            message: '先回答旧请求',
-            agentLoop: 'llm',
-            llmSettings: {
-                provider: 'openai-compatible',
-                baseUrl: llmServer.url,
-                apiKey: 'test-key',
-                model: 'mock-turn-steer',
-                timeoutMs: 10000
-            },
-            context: {
-                sessionId,
-                agentRole: 'task_agent',
-                taskAgentThreadId: 'thread-steer-test',
-                taskAgentTurnId: 'turn-steer-test',
-                currentTaskRequest: '先回答旧请求'
-            }
-        });
-        const reachedFirstDecision = await waitFor(() => llmServer.calls.length === 1, {
-            timeoutMs: 2000
-        });
-        assert.equal(reachedFirstDecision, true);
-        assert.equal(gateway.ensureAgentRunner().enqueueRunInput({
-            runId,
-            sessionId,
-            message: '补充要求：按新条件回答'
-        }), true);
-
-        const result = await runPromise;
-        assert.equal(result.body.status, 'completed');
-        assert.equal(result.body.message, '补充要求：按新条件回答');
-        assert.equal(result.body.displayText, '已按补充要求完成');
-        assert.equal(llmServer.calls.length, 2);
-        const secondInput = JSON.stringify(llmServer.calls[1].payload.messages);
-        assert.match(secondInput, /先回答旧请求/);
-        assert.match(secondInput, /补充要求：按新条件回答/);
-        assert.match(secondInput, /task_agent_session_state/);
-    } finally {
-        await gateway.stop().catch(() => {});
-        await llmServer.close().catch(() => {});
-        await fs.rm(workspaceRoot, { recursive: true, force: true });
-    }
-});
-
-test('model-authored task_goal persists through the real Gateway into the next Session Turn', async () => {
-    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-task-goal-integration-'));
-    const llmServer = await createScriptedChatCompletionsServer(({ decisionCount }) => {
-        if (decisionCount === 1) {
-            return {
-                mode: 'task',
-                intent: 'long_horizon_goal',
-                action: 'tool',
-                tool_call: {
-                    tool: 'task_goal',
-                    title: '建立跨 Turn 目标',
-                    args: {
-                        action: 'set',
-                        objective: '完成木偶攻略'
-                    }
-                }
-            };
-        }
-        return {
-            mode: 'task',
-            intent: 'long_horizon_goal',
-            action: 'final',
-            final_answer: decisionCount === 2 ? '目标已建立' : '继续完成木偶攻略'
-        };
-    });
-    const gateway = new AILISGateway({
-        port: 0,
-        workspaceRoot,
-        projectRoot: path.resolve('.'),
-        auditDir: path.join(workspaceRoot, '.audit')
-    });
-    const llmSettings = {
-        provider: 'openai-compatible',
-        baseUrl: llmServer.url,
-        apiKey: 'test-key',
-        model: 'mock-task-goal',
-        timeoutMs: 10000
-    };
-
-    try {
-        await gateway.start();
-        const first = await gateway.taskAgentHarness.handoff({}, {
-            currentUserMessage: '建立一个长期木偶攻略目标',
-            sessionId: 'task-goal-integration-session',
-            runId: 'task-goal-parent-1',
-            llmSettings
-        });
-        const second = await gateway.taskAgentHarness.handoff({}, {
-            currentUserMessage: '继续',
-            sessionId: 'task-goal-integration-session',
-            runId: 'task-goal-parent-2',
-            llmSettings
-        });
-
-        assert.equal(first.original_goal, '完成木偶攻略');
-        assert.equal(second.original_goal, '完成木偶攻略');
-        assert.equal(first.thread_id, second.thread_id);
-        assert.notEqual(first.turn_id, second.turn_id);
-        assert.equal(llmServer.calls.length, 3);
-        const firstToolNames = (llmServer.calls[0].payload.tools || [])
-            .map((tool) => tool.function?.name || tool.name);
-        assert.ok(firstToolNames.includes('task_goal'));
-        assert.equal(
-            parseModelContextPayload(llmServer.calls[1]).task_state.active_goal.objective,
-            '完成木偶攻略'
-        );
-        assert.equal(
-            parseModelContextPayload(llmServer.calls[2]).task_state.active_goal.objective,
-            '完成木偶攻略'
-        );
-    } finally {
-        await gateway.stop().catch(() => {});
-        await llmServer.close().catch(() => {});
-        await fs.rm(workspaceRoot, { recursive: true, force: true });
     }
 });
 
@@ -2197,7 +2005,7 @@ test('Agentic Executor consumes native provider tool-call decisions and keeps ru
     }
 });
 
-test('TaskAgent unrestricted mode executes mutating tools without approval or confirmation', async () => {
+test('Agentic Executor Loop asks confirmation, resumes, observes, and keeps calling tools until final', async () => {
     const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-llm-planner-'));
     const llmServer = await createMockChatCompletionsServer();
     const llmSettings = {
@@ -2223,32 +2031,64 @@ test('TaskAgent unrestricted mode executes mutating tools without approval or co
             message: '帮我创建一个 planner-output 目录，并写入 README.txt',
             agentLoop: 'llm',
             llmSettings,
-            context: {
-                workspace: workspaceRoot,
-                agentRole: 'task_agent',
-                taskAgentPermissionMode: 'unrestricted'
-            }
+            context: { workspace: workspaceRoot, agentRole: 'task_agent' }
         });
 
-        assert.equal(first.body.ok, true, JSON.stringify({
+        assert.equal(first.body.ok, false, JSON.stringify({
             status: first.body.status,
             steps: first.body.steps,
             calls: llmServer.calls.map((call) => (call.payload.tools || []).map((tool) => tool.function?.name || tool.name))
         }));
-        assert.equal(first.body.status, 'completed');
+        assert.equal(first.body.status, 'needs_approval');
         assert.equal(first.body.planner, 'llm-agentic-executor');
-        assert.equal(first.body.confirmationRequired, undefined);
-        assert.equal(first.body.approvalId, undefined);
-        assert.equal(first.body.steps.length, 2);
-        assert.ok(first.body.events.length >= 6);
-        assert.match(first.body.displayText, /\*\*(Agentic Executor|任务执行流程) 已完成\*\*/);
-        assert.match(first.body.displayText, /README\.txt 已创建/);
+        assert.equal(first.body.confirmationRequired, true);
+        assert.equal(first.body.approvalType, 'agent_tool_call');
+        assert.ok(first.body.approvalId);
+        assert.doesNotMatch(first.body.displayText, /Agentic Executor Loop|确认编号/);
+        assert.equal(first.body.plan.length, 1);
+        assert.equal(first.body.plan[0].tool, 'exec');
+        assert.match(first.body.plan[0].args.command, /New-Item.*planner-output/);
+        await assert.rejects(
+            () => fs.readFile(path.join(workspaceRoot, 'planner-output', 'README.txt'), 'utf8'),
+            /ENOENT/
+        );
+
+        const classifyConfirm = await runAgent(baseUrl, {
+            sessionId: 'llm-planner-test',
+            message: '确认执行',
+            classifyOnly: true,
+            context: { workspace: workspaceRoot, agentRole: 'task_agent' }
+        });
+        assert.equal(classifyConfirm.body.intent, 'agent_action_confirmation');
+        assert.equal(classifyConfirm.body.mode, 'task');
+        assert.equal(classifyConfirm.body.approvalId, first.body.approvalId);
+
+        const directWithoutApproval = await runAgent(baseUrl, {
+            sessionId: 'llm-planner-test',
+            message: 'api direct confirm',
+            confirmApprovalId: first.body.approvalId,
+            llmSettings,
+            context: { workspace: workspaceRoot, agentRole: 'task_agent' }
+        });
+        assert.equal(directWithoutApproval.body.status, 'needs_approval');
+
+        const confirmed = await runAgent(baseUrl, {
+            sessionId: 'llm-planner-test',
+            message: '确认执行',
+            llmSettings,
+            context: { workspace: workspaceRoot, agentRole: 'task_agent' }
+        });
+        assert.equal(confirmed.body.ok, true, confirmed.body.displayText);
+        assert.equal(confirmed.body.status, 'completed');
+        assert.equal(confirmed.body.planner, 'llm-agentic-executor');
+        assert.equal(confirmed.body.steps.length, 2);
+        assert.ok(confirmed.body.events.length >= 6);
+        assert.match(confirmed.body.displayText, /\*\*(Agentic Executor|任务执行流程) 已完成\*\*/);
+        assert.match(confirmed.body.displayText, /README\.txt 已创建/);
 
         const text = await fs.readFile(path.join(workspaceRoot, 'planner-output', 'README.txt'), 'utf8');
         assert.match(text, /Agentic Executor OK/);
         assert.equal(llmServer.calls.filter((call) => /Responses-Compatible Tool Runtime/.test(call.system)).length, 3);
-        assert.match(llmServer.calls[0].system, /unrestricted direct tool execution/);
-        assert.doesNotMatch(llmServer.calls[0].system, /escalated to the user for approval/);
         assert.match(llmServer.calls[0].system, /You are a coding agent running in AILIS/);
         assert.match(llmServer.calls[0].system, /same outer AILIS conversation/);
         assert.match(llmServer.calls[0].system, /OpenAI Responses object model/);
@@ -2604,19 +2444,19 @@ test('Agentic Executor skips vision confirmation when full computer control is e
 
 test('TaskAgent ignores the legacy round cap, compacts canonical history, and ends on the model final', async () => {
     const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-task-agent-natural-termination-'));
-    await fs.writeFile(path.join(workspaceRoot, 'note.txt'), 'output\n', 'utf8');
+    await fs.writeFile(path.join(workspaceRoot, 'note.txt'), 'evidence\n', 'utf8');
     const llmServer = await createScriptedChatCompletionsServer(({ decisionCount }) => {
         if (decisionCount <= 10) {
             return {
                 mode: 'task',
                 intent: 'long_task',
-                summary: `读取第 ${decisionCount} 份输出`,
+                summary: `收集第 ${decisionCount} 份证据`,
                 action: 'tool',
                 tool_call: {
                     tool: 'exec',
-                    title: `读取输出 ${decisionCount}`,
+                    title: `读取证据 ${decisionCount}`,
                     args: {
-                        command: `powershell -NoProfile -Command "Write-Output ('output-${decisionCount} ' * 800)"`
+                        command: `powershell -NoProfile -Command "$value = 'evidence-${decisionCount} '; Write-Output ($value * 800)"`
                     }
                 }
             };
@@ -2624,7 +2464,7 @@ test('TaskAgent ignores the legacy round cap, compacts canonical history, and en
         return {
             mode: 'task',
             intent: 'long_task',
-            summary: '任务已经完成',
+            summary: '证据已经充分',
             action: 'final',
             final_answer: 'Natural completion after ten tool rounds.'
         };
@@ -2667,7 +2507,7 @@ test('TaskAgent ignores the legacy round cap, compacts canonical history, and en
         assert.equal(llmServer.calls.length, 11);
         assert.doesNotMatch(llmServer.calls[0].system, /work-tool rounds|round total budget|finalization/i);
         assert.match(llmServer.calls[0].system, /tool_search acquires a capability/);
-        assert.doesNotMatch(llmServer.calls[0].system, /web_run archive operation|exact-answer|evidence contract/i);
+        assert.match(llmServer.calls[0].system, /web_run archive operation/);
         assert.notEqual(llmServer.calls.at(-1).payload.tool_choice, 'none');
         assert.ok((llmServer.calls.at(-1).payload.tools || []).length > 0);
         assert.doesNotMatch(JSON.stringify(llmServer.calls.at(-1).payload.messages), /finalization package/i);
@@ -2744,7 +2584,7 @@ test('Agentic Executor feeds invalid decisions back as observations instead of s
     }
 });
 
-test('Agentic Executor stops repeated identical invalid native calls before they can run away', async () => {
+test('Agentic Executor keeps native tools available after invalid calls until the model ends', async () => {
     const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-invalid-native-tool-fuse-'));
     const llmServer = await createScriptedChatCompletionsServer(({ decisionCount }) => {
         if (decisionCount <= 2) {
@@ -2794,12 +2634,10 @@ test('Agentic Executor stops repeated identical invalid native calls before they
             }
         });
 
-        assert.equal(result.body.ok, false, JSON.stringify(result.body));
-        assert.equal(result.body.status, 'stalled');
-        assert.equal(result.body.taskRunHandoff.reason, 'repeated_invalid_native_tool_call');
-        assert.equal(llmServer.calls.length, 2);
-        assert.notEqual(llmServer.calls[1].payload.tool_choice, 'none');
-        assert.ok((llmServer.calls[1].payload.tools || []).length > 0);
+        assert.equal(result.body.ok, true, JSON.stringify(result.body));
+        assert.equal(llmServer.calls.length, 3);
+        assert.notEqual(llmServer.calls[2].payload.tool_choice, 'none');
+        assert.ok((llmServer.calls[2].payload.tools || []).length > 0);
         assert.equal(
             result.body.events.filter((event) =>
                 event.type === 'runtime_note' &&
@@ -2813,70 +2651,6 @@ test('Agentic Executor stops repeated identical invalid native calls before they
         await gateway.stop();
         await llmServer.close();
         await fs.rm(workspaceRoot, { recursive: true, force: true });
-    }
-});
-
-test('TaskAgent stops different commands that keep returning the same observation', async () => {
-    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-identical-observation-fuse-'));
-    const llmServer = await createScriptedChatCompletionsServer(({ decisionCount }) => (
-        decisionCount <= 5
-            ? {
-                  mode: 'task',
-                  intent: 'repeat_same_observation',
-                  summary: `尝试第 ${decisionCount} 个替代命令`,
-                  action: 'tool',
-                  tool_call: {
-                      tool: 'exec',
-                      title: `读取相同输出 ${decisionCount}`,
-                      args: {
-                          command: `powershell -NoProfile -Command "Write-Output unchanged # attempt-${decisionCount}"`
-                      }
-                  }
-              }
-            : {
-                  mode: 'task',
-                  intent: 'repeat_same_observation',
-                  summary: '未触发停滞检测',
-                  action: 'final',
-                  final_answer: '执行了五种没有进展的命令。'
-              }
-    ));
-    const gateway = new AILISGateway({
-        port: 0,
-        workspaceRoot,
-        projectRoot: path.resolve('.'),
-        auditDir: path.join(workspaceRoot, '.audit')
-    });
-
-    try {
-        const status = await gateway.start();
-        const result = await runAgent(status.url, {
-            sessionId: 'identical-observation-fuse-test',
-            message: '执行任务，但不要重复同一个动作。',
-            agentLoop: 'llm',
-            agentRole: 'task_agent',
-            llmSettings: {
-                provider: 'openai-compatible',
-                baseUrl: llmServer.url,
-                apiKey: 'test-key',
-                model: 'mock-identical-observation-fuse',
-                timeoutMs: 10000
-            },
-            context: {
-                workspace: workspaceRoot,
-                agentRole: 'task_agent',
-                approved: true,
-                confirmationPolicy: 'auto'
-            }
-        });
-
-        assert.equal(result.body.status, 'stalled', JSON.stringify(result.body));
-        assert.equal(result.body.taskRunHandoff.reason, 'repeated_identical_observation');
-        assert.equal(result.body.steps.length, 3);
-        assert.equal(llmServer.calls.length, 3);
-    } finally {
-        await gateway.stop();
-        await llmServer.close();
     }
 });
 
@@ -3188,7 +2962,7 @@ test('Agentic Executor allows zero-observation final answers without evidence wa
     }
 });
 
-test('Agentic Executor ignores the removed execution-evidence flag', async () => {
+test('Agentic Executor marks evidence-required zero-tool finals incomplete', async () => {
     const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-required-execution-evidence-'));
     const llmServer = await createScriptedChatCompletionsServer(() => ({
         mode: 'task',
@@ -3226,12 +3000,16 @@ test('Agentic Executor ignores the removed execution-evidence flag', async () =>
             }
         });
 
-        assert.equal(result.body.ok, true);
-        assert.equal(result.body.status, 'completed');
+        assert.equal(result.body.ok, false);
+        assert.equal(result.body.status, 'incomplete');
+        assert.equal(result.body.executionRequired, true);
         assert.equal(result.body.steps.length, 0);
-        assert.equal(result.body.taskRunHandoff.status, 'completed');
-        assert.match(result.body.displayText, /reminder was created/i);
-        assert.doesNotMatch(llmServer.calls[0].system, /execution-evidence contract/i);
+        assert.equal(result.body.taskRunHandoff.status, 'incomplete');
+        assert.deepEqual(
+            result.body.taskRunHandoff.unresolvedFields,
+            ['No successful task-execution tool call was recorded.']
+        );
+        assert.match(llmServer.calls[0].system, /explicit execution-evidence contract/i);
     } finally {
         await gateway.stop();
         await llmServer.close();

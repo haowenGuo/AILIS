@@ -276,7 +276,7 @@ function createArtifactEvaluationCase(input = {}) {
         input: normalizeString(input.input || input.path),
         goal: normalizeString(input.goal || input.prompt || input.description),
         requiredCapabilities: normalizeCapabilities(input.requiredCapabilities || input.required_capabilities, []),
-        expectedOutputs: uniqueStrings(input.expectedOutputs || input.expected_outputs || []),
+        expectedEvidence: uniqueStrings(input.expectedEvidence || input.expected_evidence || []),
         expectedAnswer: input.expectedAnswer ?? input.expected_answer ?? null,
         checks: uniqueStrings(input.checks || []),
         status: normalizeString(input.status, 'planned')

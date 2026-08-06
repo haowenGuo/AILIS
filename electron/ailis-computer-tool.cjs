@@ -567,7 +567,7 @@ function artifactCreatedReadResult({ kind, record, target, stat, text = '', prev
         `path=${target}`,
         `bytes=${stat.size} payloadBytes=${record.payloadBytes}`,
         `queryWith=artifact_query actions ${actions.join(', ')}`,
-        'result_status=complete:true truncated:false',
+        'observation_contract=complete:true truncated:false reasoning_ready:true',
         '--- preview ---',
         preview.text
     ].filter(Boolean).join('\n'), {
@@ -582,6 +582,7 @@ function artifactCreatedReadResult({ kind, record, target, stat, text = '', prev
         previewTruncated: preview.truncated,
         complete: true,
         truncated: false,
+        reasoningReady: true,
         suggestedNext: {
             tool: 'artifact_query',
             args: {
@@ -627,6 +628,7 @@ function scannedPdfNeedsOcrReadResult({ target, stat, bytesRead = 0, fileKind = 
             observationContract: {
                 complete: false,
                 truncated: false,
+                reasoning_ready: false,
                 needs_ocr: true
             },
             override: 'If raw bytes are needed for a custom OCR pipeline, use read_binary or render PDF pages to images first.'
@@ -2044,7 +2046,7 @@ function annotateExecDetails(details = {}, { command = '', args = [], platformAd
     return {
         ...details,
         outputEmpty,
-        outputStats: {
+        evidence: {
             stdoutBytes: Buffer.byteLength(stdout, 'utf8'),
             stderrBytes: Buffer.byteLength(stderr, 'utf8'),
             hasStdout: stdout.length > 0,
@@ -3321,7 +3323,7 @@ function schemaResult(runtime) {
             execOutputStore: {
                 status: 'runtime_artifact_only_by_default',
                 useWhen: 'computer.exec/exec_command/session_start returns outputId, bytes, lineCount, or previewTruncated.',
-                defaultAgentBehavior: 'Use returned stdout/stderr/preview. If more output is needed, rerun a narrower command or write the needed data to a normal file and read that file.',
+                defaultAgentBehavior: 'Use returned stdout/stderr/preview. If more evidence is needed, rerun a narrower command or write the needed data to a normal file and read that file.',
                 doNotCall: 'Do not treat outputId as a filesystem path or computer action.'
             }
         }

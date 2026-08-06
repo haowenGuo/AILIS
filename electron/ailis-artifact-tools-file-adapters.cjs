@@ -796,7 +796,7 @@ async function searchFileArtifact(input = {}) {
             complete: true,
             truncated: false,
             negativeResultScope: query && matches.length === 0
-                ? 'No lexical substring matched. A broader semantic category may still be present.'
+                ? 'No lexical substring matched. This is not evidence that a semantic category is absent.'
                 : '',
             query,
             candidates: matches.map((candidate) => ({

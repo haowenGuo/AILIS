@@ -92,7 +92,7 @@ test('context artifacts bridge RAGFlow-lite runtime chunks without synthesizing 
         assert.match(search.content[0].text, /ARTIFACT_CHUNK_SEARCH/);
         assert.match(search.content[0].text, /F478A7/);
         assert.equal(search.details.complete, true);
-        assert.equal(Object.hasOwn(search.details, 'reasoningReady'), false);
+        assert.equal(search.details.reasoningReady, true);
         assert.ok(search.structuredContent.matches.some((match) => /F478A7/.test(match.content)));
     } finally {
         fs.rmSync(tmpDir, { recursive: true, force: true });

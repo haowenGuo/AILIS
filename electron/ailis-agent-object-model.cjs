@@ -228,6 +228,8 @@ function normalizeToolOutput(input = {}, index = 0, options = {}) {
         outputText,
         outputPreview: summarizeForModel(outputText, options.previewChars || DEFAULT_THREAD_ITEM_PREVIEW_CHARS),
         errorSummary,
+        evidenceRefs: Array.isArray(input.evidenceRefs) ? input.evidenceRefs.slice() : [],
+        evidenceArtifacts: Array.isArray(input.evidenceArtifacts) ? cloneJson(input.evidenceArtifacts) : [],
         providerMetadata: normalizeProviderMetadata(input),
         details: modelDetails,
         startedAt,
@@ -438,6 +440,111 @@ function formatWebSearchStatus(webSearchOutput = {}) {
     return '';
 }
 
+function formatWebSearchSelectionAudit(webSearchOutput = {}) {
+    const audit = firstObject(
+        webSearchOutput.search?.selectionAudit,
+        webSearchOutput.search?.selection_audit,
+        webSearchOutput.selectionAudit,
+        webSearchOutput.selection_audit
+    );
+    if (!normalizeText(audit.status)) {
+        return '';
+    }
+    const lines = [
+        'Selection protocol:',
+        `status=${normalizeText(audit.status)}`,
+        audit.selector ? `requested_selector=${audit.selector}` : '',
+        audit.parent_kind ? `parent_candidate_type=${audit.parent_kind}` : '',
+        audit.quoted_term ? `quoted_term="${audit.quoted_term}"` : '',
+        audit.lexical_match ? `lexical_match=${audit.lexical_match}` : '',
+        'Search ranking is not candidate-selection evidence.'
+    ].filter(Boolean);
+    const candidates = Array.isArray(audit.candidates) ? audit.candidates : [];
+    if (candidates.length) {
+        lines.push('Visible diagnostic child-title counts:');
+        candidates.slice(0, 8).forEach((candidate) => {
+            const refId = normalizeText(candidate.ref_id || candidate.refId || candidate.id);
+            const count = Number(candidate.visible_snippet_occurrences);
+            lines.push(`- [${refId}] ${Number.isFinite(count) ? count : 0} exact matching title unit(s)`);
+        });
+    }
+    if (audit.candidate_set_coverage_sufficient === false) {
+        lines.push('Candidate-set coverage is insufficient; do not select a child yet.');
+        const parentRefs = normalizeStringList(
+            audit.parent_index_candidates || audit.parentIndexCandidates
+        );
+        if (parentRefs.length) {
+            lines.push(`Open the nearest parent index first: [${parentRefs[0]}].`);
+        } else {
+            lines.push('Run a fresh concise parent-index query before selecting a child.');
+        }
+    } else {
+        lines.push('Verify unique matching titles on the leading parent candidates before selecting a child.');
+    }
+    if (normalizeText(audit.caveat)) {
+        lines.push(`Caveat: ${normalizeText(audit.caveat)}`);
+    }
+    return lines.join('\n');
+}
+
+function suggestedCallToolName(tool = '', sourceToolName = '') {
+    const normalizedTool = normalizeText(tool);
+    const nativeTools = new Set([
+        'web_run',
+        'tool_search',
+        'read',
+        'write',
+        'exec',
+        'apply_patch',
+        'update_plan',
+        'request_permissions',
+        'final_answer'
+    ]);
+    if (!normalizedTool || normalizedTool.includes('__') || nativeTools.has(normalizedTool)) {
+        return normalizedTool;
+    }
+    const normalizedSource = normalizeText(sourceToolName);
+    if (normalizedSource === 'web_run') {
+        return normalizedTool === 'web_run'
+            ? normalizedTool
+            : `mcp__ailis_research__${normalizedTool}`;
+    }
+    const mcpSource = normalizedSource.match(/^mcp__(.+?)__.+$/);
+    return mcpSource
+        ? `mcp__${mcpSource[1]}__${normalizedTool}`
+        : normalizedTool;
+}
+
+function formatWebSuggestedNextCalls(webSearchOutput = {}, sourceToolName = '') {
+    const candidates = [
+        webSearchOutput.search?.suggestedNextCalls,
+        webSearchOutput.search?.suggested_next_calls,
+        webSearchOutput.suggestedNextCalls,
+        webSearchOutput.suggested_next_calls,
+        webSearchOutput.observationContract?.next_actions,
+        webSearchOutput.observation_contract?.next_actions
+    ].find(Array.isArray) || [];
+    const calls = candidates.filter((call) => (
+        call &&
+        typeof call === 'object' &&
+        normalizeText(call.tool) &&
+        call.args &&
+        typeof call.args === 'object' &&
+        !Array.isArray(call.args)
+    )).slice(0, 4);
+    if (!calls.length) {
+        return '';
+    }
+    const lines = ['Suggested next calls (tool-provided options; the model decides whether to use them):'];
+    calls.forEach((call) => {
+        lines.push(`${suggestedCallToolName(call.tool, sourceToolName)} ${safeJsonStringify(call.args, '{}')}`);
+        if (normalizeText(call.reason)) {
+            lines.push(`Reason: ${normalizeText(call.reason)}`);
+        }
+    });
+    return lines.join('\n');
+}
+
 function formatWebSearchSources(webSearchOutput = {}, toolName = '') {
     const sources = Array.isArray(webSearchOutput.fetch?.sources)
         ? webSearchOutput.fetch.sources
@@ -474,6 +581,9 @@ function formatWebSearchSources(webSearchOutput = {}, toolName = '') {
         if (excerpt) {
             lines.push('Fetched excerpt:');
             lines.push(summarizeForModel(excerpt, 2400));
+        } else if (Array.isArray(source.evidenceSnippets) && source.evidenceSnippets.length) {
+            lines.push('Evidence snippets:');
+            source.evidenceSnippets.slice(0, 3).forEach((snippet) => lines.push(`- ${snippet}`));
         } else if (source.searchSnippet) {
             lines.push(`Search snippet: ${source.searchSnippet}`);
         }
@@ -515,7 +625,9 @@ function buildWebSearchFunctionOutput(toolOutput = {}, webSearchOutput = {}) {
             toolOutput.durationMs != null ? `duration_ms=${toolOutput.durationMs}` : ''
         ].filter(Boolean).join('\n')),
         ContentItem.inputText(formatWebSearchStatus(webSearchOutput)),
+        ContentItem.inputText(formatWebSearchSelectionAudit(webSearchOutput)),
         ContentItem.inputText(formatWebSearchCandidates(webSearchOutput, toolOutput.toolName)),
+        ContentItem.inputText(formatWebSuggestedNextCalls(webSearchOutput, toolOutput.toolName)),
         ContentItem.inputText(formatWebSearchSources(webSearchOutput, toolOutput.toolName)),
         ContentItem.inputText(formatWebSearchDiagnostics(webSearchOutput))
     ].filter(Boolean);
@@ -805,6 +917,30 @@ function formatSourceViewportMatches(details = {}) {
     return lines.join('\n');
 }
 
+function formatSourceSelectionProtocol(details = {}) {
+    const protocol = firstObject(details.selectionProtocol, details.selection_protocol);
+    if (!normalizeText(protocol.status)) {
+        return '';
+    }
+    const lines = [
+        'Selection dependency:',
+        `status=${normalizeText(protocol.status)}`,
+        protocol.parent_kind ? `parent_candidate_type=${protocol.parent_kind}` : '',
+        protocol.quoted_term ? `quoted_term="${protocol.quoted_term}"` : '',
+        `candidate_boundary_complete=${protocol.boundary_complete === true ? 'true' : 'false'}`
+    ].filter(Boolean);
+    const ranges = Array.isArray(protocol.covered_ranges) ? protocol.covered_ranges : [];
+    if (ranges.length) {
+        lines.push(`covered_ranges=${ranges.map((range) => `L${range[0]}-L${range[1]}`).join(', ')}`);
+    }
+    if (protocol.boundary_complete !== true) {
+        lines.push('Continue the parent index; do not select or open a child yet.');
+    } else {
+        lines.push('The parent-index boundary is covered. Apply the requested comparison before opening the selected child.');
+    }
+    return lines.join('\n');
+}
+
 function buildSourceViewportFunctionOutput(toolOutput = {}, sourceViewport = {}) {
     const { sourceWindow, action, details } = sourceViewport;
     const header = action.type === 'find_in_page'
@@ -824,6 +960,8 @@ function buildSourceViewportFunctionOutput(toolOutput = {}, sourceViewport = {})
         ContentItem.inputText(formatSourceViewportOverflowPreviews(sourceWindow)),
         ContentItem.inputText(formatExpandedLongSourceLines(sourceWindow)),
         ContentItem.inputText(formatSourceViewportLines(sourceWindow)),
+        ContentItem.inputText(formatSourceSelectionProtocol(details)),
+        ContentItem.inputText(formatWebSuggestedNextCalls(details, toolOutput.toolName)),
         ContentItem.inputText(formatSourceViewportLinks(toolOutput, details))
     ].filter(Boolean);
     return FunctionCallOutputPayload.fromContentItems(contentItems, {
@@ -944,6 +1082,8 @@ function toolOutputToRuntimeEvent(toolOutput = {}) {
         ok: toolOutput.ok === true,
         preview: toolOutput.outputPreview || '',
         errorSummary: toolOutput.errorSummary || '',
+        evidenceRefs: Array.isArray(toolOutput.evidenceRefs) ? toolOutput.evidenceRefs.slice() : [],
+        evidenceArtifacts: Array.isArray(toolOutput.evidenceArtifacts) ? cloneJson(toolOutput.evidenceArtifacts) : [],
         durationMs: toolOutput.durationMs
     }, {
         layer: RUNTIME_LAYER.TOOL_EXECUTOR,
@@ -964,6 +1104,7 @@ function toolOutputToThreadItem(toolOutput = {}) {
         result_status: toolOutput.status || 'unknown',
         preview: toolOutput.outputPreview || '',
         error_summary: toolOutput.errorSummary || null,
+        evidence_refs: Array.isArray(toolOutput.evidenceRefs) ? toolOutput.evidenceRefs.slice() : [],
         duration_ms: toolOutput.durationMs
     };
 }

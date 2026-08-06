@@ -39,7 +39,6 @@ const { AILISUserProfileCurator } = require('./ailis-user-profile-curator.cjs');
 const { AILISPreferenceState } = require('./ailis-preference-state.cjs');
 const { AILISTaskResultCapsuleStore } = require('./ailis-task-result-capsules.cjs');
 const { AILISSystemTaskAgentHarness } = require('./ailis-task-agent-harness.cjs');
-const { decideTaskAgentIntake } = require('./ailis-task-intake.cjs');
 const { AilisSelfEvolutionRuntime } = require('./ailis-self-evolution-runtime.cjs');
 const { AILISEmberHarness } = require('./ailis-ember-harness.cjs');
 const { AILISSensitiveWordClassifier } = require('./ailis-sensitive-word-classifier.cjs');
@@ -50,7 +49,6 @@ const {
 const EMAIL_TOOL_ID = 'email';
 const TASK_RESULTS_TOOL_ID = 'task_results';
 const HANDOFF_TASK_TOOL_ID = 'handoff_task';
-const TASK_GOAL_TOOL_ID = 'task_goal';
 const WEB_RUN_TOOL_ID = 'web_run';
 const WEB_SEARCH_TOOL_ID = 'web_search';
 const { FILE_MANAGER_TOOL_ID, executeFileManagerTool } = require('./ailis-file-manager-tool.cjs');
@@ -88,33 +86,6 @@ const DEFAULT_HTTP_REQUEST_TIMEOUT_MS = Math.max(0, Number(process.env.AILIS_GAT
 const DEFAULT_PROFILE_CURATION_START_DELAY_MS = Number(process.env.AILIS_PROFILE_CURATION_START_DELAY_MS || 60 * 1000);
 const DEFAULT_PROFILE_CURATION_CHECK_INTERVAL_MS = Number(process.env.AILIS_PROFILE_CURATION_CHECK_INTERVAL_MS || 6 * 60 * 60 * 1000);
 const DEFAULT_PROFILE_CURATION_DEBOUNCE_MS = Number(process.env.AILIS_PROFILE_CURATION_DEBOUNCE_MS || 2 * 60 * 1000);
-const TASK_AGENT_PUBLIC_EVENT_TYPES = new Set([
-    'agent.reasoning.delta',
-    'agent.progress.note',
-    'agent.message.delta',
-    'agent.step.finished'
-]);
-
-function taskAgentOwnsPersonaExecution(request = {}, context = {}) {
-    if (context.taskAgentOwnsExecution !== true && request.taskAgentOwnsExecution !== true) {
-        return false;
-    }
-    const role = normalizeString(
-        request.agentRole || request.agent_role || context.agentRole || context.agent_role,
-        'persona_orchestrator'
-    ).toLowerCase();
-    return ['persona', 'persona_orchestrator', 'orchestrator'].includes(role);
-}
-
-function buildPersonaRenderHistory(messageHistory = []) {
-    const history = Array.isArray(messageHistory) ? messageHistory : [];
-    for (let index = history.length - 1; index >= 0; index -= 1) {
-        if (history[index]?.role === 'assistant') {
-            return history.slice(0, index + 1);
-        }
-    }
-    return [];
-}
 
 const GATEWAY_BACKED_TOOL_IDS = new Set(['sessions_list', 'gateway', 'cron', 'nodes']);
 const SESSION_BOUND_TOOL_IDS = new Set([
@@ -165,8 +136,7 @@ const CODEX_STYLE_DIRECT_LOCAL_TOOL_IDS = new Set([
     'exec',
     'apply_patch',
     WEB_RUN_TOOL_ID,
-    HANDOFF_TASK_TOOL_ID,
-    TASK_GOAL_TOOL_ID
+    HANDOFF_TASK_TOOL_ID
 ]);
 // Extended tools stay out of the first-turn tool surface, but remain discoverable
 // through tool_search. The Registry is the source of truth for their full specs.
@@ -275,16 +245,6 @@ const AILIS_LOCAL_TOOL_DEFINITIONS = Object.freeze([
         needsApprovalActions: Object.freeze([])
     }),
     Object.freeze({
-        id: TASK_GOAL_TOOL_ID,
-        label: 'task_goal',
-        description: 'Read or update the optional persistent Goal for the current TaskAgent Session. The TaskAgent model owns Goal semantics; the runtime only validates and persists set, complete, clear, and get operations bound to the active Turn.',
-        sectionId: 'task-agent-runtime',
-        route: 'ailis-system-task-agent',
-        materialized: true,
-        status: 'available',
-        needsApprovalActions: Object.freeze([])
-    }),
-    Object.freeze({
         id: TASK_RESULTS_TOOL_ID,
         label: 'task_results',
         description: 'Read-only access to AILIS public results from earlier completed work. Search relevant results or retrieve one result by id; this never reruns the task.',
@@ -377,7 +337,7 @@ const AILIS_LOCAL_TOOL_DEFINITIONS = Object.freeze([
     Object.freeze({
         id: GITHUB_PAGES_TOOL_ID,
         label: 'github_pages',
-        description: 'Read-only GitHub Pages and gh-pages deployment diagnostics with blockers and verification records.',
+        description: 'Read-only GitHub Pages and gh-pages deployment diagnostics with blockers and verification evidence.',
         sectionId: 'github-pages',
         route: 'ailis-local',
         materialized: true,
@@ -553,6 +513,319 @@ function isEvaluationTaskMirror(sourceQuestion = '', result = {}) {
         /(?:^|[./_-])(?:gaia|benchmark|benchmarks|magentic_dataset|agent.?rx|harbor-datasets)(?:[./_-]|$)/i.test(url) ||
         /\b(?:gaia task|benchmark task|evaluation task|output requirements|write only the final answer)\b/i.test(text);
     return repeatsQuestion && looksLikeEvaluationCorpus;
+}
+
+function extractStructuredQueryAnchors(value = '') {
+    const text = normalizeString(value);
+    const matches = text.match(/\b(?:rule|article|chapter|section|part|item|table|figure|episode|volume|book)\s+(?:\d+(?:\.\d+)*[a-z]?|[ivxlcdm]+)\b/gi) || [];
+    return [...new Set(matches.map((entry) => entry.replace(/\s+/g, ' ').trim()))];
+}
+
+function looksLikeNestedSelectorTask(value = '') {
+    const text = normalizeString(value).toLowerCase();
+    const hasSelector = /\b(?:first|last|most|least|earliest|latest|highest|lowest|alphabetic(?:al|ally)?|fewest)\b/.test(text);
+    const hasHierarchy = /\b(?:under|within|among|section|article|chapter|rule|group|category|titles?|records?|entries)\b/.test(text);
+    return hasSelector && hasHierarchy;
+}
+
+function extractQuotedSelectorTerms(value = '') {
+    const text = normalizeString(value);
+    const terms = [];
+    const seen = new Set();
+    const pattern = /"([^"\r\n]{1,80})"|“([^”\r\n]{1,80})”/g;
+    let match;
+    while ((match = pattern.exec(text)) !== null) {
+        const term = normalizeString(match[1] || match[2]);
+        const key = term.toLowerCase();
+        if (!term || seen.has(key)) {
+            continue;
+        }
+        seen.add(key);
+        terms.push(term);
+    }
+    return terms;
+}
+
+function countExactLexicalOccurrences(value = '', term = '') {
+    const text = normalizeString(value);
+    const normalizedTerm = normalizeString(term);
+    if (!text || !normalizedTerm) {
+        return 0;
+    }
+    const escaped = normalizedTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const pattern = new RegExp(
+        `(?:^|[^\\p{L}\\p{N}_])${escaped}(?=$|[^\\p{L}\\p{N}_])`,
+        'giu'
+    );
+    return [...text.matchAll(pattern)].length;
+}
+
+function structuredAnchorKind(value = '') {
+    const anchor = extractStructuredQueryAnchors(value)[0] || '';
+    return normalizeString(anchor.split(/\s+/)[0]).toLowerCase();
+}
+
+function countExactLexicalChildTitleUnits(value = '', term = '', parentAnchor = '') {
+    const text = normalizeString(value);
+    const normalizedParent = normalizeString(parentAnchor).toLowerCase();
+    const pattern = /\b(?:rule|article|chapter|section|part|item|table|figure|episode|volume|book)\s+(?:\d+(?:\.\d+)*[a-z]?|[ivxlcdm]+)\b/gi;
+    const matches = [...text.matchAll(pattern)];
+    if (!matches.length) {
+        return countExactLexicalOccurrences(text, term);
+    }
+    const matchesByAnchor = new Map();
+    for (let index = 0; index < matches.length; index += 1) {
+        const anchor = normalizeString(matches[index][0]).toLowerCase();
+        if (!anchor || anchor === normalizedParent) {
+            continue;
+        }
+        const start = matches[index].index || 0;
+        const end = matches[index + 1]?.index ?? text.length;
+        const matched = countExactLexicalOccurrences(text.slice(start, end), term) > 0;
+        matchesByAnchor.set(anchor, matchesByAnchor.get(anchor) === true || matched);
+    }
+    return [...matchesByAnchor.values()].filter(Boolean).length;
+}
+
+function updateSelectionProtocolTitleCounts(selectionProtocol = null, sourceViews = []) {
+    if (
+        !selectionProtocol ||
+        !normalizeString(selectionProtocol.parentKind) ||
+        !normalizeString(selectionProtocol.quotedTerm)
+    ) {
+        return [];
+    }
+    const parentKind = normalizeString(selectionProtocol.parentKind).toLowerCase();
+    const quotedTerm = normalizeString(selectionProtocol.quotedTerm);
+    const groups = selectionProtocol.groupTitleMatches &&
+        typeof selectionProtocol.groupTitleMatches === 'object'
+        ? selectionProtocol.groupTitleMatches
+        : {};
+    let currentGroup = normalizeString(selectionProtocol.currentGroup);
+    const lines = (Array.isArray(sourceViews) ? sourceViews : [])
+        .flatMap((sourceView) => Array.isArray(sourceView?.lines) ? sourceView.lines : [])
+        .map((line) => ({
+            lineno: Number(line?.lineno || line?.lineNumber || line?.line_number) || 0,
+            text: normalizeString(line?.text || line?.rendered)
+        }))
+        .filter((line) => line.text)
+        .sort((left, right) => left.lineno - right.lineno);
+    for (const line of lines) {
+        const anchors = extractStructuredQueryAnchors(line.text);
+        const parentAnchor = anchors.find((anchor) => structuredAnchorKind(anchor) === parentKind);
+        if (parentAnchor) {
+            currentGroup = normalizeString(parentAnchor);
+            const groupKey = currentGroup.toLowerCase();
+            groups[groupKey] ||= {
+                label: currentGroup,
+                matchedChildren: []
+            };
+        }
+        if (!currentGroup) {
+            continue;
+        }
+        const childAnchors = anchors.filter((anchor) => structuredAnchorKind(anchor) !== parentKind);
+        for (let childIndex = 0; childIndex < childAnchors.length; childIndex += 1) {
+            const childAnchor = childAnchors[childIndex];
+            const titleStart = line.text.toLowerCase().indexOf(childAnchor.toLowerCase());
+            const nextAnchor = childAnchors[childIndex + 1];
+            const nextTitleStart = nextAnchor
+                ? line.text.toLowerCase().indexOf(nextAnchor.toLowerCase(), titleStart + childAnchor.length)
+                : -1;
+            const childTitle = titleStart >= 0
+                ? line.text.slice(titleStart, nextTitleStart > titleStart ? nextTitleStart : undefined)
+                : '';
+            if (countExactLexicalOccurrences(childTitle, quotedTerm) === 0) {
+                continue;
+            }
+            const groupKey = currentGroup.toLowerCase();
+            groups[groupKey] ||= {
+                label: currentGroup,
+                matchedChildren: []
+            };
+            const childKey = normalizeString(childAnchor).toLowerCase();
+            if (
+                childKey &&
+                !groups[groupKey].matchedChildren.some((child) => child.key === childKey)
+            ) {
+                groups[groupKey].matchedChildren.push({
+                    key: childKey,
+                    label: normalizeString(childAnchor),
+                    title: normalizeString(childTitle, line.text)
+                });
+            }
+        }
+    }
+    selectionProtocol.currentGroup = currentGroup;
+    selectionProtocol.groupTitleMatches = groups;
+    const counts = Object.values(groups)
+        .map((group) => ({
+            group: normalizeString(group.label),
+            count: Array.isArray(group.matchedChildren) ? group.matchedChildren.length : 0,
+            matched_children: (Array.isArray(group.matchedChildren) ? group.matchedChildren : [])
+                .map((child) => ({
+                    id: normalizeString(child.label),
+                    title: normalizeString(child.title)
+                }))
+        }))
+        .filter((group) => group.group)
+        .sort((left, right) => right.count - left.count || left.group.localeCompare(right.group));
+    selectionProtocol.groupTitleCounts = counts;
+    return counts;
+}
+
+function selectorParentKind(value = '') {
+    const text = normalizeString(value).toLowerCase();
+    const match = text.match(/\b(article|chapter|section|part|item|table|figure|episode|volume|book|group|category)\s+(?:that|which|with|having|has|had|whose)\b/);
+    return normalizeString(match?.[1]).toLowerCase();
+}
+
+function buildSearchSelectionAudit(sourceQuestion = '', results = []) {
+    const question = normalizeString(sourceQuestion);
+    const lower = question.toLowerCase();
+    if (
+        !/\b(?:most|least|fewest|highest|lowest)\b/.test(lower) ||
+        !/\b(?:titles?|labels?|records?|entries|names?)\b/.test(lower)
+    ) {
+        return null;
+    }
+    const quotedTerm = extractQuotedSelectorTerms(question)[0];
+    if (!quotedTerm) {
+        return null;
+    }
+    const parentKind = selectorParentKind(question);
+    const allEntries = (Array.isArray(results) ? results : [])
+        .map((result) => {
+            const title = normalizeString(result?.title);
+            const snippet = normalizeString(result?.snippet);
+            const parentAnchor = extractStructuredQueryAnchors(title)[0] || '';
+            const snippetAnchorKinds = extractStructuredQueryAnchors(snippet)
+                .map((anchor) => normalizeString(anchor.split(/\s+/)[0]).toLowerCase())
+                .filter(Boolean);
+            return {
+            ref_id: normalizeString(result?.ref_id || result?.id),
+            title,
+            snippet,
+            url: normalizeString(result?.url),
+            structured_anchor: parentAnchor,
+            structured_kind: structuredAnchorKind(title),
+            parent_index_signal: Boolean(
+                parentKind &&
+                snippetAnchorKinds.includes(parentKind) &&
+                snippetAnchorKinds.some((kind) => kind !== parentKind)
+            ),
+            visible_snippet_occurrences: countExactLexicalChildTitleUnits(
+                snippet,
+                quotedTerm,
+                parentAnchor
+            ),
+            search_rank: Number(result?.rank) || null
+            };
+        })
+        .filter((entry) => entry.ref_id);
+    const rawCounts = allEntries
+        .filter((entry) => !parentKind || entry.structured_kind === parentKind)
+        .sort((left, right) =>
+            right.visible_snippet_occurrences - left.visible_snippet_occurrences ||
+            (left.search_rank || Number.MAX_SAFE_INTEGER) - (right.search_rank || Number.MAX_SAFE_INTEGER)
+        );
+    const countsByIdentity = new Map();
+    for (const entry of rawCounts) {
+        const identity = normalizeString(entry.structured_anchor).toLowerCase() ||
+            normalizeString(entry.url).toLowerCase() ||
+            normalizeString(entry.title).toLowerCase();
+        const existing = countsByIdentity.get(identity);
+        if (
+            !existing ||
+            entry.visible_snippet_occurrences > existing.visible_snippet_occurrences ||
+            (
+                entry.visible_snippet_occurrences === existing.visible_snippet_occurrences &&
+                (entry.search_rank || Number.MAX_SAFE_INTEGER) <
+                    (existing.search_rank || Number.MAX_SAFE_INTEGER)
+            )
+        ) {
+            countsByIdentity.set(identity, entry);
+        }
+    }
+    const counts = [...countsByIdentity.values()].sort((left, right) =>
+        right.visible_snippet_occurrences - left.visible_snippet_occurrences ||
+        (left.search_rank || Number.MAX_SAFE_INTEGER) - (right.search_rank || Number.MAX_SAFE_INTEGER)
+    );
+    const indexOnlyCandidates = allEntries
+        .filter((entry) => entry.parent_index_signal)
+        .sort((left, right) => {
+            try {
+                const pathDifference = new URL(right.url).pathname.length - new URL(left.url).pathname.length;
+                if (pathDifference) {
+                    return pathDifference;
+                }
+            } catch {}
+            return (left.search_rank || Number.MAX_SAFE_INTEGER) -
+                (right.search_rank || Number.MAX_SAFE_INTEGER);
+        });
+    if (!counts.length) {
+        if (!indexOnlyCandidates.length) {
+            return null;
+        }
+        return {
+            status: 'parent_index_required',
+            selector: lower.match(/\b(most|least|fewest|highest|lowest)\b/)?.[1] || '',
+            parent_kind: parentKind,
+            quoted_term: quotedTerm,
+            lexical_match: 'exact_whole_token_or_phrase',
+            scope: 'structured_parent_and_child_anchors_visible_in_search_result_snippets',
+            result_ranking_is_selection_evidence: false,
+            counts_are_final_group_counts: false,
+            competing_matching_candidates_visible: 0,
+            candidate_set_coverage_sufficient: false,
+            parent_index_candidates: indexOnlyCandidates.map((entry) => entry.ref_id),
+            caveat: 'The results expose a structured parent index but not comparable child groups. Open the most specific parent index and count child-title matches across its complete boundary before selecting a group.',
+            candidates: []
+        };
+    }
+    const parentIndexCandidates = counts
+        .flatMap((parentCandidate) => allEntries.filter((candidate) => {
+            if (!candidate.url || !parentCandidate.url || candidate.url === parentCandidate.url) {
+                return false;
+            }
+            try {
+                const parent = new URL(candidate.url);
+                const child = new URL(parentCandidate.url);
+                const parentPath = parent.pathname.replace(/\/+$/, '');
+                const childPath = child.pathname.replace(/\/+$/, '');
+                return parent.origin === child.origin &&
+                    parentPath &&
+                    childPath.startsWith(`${parentPath}/`);
+            } catch {
+                return false;
+            }
+        }))
+        .filter((candidate, index, entries) =>
+            entries.findIndex((entry) => entry.ref_id === candidate.ref_id) === index
+        )
+        .sort((left, right) => {
+            try {
+                return new URL(right.url).pathname.length - new URL(left.url).pathname.length;
+            } catch {
+                return 0;
+            }
+        });
+    const candidateSetComplete = false;
+    return {
+        status: candidateSetComplete ? 'incomplete_counts' : 'incomplete_candidate_set',
+        selector: lower.match(/\b(most|least|fewest|highest|lowest)\b/)?.[1] || '',
+        parent_kind: parentKind,
+        quoted_term: quotedTerm,
+        lexical_match: 'exact_whole_token_or_phrase',
+        scope: 'deduplicated_structured_child_title_units_visible_in_search_result_snippets',
+        result_ranking_is_selection_evidence: false,
+        counts_are_final_group_counts: false,
+        competing_matching_candidates_visible: counts.length,
+        candidate_set_coverage_sufficient: candidateSetComplete,
+        parent_index_candidates: parentIndexCandidates.map((entry) => entry.ref_id),
+        caveat: 'Search snippets may be partial. Repeated structured child identifiers and the parent page title are excluded, but visible counts still require verification against each parent page and the candidate-set boundary.',
+        candidates: counts
+    };
 }
 
 function cloneJson(value) {
@@ -1248,9 +1521,6 @@ class AILISGateway extends EventEmitter {
         this.getDefaultToolContext = typeof options.getDefaultContext === 'function'
             ? options.getDefaultContext
             : () => options.defaultContext || {};
-        this.taskIntakeDecider = typeof options.taskIntakeDecider === 'function'
-            ? options.taskIntakeDecider
-            : decideTaskAgentIntake;
         this.visionServices = options.visionServices || {};
         this.memoryRuntime = options.memoryRuntime || new AILISMemoryRuntime({
             rootDir: path.join(this.auditDir, 'memory'),
@@ -2931,167 +3201,6 @@ class AILISGateway extends EventEmitter {
         }
     }
 
-    async runTaskAgentOwnedPersonaTurn({
-        input = {},
-        context = {},
-        sessionId = 'main',
-        runId = '',
-        llmSettings = null
-    } = {}) {
-        const message = normalizeString(input.message || input.prompt || input.task);
-        const outerRunId = normalizeString(runId, randomUUID());
-        const messageHistory = Array.isArray(input.messageHistory) ? input.messageHistory : [];
-        const taskState = this.taskAgentHarness?.getSessionSnapshot?.(sessionId) || null;
-        const alreadyRunning = this.taskAgentHarness?.isRunning?.(sessionId) === true;
-        this.emitGatewayEvent('task_agent.intake.started', {
-            runId: outerRunId,
-            sessionId,
-            running: alreadyRunning
-        });
-        const intake = alreadyRunning
-            ? {
-                  ok: true,
-                  status: 'active_task_steer',
-                  action: 'execute',
-                  executionRequired: true,
-                  reason: 'The persistent TaskAgent already has an active Turn.'
-              }
-            : await this.taskIntakeDecider({
-                  message,
-                  messageHistory,
-                  taskState,
-                  llmSettings: llmSettings || {}
-              });
-        this.emitGatewayEvent('task_agent.intake.finished', {
-            runId: outerRunId,
-            sessionId,
-            ok: intake?.ok === true,
-            status: normalizeString(intake?.status),
-            action: normalizeString(intake?.action),
-            executionRequired: intake?.executionRequired === true,
-            running: alreadyRunning,
-            error: intake?.ok === false ? normalizeString(intake?.error) : ''
-        });
-
-        if (intake?.executionRequired !== true) {
-            return await this.ensureAgentRunner().runMessage({
-                ...input,
-                runId: outerRunId,
-                ...(llmSettings ? { llmSettings } : {}),
-                context: {
-                    ...context,
-                    taskAgentOwnsExecution: true,
-                    taskAgentIntakeStatus: normalizeString(intake?.status, 'unavailable'),
-                    taskAgentIntakeUnavailable: intake?.ok !== true
-                }
-            });
-        }
-
-        this.emitGatewayEvent('agent.run.started', {
-            runId: outerRunId,
-            sessionId,
-            mode: 'task-agent-owned-execution',
-            intent: alreadyRunning ? 'task_agent_steer' : 'task_agent_execute',
-            planner: 'task-agent-intake',
-            executionRequired: true
-        });
-        let taskResult;
-        try {
-            taskResult = await this.taskAgentHarness.handoff({}, {
-                ...context,
-                runId: outerRunId,
-                parentRunId: outerRunId,
-                sessionId,
-                sessionKey: sessionId,
-                currentUserMessage: message,
-                taskAgentVisibleHistory: messageHistory,
-                attachments: Array.isArray(input.attachments) ? input.attachments : [],
-                fileAttachments: Array.isArray(input.attachments) ? input.attachments : [],
-                llmSettings: llmSettings || context.llmSettings || null,
-                returnAfterSteer: alreadyRunning
-            });
-        } catch (error) {
-            const displayText = `任务执行没有成功启动：${error?.message || String(error)}`;
-            this.emitGatewayEvent('agent.run.finished', {
-                runId: outerRunId,
-                sessionId,
-                mode: 'task-agent-owned-execution',
-                status: 'failed',
-                ok: false,
-                displayText
-            });
-            return {
-                ok: false,
-                runId: outerRunId,
-                sessionId,
-                status: 'failed',
-                mode: 'task-agent-owned-execution',
-                intent: 'task_agent_execute',
-                executionRequired: true,
-                displayText,
-                speechText: displayText,
-                error: error?.message || String(error),
-                taskIntake: intake
-            };
-        }
-
-        const authoritativePacket = JSON.stringify({
-            schema: 'ailis.persona_task_result_render.v1',
-            current_user_message: normalizeString(taskResult?.current_request, message),
-            task_result: taskResult
-        });
-        const rendered = await this.ensureAgentRunner().runMessage({
-            ...input,
-            runId: outerRunId,
-            messageHistory: buildPersonaRenderHistory(messageHistory),
-            suppressCurrentUserMessage: true,
-            ...(llmSettings ? { llmSettings } : {}),
-            ephemeralDeveloperMessage: [
-                'The TaskAgent has returned the authoritative result packet below.',
-                'Render it as the AILIS Persona for the user. Preserve all facts, uncertainty, failures, sources, and artifacts. Do not perform more work and do not mention internal orchestration.',
-                authoritativePacket
-            ].join('\n'),
-            context: {
-                ...context,
-                taskAgentOwnsExecution: true,
-                personaTaskResultRender: true,
-                suppressCurrentUserMessage: true,
-                taskAgentIntakeStatus: normalizeString(intake?.status),
-                taskResult
-            }
-        });
-        const renderedText = normalizeString(
-            rendered?.displayText || rendered?.finalAnswer || rendered?.speechText
-        );
-        if (renderedText) {
-            return {
-                ...rendered,
-                executionRequired: true,
-                taskIntake: intake,
-                taskResult
-            };
-        }
-        const fallbackText = normalizeString(
-            taskResult?.final_answer || taskResult?.partial_answer,
-            '任务已结束，但没有返回可展示的结果。'
-        );
-        return {
-            ok: ['completed', 'completed_with_warnings', 'success', 'succeeded', 'accepted'].includes(
-                normalizeString(taskResult?.status).toLowerCase()
-            ),
-            runId: outerRunId,
-            sessionId,
-            status: normalizeString(taskResult?.status, 'completed'),
-            mode: 'task-agent-owned-execution',
-            intent: alreadyRunning ? 'task_agent_steer' : 'task_agent_execute',
-            executionRequired: true,
-            displayText: fallbackText,
-            speechText: fallbackText,
-            taskIntake: intake,
-            taskResult
-        };
-    }
-
     async runAgent(request = {}) {
         const input = request && typeof request === 'object' ? request : {};
         const context = this.mergeDefaultContext(
@@ -3133,29 +3242,11 @@ class AILISGateway extends EventEmitter {
                 emberHarness: summarizeEmberHarnessRecord(inputGate)
             };
         }
-        const effectiveInput = {
+        const result = await this.ensureAgentRunner().runMessage({
             ...input,
-            onTextDelta: streamBeforeFinalGate ? requestedTextDelta : undefined
-        };
-        const effectiveLlmSettings = (
-            input.llmSettings && typeof input.llmSettings === 'object'
-                ? input.llmSettings
-                : context.llmSettings && typeof context.llmSettings === 'object'
-                    ? context.llmSettings
-                    : null
-        );
-        const result = taskAgentOwnsPersonaExecution(input, context)
-            ? await this.runTaskAgentOwnedPersonaTurn({
-                  input: effectiveInput,
-                  context,
-                  sessionId,
-                  runId,
-                  llmSettings: effectiveLlmSettings
-              })
-            : await this.ensureAgentRunner().runMessage({
-                  ...effectiveInput,
-                  context
-              });
+            onTextDelta: streamBeforeFinalGate ? requestedTextDelta : undefined,
+            context
+        });
         const finalText = normalizeString(
             result?.displayText ||
             result?.speechText ||
@@ -3253,11 +3344,9 @@ class AILISGateway extends EventEmitter {
         const inheritedCheckpoint = inheritanceMode === 'checkpoint'
             ? args.contextManagerCheckpoint || context.initialContextManagerCheckpoint || null
             : null;
-        const recentMessages = Array.isArray(args.recentMessages)
-            ? args.recentMessages
-            : Array.isArray(context.recentMessages)
-                ? context.recentMessages
-                : [];
+        const recentMessages = inheritanceMode === 'recent'
+            ? (Array.isArray(args.recentMessages) ? args.recentMessages : context.recentMessages || [])
+            : [];
         const attachments = Array.isArray(context.attachments)
             ? context.attachments
             : Array.isArray(context.fileAttachments)
@@ -3266,19 +3355,6 @@ class AILISGateway extends EventEmitter {
         const childContext = this.mergeDefaultContext({
             ...context,
             ...(parentLlmSettings ? { llmSettings: parentLlmSettings } : {}),
-            taskAgentPermissionMode: 'unrestricted',
-            permissionProfile: 'danger-full-access',
-            approvalPolicy: 'never',
-            confirmationPolicy: 'never',
-            approved: true,
-            autoConfirm: false,
-            requireApprovalForMutations: false,
-            computerControlEnabled: true,
-            visionPermissionPolicy: 'auto',
-            executeExternal: true,
-            allowOutsideWorkspace: true,
-            allowComputerWideAccess: true,
-            allowSystemMutation: true,
             parentRunId: agent?.runId,
             parentSessionId: agent?.sessionId,
             agentId: agent?.id,
@@ -3307,24 +3383,6 @@ class AILISGateway extends EventEmitter {
             }
         });
         const agentRunner = this.ensureAgentRunner();
-        const childRunId = normalizeString(agent?.childRunId || context.runId);
-        const forwardChildEvent = (event = {}) => {
-            const eventType = normalizeString(event.type);
-            const eventPayload = event.payload && typeof event.payload === 'object' ? event.payload : {};
-            if (
-                !TASK_AGENT_PUBLIC_EVENT_TYPES.has(eventType) ||
-                normalizeString(eventPayload.runId) !== childRunId
-            ) {
-                return;
-            }
-            void onEvent?.({
-                type: eventType,
-                status: normalizeString(eventPayload.status, 'running'),
-                message: normalizeString(eventPayload.text || eventPayload.summary || eventPayload.progressNote),
-                payload: eventPayload
-            });
-        };
-        this.on('event', forwardChildEvent);
         const runPromise = agentRunner.runMessage({
             runId: agent?.childRunId,
             message: task,
@@ -3376,7 +3434,6 @@ class AILISGateway extends EventEmitter {
                 : await runPromise;
         } finally {
             unregisterInputHandler?.();
-            this.off('event', forwardChildEvent);
         }
         await onEvent?.({
             type: 'subagent.runner.finished',
@@ -3469,7 +3526,8 @@ class AILISGateway extends EventEmitter {
         if (!state) {
             state = {
                 refs: new Map(),
-                countersByTurn: new Map()
+                countersByTurn: new Map(),
+                selectionProtocol: null
             };
             this.webRunSessions.set(key, state);
             while (this.webRunSessions.size > 64) {
@@ -3627,6 +3685,30 @@ class AILISGateway extends EventEmitter {
             context.currentTaskRequest ||
             context.current_task_request
         );
+        let queryAssumptionAudit = null;
+        if (
+            context.exactAnswerMode === true &&
+            Math.max(0, Number(context.iteration) || 0) === 0 &&
+            looksLikeNestedSelectorTask(sourceQuestion)
+        ) {
+            const normalizedSource = sourceQuestion.toLowerCase();
+            const unverifiedAnchors = [...new Set(queries.flatMap((query) =>
+                extractStructuredQueryAnchors(query.q)
+                    .filter((anchor) => !normalizedSource.includes(anchor.toLowerCase()))
+            ))];
+            if (unverifiedAnchors.length) {
+                queryAssumptionAudit = {
+                    status: 'unverified_intermediate_anchor_advisory',
+                    anchors: unverifiedAnchors,
+                    queryGuidance: {
+                        action: 'verify',
+                        strategy: 'parent_index_first',
+                        remove_unverified_anchors: unverifiedAnchors,
+                        next_evidence: 'Retrieve the parent candidate index and apply the user-specified selector before naming a child identifier.'
+                    }
+                };
+            }
+        }
         const maxResults = args.response_length === 'short' ? 4 : args.response_length === 'long' ? 12 : 8;
         const perQueryTimeoutMs = Math.max(
             25,
@@ -3723,13 +3805,37 @@ class AILISGateway extends EventEmitter {
                         url: normalizeString(result?.url),
                         reason: isEvaluationAnswerLeak(sourceQuestion, result)
                             ? 'Search result repeats the evaluation question and exposes a labeled answer.'
-                            : 'Search result is an evaluation-corpus mirror rather than an independent source.'
+                            : 'Search result is an evaluation-corpus mirror that repeats the task prompt without source evidence.'
                     });
                     return [];
                 }
                 return [{ ...result, query_index: queryIndex }];
             });
         });
+        const specializedNextCalls = [];
+        const seenSpecializedCalls = new Set();
+        for (const response of responses) {
+            const details = bridgeStructuredContent(response);
+            for (const call of Array.isArray(details.suggestedNextCalls) ? details.suggestedNextCalls : []) {
+                const tool = normalizeString(call?.tool);
+                const callArgs = call?.args && typeof call.args === 'object' && !Array.isArray(call.args)
+                    ? cloneJson(call.args)
+                    : null;
+                if (!tool || !callArgs || ['open_page', 'web_fetch', 'web_run', 'web_search'].includes(tool)) {
+                    continue;
+                }
+                const key = `${tool}:${JSON.stringify(callArgs)}`;
+                if (seenSpecializedCalls.has(key)) {
+                    continue;
+                }
+                seenSpecializedCalls.add(key);
+                specializedNextCalls.push({
+                    tool,
+                    args: callArgs,
+                    reason: normalizeString(call.reason, 'Use the source-specific reader suggested by the search backend.')
+                });
+            }
+        }
         const merged = [];
         const seenUrls = new Set();
         const longest = Math.max(0, ...queryResults.map((results) => results.length));
@@ -3762,6 +3868,36 @@ class AILISGateway extends EventEmitter {
             }
         }
         const queryValues = queries.map((query) => query.q);
+        let deferredToolSearchSuggestion = null;
+        if (sourceQuestion && this.runtime?.capabilityManager?.searchExternalToolEntries) {
+            try {
+                const searched = await this.runtime.capabilityManager.searchExternalToolEntries({
+                    query: sourceQuestion,
+                    limit: 3,
+                    includeExposed: true,
+                    includeContracts: false
+                });
+                const matches = (Array.isArray(searched?.tools) ? searched.tools : [])
+                    .filter((entry) => entry?.callable === true)
+                    .sort((left, right) => Number(right.search_score || 0) - Number(left.search_score || 0));
+                const top = matches[0];
+                const runnerUp = matches[1];
+                const topScore = Number(top?.search_score || 0);
+                const runnerUpScore = Number(runnerUp?.search_score || 0);
+                if (top && topScore >= 3 && (!runnerUp || topScore - runnerUpScore >= 2)) {
+                    deferredToolSearchSuggestion = {
+                        tool: 'tool_search',
+                        args: {
+                            query: sourceQuestion,
+                            limit: 5
+                        },
+                        reason: `A callable deferred structured/API tool is a strong semantic match (${normalizeString(top.id || top.name || top.toolId)}). Discover its schema before doing more broad web search.`
+                    };
+                }
+            } catch {
+                deferredToolSearchSuggestion = null;
+            }
+        }
         const action = queryValues.length === 1
             ? { type: 'search', query: queryValues[0] }
             : { type: 'search', queries: queryValues };
@@ -3795,6 +3931,192 @@ class AILISGateway extends EventEmitter {
                 structuredContent
             };
         }
+        const searchStatus = merged.length ? 'completed' : 'empty';
+        const filteredQueries = queries.filter((query) => query.recency !== undefined || query.domains.length > 0);
+        const queryNeedsReformulation = queries.some((query) => {
+            const terms = query.q.toLowerCase().match(/[\p{L}\p{N}][\p{L}\p{N}._:-]*/gu) || [];
+            const uniqueTerms = new Set(terms);
+            return query.q.length > 180 ||
+                terms.length > 24 ||
+                (terms.length >= 12 && uniqueTerms.size / terms.length < 0.65);
+        });
+        const searchState = this.getWebRunSession(context);
+        const activeSelectionProtocol = searchState.selectionProtocol;
+        const pendingSelectionProtocol = activeSelectionProtocol &&
+            activeSelectionProtocol.boundaryComplete !== true &&
+            normalizeString(activeSelectionProtocol.parentIndexRef) &&
+            normalizeString(activeSelectionProtocol.parentIndexUrl)
+            ? activeSelectionProtocol
+            : null;
+        const selectionBoundaryWorkStarted = Boolean(
+            activeSelectionProtocol &&
+            (
+                activeSelectionProtocol.boundaryComplete === true ||
+                pendingSelectionProtocol ||
+                Number(activeSelectionProtocol.relevantStart) > 0 ||
+                (Array.isArray(activeSelectionProtocol.groupTitleCounts) &&
+                    activeSelectionProtocol.groupTitleCounts.length > 0)
+            )
+        );
+        const selectionAudit = merged.length && !selectionBoundaryWorkStarted
+            ? buildSearchSelectionAudit(sourceQuestion, merged)
+            : null;
+        const historicalArchiveUrl = !merged.length && looksLikeHistoricalWebStateQuestion(sourceQuestion)
+            ? historicalArchiveUrlFromQueries(queries)
+            : '';
+        const historicalArchiveSuggestion = historicalArchiveUrl
+            ? {
+                  tool: 'web_run',
+                  args: {
+                      archive: [{
+                          url: historicalArchiveUrl,
+                          mode: 'search',
+                          matchType: 'prefix',
+                          ...(sourceQuestion ? { query: sourceQuestion } : {})
+                      }]
+                  },
+                  reason: 'The task asks for a past public-web state and the live search returned no candidates. Inspect an archived snapshot of the known URL or stable prefix instead of repeatedly rewriting broad search queries.'
+              }
+            : null;
+        const queryGuidance = historicalArchiveSuggestion
+            ? {
+                  action: 'switch_source',
+                  strategy: 'historical_archive',
+                  repeat_previous_query: false,
+                  archive_url: historicalArchiveUrl
+              }
+            : !merged.length
+            ? {
+                  action: 'reformulate',
+                  strategy: queryNeedsReformulation ? 'fresh_concise_query' : 'broaden_or_simplify',
+                  repeat_previous_query: false,
+                  target_term_count: { min: 3, max: 8 }
+              }
+            : selectionAudit?.candidate_set_coverage_sufficient === false
+            ? {
+                  action: selectionAudit.parent_index_candidates.length
+                      ? 'inspect_parent_index'
+                      : selectionAudit.candidates.length >= 2
+                      ? 'inspect_competing_parents'
+                      : 'reformulate',
+                  strategy: selectionAudit.parent_index_candidates.length
+                      ? 'nearest_url_ancestor_first'
+                      : selectionAudit.candidates.length >= 2
+                      ? 'compare_visible_parents_and_expand_candidate_boundary'
+                      : 'fresh_concise_parent_index_query',
+                  repeat_previous_query: false,
+                  target_term_count: { min: 3, max: 8 },
+                  parent_index_refs: selectionAudit.parent_index_candidates
+              }
+            : null;
+        if (
+            selectionAudit?.candidate_set_coverage_sufficient === false &&
+            selectionAudit.parent_index_candidates.length
+        ) {
+            const parentIndexRef = selectionAudit.parent_index_candidates[0];
+            const parentIndex = searchState.refs.get(parentIndexRef);
+            if (parentIndex?.url && searchState.selectionProtocol?.boundaryComplete !== true) {
+                searchState.selectionProtocol = {
+                    status: 'parent_index_required',
+                    parentKind: selectionAudit.parent_kind,
+                    quotedTerm: selectionAudit.quoted_term,
+                    selector: selectionAudit.selector,
+                    parentIndexRef,
+                    parentIndexUrl: parentIndex.url,
+                    relevantStart: 0,
+                    totalLines: 0,
+                    ranges: [],
+                    currentGroup: '',
+                    groupTitleMatches: {},
+                    groupTitleCounts: [],
+                    boundaryComplete: false
+                };
+            }
+        }
+        const prioritizedOpenResults = selectionAudit?.candidate_set_coverage_sufficient === false &&
+            selectionAudit.parent_index_candidates.length
+            ? [
+                  ...selectionAudit.parent_index_candidates
+                      .map((refId) => merged.find((result) => result.ref_id === refId))
+                      .filter(Boolean),
+                  ...selectionAudit.candidates
+                      .map((candidate) => merged.find((result) => result.ref_id === candidate.ref_id))
+                      .filter((result) =>
+                          result &&
+                          !selectionAudit.parent_index_candidates.includes(result.ref_id)
+                      )
+              ]
+            : selectionAudit
+            ? selectionAudit.candidates
+                .map((candidate) => merged.find((result) => result.ref_id === candidate.ref_id))
+                .filter(Boolean)
+            : merged;
+        const pendingSelectionRangeEnd = pendingSelectionProtocol
+            ? Math.max(
+                  0,
+                  ...(Array.isArray(pendingSelectionProtocol.ranges)
+                      ? pendingSelectionProtocol.ranges.map((range) =>
+                            Number(Array.isArray(range) ? range[1] : range?.end) || 0
+                        )
+                      : [])
+              )
+            : 0;
+        const pendingSelectionNextLine = pendingSelectionProtocol &&
+            pendingSelectionRangeEnd > 0 &&
+            Number(pendingSelectionProtocol.totalLines) > pendingSelectionRangeEnd
+            ? pendingSelectionRangeEnd + 1
+            : 0;
+        const pendingSelectionNavigationSuggestion = pendingSelectionProtocol
+            ? {
+                  tool: 'web_run',
+                  args: {
+                      open: [{
+                          ref_id: pendingSelectionProtocol.parentIndexRef,
+                          ...(pendingSelectionNextLine ? { lineno: pendingSelectionNextLine } : {})
+                      }]
+                  },
+                  reason: `Complete the preserved ${normalizeString(pendingSelectionProtocol.parentKind, 'parent')} index comparison before another discovery search. The candidate boundary for "${normalizeString(pendingSelectionProtocol.selector, 'the requested selector')}" is still incomplete.`
+              }
+            : null;
+        const discoveredNextCalls = merged.length
+            ? [
+                  ...(deferredToolSearchSuggestion ? [deferredToolSearchSuggestion] : []),
+                  ...specializedNextCalls,
+                  ...prioritizedOpenResults.map((result) => {
+                      const lexicalCandidate = selectionAudit?.candidates
+                          ?.find((candidate) => candidate.ref_id === result.ref_id);
+                      return {
+                      tool: 'web_run',
+                      args: { open: [{ ref_id: result.ref_id }] },
+                      reason: selectionAudit?.parent_index_candidates.includes(result.ref_id)
+                          ? `Open the nearest parent index before selecting a child. Only ${selectionAudit.competing_matching_candidates_visible} matching parent candidate(s) are visible, so the current search result set cannot establish "${selectionAudit.selector}".`
+                          : selectionAudit
+                          ? `Inspect this parent candidate and count unique child titles. Its visible snippet contains ${lexicalCandidate?.visible_snippet_occurrences || 0} exact occurrence(s) of "${selectionAudit.quoted_term}", but snippet counts are not final selection evidence.`
+                          : 'Open a relevant candidate to inspect source evidence.'
+                      };
+                  })
+              ].slice(0, 3)
+            : historicalArchiveSuggestion
+            ? [historicalArchiveSuggestion]
+            : deferredToolSearchSuggestion
+            ? [deferredToolSearchSuggestion]
+            : filteredQueries.length && !queryNeedsReformulation
+            ? [{
+                  tool: 'web_run',
+                  args: {
+                      search_query: queries.map((query) => ({ q: query.q })),
+                      ...(args.response_length ? { response_length: args.response_length } : {})
+                  },
+                  reason: 'Retry the same model-authored queries without optional recency or domain transport filters.'
+              }]
+            : [];
+        const suggestedNextCalls = [
+            ...(pendingSelectionNavigationSuggestion ? [pendingSelectionNavigationSuggestion] : []),
+            ...discoveredNextCalls.filter((call) =>
+                !pendingSelectionNavigationSuggestion ||
+                JSON.stringify(call?.args || {}) !== JSON.stringify(pendingSelectionNavigationSuggestion.args)
+            )
+        ].slice(0, 3);
         const webSearchOutput = {
             type: 'function_call_output',
             webSearchCall,
@@ -3802,18 +4124,94 @@ class AILISGateway extends EventEmitter {
             functionCallOutput: { type: 'function_call_output', status: 'completed', output_kind: 'web_search_results' },
             function_call_output: { type: 'function_call_output', status: 'completed', output_kind: 'web_search_results' },
             search: {
-                status: merged.length ? 'completed' : 'empty',
+                status: searchStatus,
                 queries: queryValues,
                 results: merged,
                 candidates: merged,
-                ...(failures.length ? { failures } : {})
+                ...(excludedEvaluationLeakResults.length ? {
+                    evaluationLeakAudit: {
+                        status: 'excluded_labeled_answer_leaks',
+                        excluded_count: excludedEvaluationLeakResults.length,
+                        excluded_results: excludedEvaluationLeakResults
+                    }
+                } : {}),
+                ...(failures.length ? { failures } : {}),
+                ...(queryGuidance ? { queryGuidance } : {}),
+                ...(queryAssumptionAudit ? { queryAssumptionAudit } : {}),
+                ...(selectionAudit ? { selectionAudit } : {}),
+                ...(pendingSelectionProtocol ? {
+                    selectionProtocol: {
+                        status: normalizeString(pendingSelectionProtocol.status, 'parent_index_required'),
+                        parent_kind: normalizeString(pendingSelectionProtocol.parentKind),
+                        quoted_term: normalizeString(pendingSelectionProtocol.quotedTerm),
+                        selector: normalizeString(pendingSelectionProtocol.selector),
+                        parent_index_ref: normalizeString(pendingSelectionProtocol.parentIndexRef),
+                        parent_index_url: normalizeString(pendingSelectionProtocol.parentIndexUrl),
+                        boundary_complete: false,
+                        exact_title_match_counts: Array.isArray(pendingSelectionProtocol.groupTitleCounts)
+                            ? cloneJson(pendingSelectionProtocol.groupTitleCounts)
+                            : []
+                    }
+                } : {}),
+                ...(suggestedNextCalls.length ? { suggestedNextCalls } : {})
             }
         };
+        const selectionAuditText = selectionAudit
+            ? [
+                  `Selection audit (incomplete): search ranking does not answer "${selectionAudit.selector}".`,
+                  `Exact whole-token/phrase "${selectionAudit.quoted_term}" occurrences visible in result snippets:`,
+                  ...selectionAudit.candidates
+                      .filter((candidate) => candidate.visible_snippet_occurrences > 0)
+                      .map((candidate) =>
+                          `- [${candidate.ref_id}] ${candidate.visible_snippet_occurrences} occurrence(s)`
+                      ),
+                  ...(selectionAudit.parent_index_candidates.length
+                      ? [
+                            `Only ${selectionAudit.competing_matching_candidates_visible} matching parent candidate(s) are visible. Open the nearest parent index [${selectionAudit.parent_index_candidates[0]}] before selecting a child.`
+                        ]
+                      : selectionAudit.candidates.length >= 2
+                      ? [
+                            `${selectionAudit.competing_matching_candidates_visible} parent candidate(s) are visible, but search results do not establish the full candidate-set boundary. Inspect the competing parents and continue boundary discovery before selecting a child.`
+                        ]
+                      : [
+                            `Only ${selectionAudit.competing_matching_candidates_visible} matching parent candidate(s) are visible. Write a fresh concise parent-index query before selecting a child.`
+                        ]),
+                  'These are diagnostic snippet counts, not final per-group title counts. Inspect the leading candidates and verify unique matching titles plus the candidate-set boundary before selecting a child.'
+              ]
+            : [];
+        const pendingSelectionProtocolText = pendingSelectionProtocol
+            ? [
+                  `Selection protocol pending: the preserved ${normalizeString(pendingSelectionProtocol.parentKind, 'parent')} index [${pendingSelectionProtocol.parentIndexRef}] has not been inspected to a complete candidate boundary.`,
+                  'Another discovery query cannot replace that pending evidence action. Open the preserved parent index next; abandon it only if the open action fails or the source is unavailable.'
+              ]
+            : [];
         const text = [
-            ...(excludedEvaluationLeakResults.length
-                ? [`Excluded ${excludedEvaluationLeakResults.length} evaluation-answer leak candidate(s).`]
+            ...(queryAssumptionAudit
+                ? [
+                      `Query assumption audit (advisory): ${queryAssumptionAudit.anchors.join(', ')} are possible intermediate identifiers not stated by the user.`,
+                      'The search still ran. Treat those identifiers as hypotheses and verify the parent selection before relying on them.'
+                  ]
                 : []),
-            merged.length ? 'Search results:' : 'No search results.',
+            ...selectionAuditText,
+            ...pendingSelectionProtocolText,
+            ...((queryAssumptionAudit || selectionAudit || pendingSelectionNavigationSuggestion || historicalArchiveSuggestion) && suggestedNextCalls[0]
+                ? [
+                      pendingSelectionNavigationSuggestion
+                          ? 'Next required evidence call (preserved from the earlier tool result):'
+                          : 'Next recommended call (advisory; the model may choose another evidence action):',
+                      `${suggestedNextCalls[0].tool} ${JSON.stringify(suggestedNextCalls[0].args)}`
+                  ]
+                : []),
+            ...(excludedEvaluationLeakResults.length
+                ? [`Excluded ${excludedEvaluationLeakResults.length} evaluation-answer leak candidate(s); labeled benchmark answers are not source evidence.`]
+                : []),
+            merged.length
+                ? 'Search results (open a relevant reference to inspect source evidence):'
+                : historicalArchiveSuggestion
+                ? `No live search results for this past-state question. Run the visible archive call for ${historicalArchiveUrl} instead of repeating broad web search.`
+                : queryNeedsReformulation
+                ? 'No search results. Write one fresh concise query with 3-8 discriminative terms; do not concatenate or repeat prior queries.'
+                : 'No search results. Broaden the query and omit optional recency/domain filters before retrying.',
             ...merged.flatMap((result, index) => [
                 `${index + 1}. [${result.ref_id}] ${result.title}`,
                 `   URL: ${result.url}`,
@@ -3831,7 +4229,7 @@ class AILISGateway extends EventEmitter {
         };
         return {
             content: [{ type: 'text', text }],
-            isError: false,
+            isError: responses.every((response) => response?.isError === true),
             details: structuredContent,
             structuredContent
         };
@@ -3847,6 +4245,7 @@ class AILISGateway extends EventEmitter {
             };
         }
         const state = this.getWebRunSession(context);
+        const selectionProtocol = state.selectionProtocol;
         const sourceQuestion = normalizeString(
             context.currentUserMessage ||
             context.currentTaskRequest ||
@@ -3858,6 +4257,24 @@ class AILISGateway extends EventEmitter {
                 return cachedFind;
             }
         }
+        const comparableUrl = (value = '') => normalizeString(value)
+            .replace(/#.*$/, '')
+            .replace(/\/+$/, '')
+            .toLowerCase();
+        let selectionDependencyAdvisory = (
+            mode === 'open' &&
+            context.exactAnswerMode === true &&
+            selectionProtocol &&
+            selectionProtocol.boundaryComplete !== true &&
+            comparableUrl(resolved.url) !== comparableUrl(selectionProtocol.parentIndexUrl)
+        ) ? {
+            status: 'selection_dependency_unresolved_advisory',
+            parent_kind: selectionProtocol.parentKind,
+            selector: selectionProtocol.selector,
+            quoted_term: selectionProtocol.quotedTerm,
+            boundary_complete: false,
+            required_parent_index_ref: selectionProtocol.parentIndexRef
+        } : null;
         const resolvedFetchBackend = normalizeString(
             resolved.fetchBackend || resolved.fetch_backend
         ).toLowerCase();
@@ -3965,10 +4382,224 @@ class AILISGateway extends EventEmitter {
         }
         details.ref_id = viewRef;
         details.url = resolved.url;
+        if (selectionDependencyAdvisory) {
+            details.selectionDependencyAdvisory = selectionDependencyAdvisory;
+            details.selection_dependency_advisory = selectionDependencyAdvisory;
+        }
+        const primarySourceView = sourceViews[0] || {};
+        const hasMoreAfter = primarySourceView.hasMoreAfter === true ||
+            primarySourceView.has_more_after === true;
+        const lineEnd = Number(
+            primarySourceView.lineEnd ||
+            primarySourceView.line_end ||
+            primarySourceView.endLine ||
+            primarySourceView.end_line
+        ) || 0;
+        const parentKind = selectorParentKind(sourceQuestion);
+        const structuredAnchorsInViewport = sourceViews.flatMap((sourceView) =>
+            (Array.isArray(sourceView?.lines) ? sourceView.lines : [])
+                .flatMap((line) => extractStructuredQueryAnchors(line?.text || line?.rendered))
+        );
+        const parentAnchorsInViewport = new Set(
+            structuredAnchorsInViewport
+                .filter((anchor) => structuredAnchorKind(anchor) === parentKind)
+                .map((anchor) => anchor.toLowerCase())
+        );
+        const childAnchorsInViewport = new Set(
+            structuredAnchorsInViewport
+                .filter((anchor) => {
+                    const kind = structuredAnchorKind(anchor);
+                    return kind && kind !== parentKind;
+                })
+                .map((anchor) => anchor.toLowerCase())
+        );
+        const isNestedIndexRefinement = (() => {
+            if (!selectionProtocol?.parentIndexUrl || !resolved.url) {
+                return false;
+            }
+            try {
+                const currentIndexUrl = new URL(selectionProtocol.parentIndexUrl);
+                const openedUrl = new URL(resolved.url);
+                const currentPath = currentIndexUrl.pathname.replace(/\/+$/, '') || '/';
+                const openedPath = openedUrl.pathname.replace(/\/+$/, '') || '/';
+                const descendantPrefix = currentPath === '/' ? '/' : `${currentPath}/`;
+                return openedUrl.origin === currentIndexUrl.origin &&
+                    openedPath !== currentPath &&
+                    openedPath.startsWith(descendantPrefix);
+            } catch {
+                return false;
+            }
+        })();
+        if (
+            selectionProtocol &&
+            selectionProtocol.boundaryComplete !== true &&
+            isNestedIndexRefinement &&
+            parentAnchorsInViewport.size >= 2 &&
+            childAnchorsInViewport.size >= 2
+        ) {
+            selectionProtocol.status = 'parent_index_refined';
+            selectionProtocol.parentIndexRef = viewRef;
+            selectionProtocol.parentIndexUrl = resolved.url;
+            selectionProtocol.relevantStart = 0;
+            selectionProtocol.totalLines = 0;
+            selectionProtocol.ranges = [];
+            selectionProtocol.currentGroup = '';
+            selectionProtocol.groupTitleMatches = {};
+            selectionProtocol.groupTitleCounts = [];
+            selectionProtocol.boundaryComplete = false;
+            selectionDependencyAdvisory = null;
+            delete details.selectionDependencyAdvisory;
+            delete details.selection_dependency_advisory;
+        }
+        const isSelectionParentIndex = selectionProtocol &&
+            comparableUrl(resolved.url) === comparableUrl(selectionProtocol.parentIndexUrl);
+        if (isSelectionParentIndex && viewRef) {
+            selectionProtocol.parentIndexRef = viewRef;
+        }
+        const selectionGroupCounts = isSelectionParentIndex
+            ? updateSelectionProtocolTitleCounts(selectionProtocol, sourceViews)
+            : cloneJson(selectionProtocol?.groupTitleCounts || []);
+        if (isSelectionParentIndex) {
+            const lineStart = Number(
+                primarySourceView.lineStart ||
+                primarySourceView.line_start ||
+                primarySourceView.lineno
+            ) || 1;
+            const totalLines = Number(
+                primarySourceView.totalLines ||
+                primarySourceView.total_lines
+            ) || lineEnd;
+            const parentAnchorLines = sourceViews.flatMap((sourceView) =>
+                (Array.isArray(sourceView?.lines) ? sourceView.lines : [])
+                    .filter((line) =>
+                        extractStructuredQueryAnchors(line?.text || line?.rendered)
+                            .some((anchor) => structuredAnchorKind(anchor) === selectionProtocol.parentKind)
+                    )
+                    .map((line) => Number(line?.lineno || line?.lineNumber || line?.line_number) || 0)
+                    .filter(Boolean)
+            );
+            if (parentAnchorLines.length) {
+                const firstParentLine = Math.min(...parentAnchorLines);
+                selectionProtocol.relevantStart = selectionProtocol.relevantStart > 0
+                    ? Math.min(selectionProtocol.relevantStart, firstParentLine)
+                    : firstParentLine;
+            }
+            selectionProtocol.totalLines = Math.max(selectionProtocol.totalLines || 0, totalLines);
+            selectionProtocol.ranges.push([lineStart, lineEnd]);
+            selectionProtocol.ranges.sort((left, right) => left[0] - right[0]);
+            const mergedRanges = [];
+            for (const range of selectionProtocol.ranges) {
+                const previous = mergedRanges[mergedRanges.length - 1];
+                if (!previous || range[0] > previous[1] + 1) {
+                    mergedRanges.push([...range]);
+                } else {
+                    previous[1] = Math.max(previous[1], range[1]);
+                }
+            }
+            selectionProtocol.ranges = mergedRanges;
+            selectionProtocol.boundaryComplete = selectionProtocol.relevantStart > 0 &&
+                mergedRanges.some((range) =>
+                    range[0] <= selectionProtocol.relevantStart &&
+                    range[1] >= selectionProtocol.totalLines
+                );
+            selectionProtocol.status = selectionProtocol.boundaryComplete
+                ? 'parent_index_complete'
+                : 'parent_index_incomplete';
+            details.selectionProtocol = {
+                status: selectionProtocol.status,
+                parent_kind: selectionProtocol.parentKind,
+                selector: selectionProtocol.selector,
+                quoted_term: selectionProtocol.quotedTerm,
+                boundary_complete: selectionProtocol.boundaryComplete,
+                relevant_line_start: selectionProtocol.relevantStart || null,
+                total_lines: selectionProtocol.totalLines,
+                covered_ranges: cloneJson(selectionProtocol.ranges),
+                exact_title_match_counts: cloneJson(selectionGroupCounts),
+                winning_group: selectionProtocol.boundaryComplete &&
+                    selectionGroupCounts.length &&
+                    (
+                        selectionGroupCounts.length === 1 ||
+                        selectionGroupCounts[0].count > selectionGroupCounts[1].count
+                    )
+                    ? selectionGroupCounts[0].group
+                    : null
+            };
+            details.selection_protocol = details.selectionProtocol;
+        }
+        if (
+            mode === 'open' &&
+            context.exactAnswerMode === true &&
+            looksLikeNestedSelectorTask(sourceQuestion) &&
+            parentKind &&
+            parentAnchorsInViewport.size >= 2 &&
+            hasMoreAfter &&
+            lineEnd > 0
+        ) {
+            const nextCall = {
+                tool: 'web_run',
+                args: {
+                    open: [{
+                        ref_id: viewRef,
+                        lineno: lineEnd + 1
+                    }]
+                },
+                reason: 'Continue the same parent index at the next unread line before selecting a child; the current viewport does not establish the candidate-set boundary.'
+            };
+            const existingCalls = Array.isArray(details.suggestedNextCalls)
+                ? details.suggestedNextCalls
+                : Array.isArray(details.suggested_next_calls)
+                ? details.suggested_next_calls
+                : [];
+            const suggestedNextCalls = [
+                nextCall,
+                ...existingCalls.filter((call) =>
+                    JSON.stringify(call?.args || {}) !== JSON.stringify(nextCall.args)
+                )
+            ];
+            details.suggestedNextCalls = suggestedNextCalls;
+            details.suggested_next_calls = suggestedNextCalls;
+        }
+        const navigationSuggestedCalls = Array.isArray(details.suggestedNextCalls)
+            ? details.suggestedNextCalls
+            : Array.isArray(details.suggested_next_calls)
+            ? details.suggested_next_calls
+            : [];
+        const selectionCountText = selectionGroupCounts.length
+            ? [
+                  `Exact "${normalizeString(selectionProtocol?.quotedTerm)}" child-title counts observed in the parent index (${selectionProtocol?.boundaryComplete === true ? 'candidate boundary complete' : 'provisional; more lines remain'}):`,
+                  ...selectionGroupCounts.map((group) =>
+                      `- ${group.group}: ${group.count}${group.matched_children.length ? ` (${group.matched_children.map((child) => child.id).join(', ')})` : ''}`
+                  ),
+                  ...(selectionProtocol?.boundaryComplete === true &&
+                  selectionGroupCounts.length &&
+                  (
+                      selectionGroupCounts.length === 1 ||
+                      selectionGroupCounts[0].count > selectionGroupCounts[1].count
+                  )
+                      ? [`Unique winning group: ${selectionGroupCounts[0].group}.`]
+                      : [])
+              ].join('\n')
+            : '';
+        const navigationNextCallText = navigationSuggestedCalls[0]
+            ? [
+                  'Next recommended call (advisory; the model may choose another evidence action):',
+                  `${navigationSuggestedCalls[0].tool} ${JSON.stringify(navigationSuggestedCalls[0].args)}`
+              ].join('\n')
+            : '';
         return {
             content: [{
                 type: 'text',
-                text: bridgeTextContent(cloned)
+                text: [
+                    selectionDependencyAdvisory
+                        ? [
+                              `Selection dependency audit (advisory): parent comparison at ${selectionDependencyAdvisory.required_parent_index_ref} is not complete.`,
+                              'The requested child page was opened anyway. Use its evidence as a hypothesis and finish the parent comparison before making a global selector claim.'
+                          ].join('\n')
+                        : '',
+                    selectionCountText,
+                    navigationNextCallText,
+                    bridgeTextContent(cloned)
+                ].filter(Boolean).join('\n\n')
             }],
             isError: cloned.isError === true || cloned.details?.result?.isError === true,
             details,
@@ -4226,15 +4857,6 @@ class AILISGateway extends EventEmitter {
 
     async executeGatewayLocalTool(toolId, args, context = {}) {
         const workspaceDir = context.workspaceDir || this.resolveWorkspace(context.workspace, context);
-        if (toolId === TASK_GOAL_TOOL_ID) {
-            const goalResult = this.taskAgentHarness.applyGoalAction(args, context);
-            return {
-                content: [{ type: 'text', text: JSON.stringify(goalResult, null, 2) }],
-                isError: goalResult.ok === false,
-                details: goalResult,
-                structuredContent: goalResult
-            };
-        }
         if (toolId === HANDOFF_TASK_TOOL_ID) {
             const taskResult = await this.taskAgentHarness.handoff(args, {
                 ...context,

@@ -107,7 +107,6 @@ function sanitizeAgentRequest(payload = {}, record) {
         context: {
             ...context,
             hostedRuntime: true,
-            taskAgentOwnsExecution: true,
             agentLoop: 'llm',
             planner: 'llm',
             directToolExecutor: true,
@@ -189,7 +188,6 @@ class AILISHostedRuntimeManager {
             profileCurationLlm: (payload) => callDesktopLlmProvider(record.llmSettings, payload || {}),
             getDefaultContext: () => ({
                 hostedRuntime: true,
-                taskAgentOwnsExecution: true,
                 workspace: workspaceRoot,
                 workspaceDir: workspaceRoot,
                 workspaceRoot,

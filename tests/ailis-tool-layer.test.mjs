@@ -522,7 +522,6 @@ test('AILIS Gateway exposes a small Responses-compatible core surface by default
         'exec',
         'handoff_task',
         'request_permissions',
-        'task_goal',
         'tool_search',
         'update_plan',
         'web_run',
@@ -784,7 +783,7 @@ test('AILIS suppresses repeated update_plan direct-tool loops without hiding oth
     assert.equal(overrideSpecs.some((tool) => tool.name === 'update_plan'), true);
 });
 
-test('AILIS loop guard does not use legacy evidence verdicts to block web_fetch', () => {
+test('AILIS loop guard blocks repeated web_fetch after reasoning-ready evidence', () => {
     const previousFetch = {
         tool: 'mcp__ailis_research__web_fetch',
         args: { url: 'https://wiki.biligame.com/zzz/%E8%8E%B1%E7%89%B9' },
@@ -812,7 +811,9 @@ test('AILIS loop guard does not use legacy evidence verdicts to block web_fetch'
         args: { url: 'https://wiki.biligame.com/zzz/%E8%8E%B1%E7%89%B9/' }
     }, [previousFetch]);
 
-    assert.equal(guard.ok, true);
+    assert.equal(guard.ok, false);
+    assert.equal(guard.status, 'tool_loop_guard');
+    assert.equal(guard.details.reason, 'repeated_ready_evidence');
 });
 
 test('AILIS loop guard allows web_fetch source viewport navigation on the same URL', () => {

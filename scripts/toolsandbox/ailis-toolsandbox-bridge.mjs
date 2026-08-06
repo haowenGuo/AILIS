@@ -216,6 +216,7 @@ async function runAgent(command) {
             directToolLimit: officialDirectToolLimit,
             agentRole: 'persona_orchestrator',
             requireTaskExecution: true,
+            requireExecutionEvidence: true,
             desktopRealEval: true,
             desktopRealEvalTaskId: bridgeConfig.scenarioName,
             desktopRealEvalTaskText: bridgeConfig.originalTask,

@@ -1666,9 +1666,10 @@ class AILISRuntime {
             status: 'completed',
             completion_scope: 'progress_recorded_only',
             semantic_role: 'progress_ui_only',
+            produces_evidence: false,
             task_advanced: false,
             execution_effect: 'updated_user_visible_progress_checklist_only',
-            next_step_guidance: 'This did not inspect files, retrieve data, execute commands, or compute answers. Continue with the real task tool when work remains.',
+            next_step_guidance: 'This did not inspect files, retrieve data, execute commands, compute answers, or produce task evidence. Continue with the real task tool when work remains.',
             explanation: state.explanation,
             plan: items
         };

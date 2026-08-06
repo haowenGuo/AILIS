@@ -51,8 +51,7 @@ function parseArgs(argv = process.argv.slice(2)) {
         offset: 0,
         limit: 0,
         maxAgentSteps: 20,
-        requestTimeoutMs: 0,
-        downloadTimeoutMs: 120000,
+        requestTimeoutMs: 300000,
         llmTimeoutMs: 120000,
         submitTimeoutMs: 120000,
         temperature: 0.2,
@@ -60,17 +59,7 @@ function parseArgs(argv = process.argv.slice(2)) {
         downloadOnly: false,
         skipDownload: false,
         localSubmit: null,
-        directToolExecutor: process.env.AILIS_GAIA_DIRECT_TOOL_EXECUTOR === undefined
-            ? true
-            : /^(1|true|yes|on)$/i.test(process.env.AILIS_GAIA_DIRECT_TOOL_EXECUTOR),
-        agentRole: 'task_agent',
-        codexModelBridge: process.env.AILIS_EVAL_CODEX_MODEL_BRIDGE === undefined
-            ? true
-            : /^(1|true|yes|on)$/i.test(process.env.AILIS_EVAL_CODEX_MODEL_BRIDGE),
-        codexModel: normalizeText(process.env.AILIS_CODEX_MODEL, 'gpt-5.6-luna'),
-        codexReasoningEffort: normalizeText(process.env.AILIS_CODEX_REASONING_EFFORT, 'medium'),
-        isolatedWorkspace: true,
-        workspaceRoot: ''
+        directToolExecutor: /^(1|true|yes|on)$/i.test(process.env.AILIS_GAIA_DIRECT_TOOL_EXECUTOR || '')
     };
     for (let index = 0; index < argv.length; index += 1) {
         const token = argv[index];
@@ -85,13 +74,7 @@ function parseArgs(argv = process.argv.slice(2)) {
         else if (token === '--offset') args.offset = Math.max(0, Number(next()) || 0);
         else if (token === '--limit') args.limit = Math.max(0, Number(next()) || 0);
         else if (token === '--max-agent-steps') args.maxAgentSteps = Math.max(1, Math.min(Number(next()) || args.maxAgentSteps, 60));
-        else if (token === '--request-timeout-ms') {
-            const parsed = Number(next());
-            args.requestTimeoutMs = parsed === 0
-                ? 0
-                : Math.max(30000, Number.isFinite(parsed) ? parsed : args.requestTimeoutMs);
-        }
-        else if (token === '--download-timeout-ms') args.downloadTimeoutMs = Math.max(1000, Number(next()) || args.downloadTimeoutMs);
+        else if (token === '--request-timeout-ms') args.requestTimeoutMs = Math.max(30000, Number(next()) || args.requestTimeoutMs);
         else if (token === '--llm-timeout-ms') args.llmTimeoutMs = Math.max(30000, Number(next()) || args.llmTimeoutMs);
         else if (token === '--submit-timeout-ms') args.submitTimeoutMs = Math.max(1000, Number(next()) || args.submitTimeoutMs);
         else if (token === '--temperature') args.temperature = Math.min(Math.max(Number(next()) || args.temperature, 0), 2);
@@ -105,14 +88,6 @@ function parseArgs(argv = process.argv.slice(2)) {
         else if (token === '--no-local-submit') args.localSubmit = false;
         else if (token === '--direct-tool-executor') args.directToolExecutor = true;
         else if (token === '--no-direct-tool-executor') args.directToolExecutor = false;
-        else if (token === '--agent-role') args.agentRole = normalizeText(next(), args.agentRole);
-        else if (token === '--codex-model-bridge') args.codexModelBridge = true;
-        else if (token === '--no-codex-model-bridge') args.codexModelBridge = false;
-        else if (token === '--codex-model') args.codexModel = normalizeText(next(), args.codexModel);
-        else if (token === '--codex-reasoning-effort') args.codexReasoningEffort = normalizeText(next(), args.codexReasoningEffort);
-        else if (token === '--workspace-root') args.workspaceRoot = path.resolve(next());
-        else if (token === '--isolated-workspace') args.isolatedWorkspace = true;
-        else if (token === '--desktop-workspace') args.isolatedWorkspace = false;
     }
     if (!['validation', 'test'].includes(args.split)) {
         throw new Error(`Unsupported --split ${args.split}; expected validation or test.`);
@@ -123,7 +98,6 @@ function parseArgs(argv = process.argv.slice(2)) {
     }
     args.outputDir = path.resolve(args.outputDir);
     args.datasetDir = path.resolve(args.datasetDir);
-    args.workspaceRoot = args.workspaceRoot ? path.resolve(args.workspaceRoot) : '';
     args.stageFilesDir = path.join(args.outputDir, 'staged-files', args.runId);
     args.localSubmit = args.localSubmit ?? args.split === 'validation';
     args.benchmarkName = `gaia-official-${args.split}-l${levelLabel}`;
@@ -529,7 +503,7 @@ function createLocalScoringServer({ args, questions, goldByTaskId, fileByName })
 
 async function runLiteRunner(args, baseUrl) {
     const liteArgs = [
-        'scripts/run-gaia-pure-agent.mjs',
+        'scripts/run-gaia-level1-lite.mjs',
         '--output-dir', args.outputDir,
         '--run-id', args.runId,
         '--scoring-api', baseUrl,
@@ -537,22 +511,13 @@ async function runLiteRunner(args, baseUrl) {
         '--username', args.username,
         '--max-agent-steps', String(args.maxAgentSteps),
         '--request-timeout-ms', String(args.requestTimeoutMs),
-        '--download-timeout-ms', String(args.downloadTimeoutMs),
         '--llm-timeout-ms', String(args.llmTimeoutMs),
         '--submit-timeout-ms', String(args.submitTimeoutMs),
         '--temperature', String(args.temperature),
         '--task-retries', String(args.taskRetries),
         '--benchmark-name', args.benchmarkName,
-        '--agent-code', `AILIS Agent via neutral ${args.benchmarkName} transport adapter`,
-        '--agent-role', args.agentRole,
-        '--codex-model', args.codexModel,
-        '--codex-reasoning-effort', args.codexReasoningEffort
+        '--agent-code', `AILIS local AILIS Gateway ${args.benchmarkName} runner`
     ];
-    liteArgs.push(args.codexModelBridge ? '--codex-model-bridge' : '--no-codex-model-bridge');
-    liteArgs.push(args.isolatedWorkspace ? '--isolated-workspace' : '--desktop-workspace');
-    if (args.workspaceRoot) {
-        liteArgs.push('--workspace-root', args.workspaceRoot);
-    }
     if (args.directToolExecutor) {
         liteArgs.push('--direct-tool-executor');
     }

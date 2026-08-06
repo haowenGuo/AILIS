@@ -4,11 +4,6 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createRequire } from 'node:module';
 
-import {
-    configureResearchMcpLlmEnvironment,
-    loadDesktopStateSettings
-} from './ailis-eval-runtime-config.mjs';
-
 const require = createRequire(import.meta.url);
 const { AILISGateway } = require('../electron/ailis-gateway.cjs');
 
@@ -155,6 +150,89 @@ async function appendJsonl(filePath, value) {
     await fs.appendFile(filePath, `${JSON.stringify(value)}\n`, 'utf8');
 }
 
+function loadDesktopStateSettings(args) {
+    const appData = process.env.APPDATA || path.join(process.env.USERPROFILE || '', 'AppData', 'Roaming');
+    const stateCandidates = [
+        path.join(appData, 'ailis', 'desktop-state.json'),
+        path.join(appData, 'AILIS', 'desktop-state.json')
+    ];
+    const mcpCandidates = [
+        path.join(appData, 'ailis', 'ailis-gateway', 'mcp-servers.json'),
+        path.join(appData, 'AILIS', 'ailis-gateway', 'mcp-servers.json'),
+        path.join(PROJECT_ROOT, '.ailis-state', 'mcp-servers.json')
+    ];
+    let preferences = {};
+    let statePath = '';
+    for (const candidate of stateCandidates) {
+        if (!fsSync.existsSync(candidate)) {
+            continue;
+        }
+        try {
+            const state = JSON.parse(fsSync.readFileSync(candidate, 'utf8'));
+            preferences = state.preferences || state.state?.preferences || {};
+            statePath = candidate;
+            break;
+        } catch {}
+    }
+    const mcpConfigPath = mcpCandidates.find((candidate) => fsSync.existsSync(candidate)) || '';
+    if (args.codexModelBridge) {
+        process.env.AILIS_CODEX_REASONING_EFFORT = args.codexReasoningEffort;
+        return {
+            statePath,
+            mcpConfigPath,
+            llmSettings: {
+                provider: 'codex-model-bridge',
+                baseUrl: 'codex://chatgpt-oauth',
+                model: args.codexModel,
+                apiKey: '',
+                authMode: 'chatgpt_oauth',
+                reasoningEffort: args.codexReasoningEffort,
+                temperature: args.temperature,
+                timeoutMs: args.llmTimeoutMs
+            }
+        };
+    }
+    const provider = normalizeText(
+        preferences.llmProvider ||
+            process.env.AILIS_AGENT_LLM_PROVIDER ||
+            process.env.AILIS_LLM_PROVIDER ||
+            'openai-compatible'
+    );
+    const baseUrl = normalizeText(
+        preferences.llmBaseUrl ||
+            process.env.AILIS_AGENT_LLM_BASE_URL ||
+            process.env.AILIS_LLM_BASE_URL ||
+            process.env.OPENAI_COMPATIBLE_BASE_URL ||
+            ''
+    );
+    const model = normalizeText(
+        preferences.llmModel ||
+            process.env.AILIS_AGENT_LLM_MODEL ||
+            process.env.AILIS_LLM_MODEL ||
+            process.env.OPENAI_COMPATIBLE_MODEL ||
+            ''
+    );
+    const apiKey = normalizeText(
+        preferences.llmApiKey ||
+            process.env.AILIS_AGENT_LLM_API_KEY ||
+            process.env.AILIS_LLM_API_KEY ||
+            process.env.OPENAI_COMPATIBLE_API_KEY ||
+            ''
+    );
+    return {
+        statePath,
+        mcpConfigPath,
+        llmSettings: {
+            provider,
+            baseUrl,
+            model,
+            apiKey,
+            temperature: args.temperature,
+            timeoutMs: args.llmTimeoutMs
+        }
+    };
+}
+
 function redactLlmSettings(settings = {}) {
     return {
         provider: settings.provider || '',
@@ -276,7 +354,10 @@ function buildDesktopRealPayload({ args, task, llmSettings }) {
         attachments,
         agentLoop: 'llm',
         planner: 'llm',
+        answerOnly: true,
+        exactAnswerMode: true,
         memoryPolicy: 'disabled',
+        executionProfile: { kind: 'exact_answer_eval', answerOnly: true },
         llmSettings,
         directToolExecutor: args.directToolExecutor,
         nativeDirectTools: args.directToolExecutor,
@@ -285,7 +366,10 @@ function buildDesktopRealPayload({ args, task, llmSettings }) {
             workspace: args.workspaceRoot,
             agentLoop: 'llm',
             planner: 'llm',
+            answerOnly: true,
+            exactAnswerMode: true,
             memoryPolicy: 'disabled',
+            executionProfile: { kind: 'exact_answer_eval', answerOnly: true },
             evaluationTaskId: task.task_id,
             evaluationName: 'gaia_desktop_real',
             llmSettings,
@@ -760,6 +844,10 @@ function looksLikeStructuredAnswerShape(value = '') {
 
 function extractStructuredAnswerCandidates(response = {}) {
     const direct = [
+        ['exact_answer_submission', response.exactAnswerSubmission?.answer || response.exact_answer_submission?.answer],
+        ['exact_answer', response.exactAnswer || response.exact_answer],
+        ['task_result_exact_answer', response.taskResult?.exact_answer || response.task_result?.exact_answer],
+        ['handoff_exact_answer', response.taskRunHandoff?.exactAnswer || response.task_run_handoff?.exact_answer],
         ['final_answer', response.final_answer],
         ['finalAnswer', response.finalAnswer],
         ['answer', response.answer]
@@ -1197,6 +1285,24 @@ async function startGateway(args, runtimeSettings) {
     return { gateway, baseUrl: status.url };
 }
 
+function configureResearchMcpLlmEnvironment(llmSettings = {}) {
+    const assignments = {
+        AILIS_TOOL_LLM_PROVIDER: llmSettings.provider,
+        AILIS_TOOL_LLM_BASE_URL: llmSettings.baseUrl,
+        AILIS_TOOL_LLM_MODEL: llmSettings.model,
+        AILIS_TOOL_LLM_API_KEY: llmSettings.apiKey,
+        AILIS_TOOL_LLM_REASONING_EFFORT: llmSettings.reasoningEffort
+    };
+    for (const [name, value] of Object.entries(assignments)) {
+        const normalized = normalizeText(value);
+        if (normalized) {
+            process.env[name] = normalized;
+        } else {
+            delete process.env[name];
+        }
+    }
+}
+
 async function withTimeout(promise, timeoutMs, timeoutValue) {
     let timer = null;
     try {
@@ -1388,7 +1494,6 @@ export {
     buildDesktopRealPayload,
     configureResearchMcpLlmEnvironment,
     isIncompleteStatus,
-    loadDesktopStateSettings,
     normalizeAnswerForScore,
     parseArgs,
     scoreVisibleAnswer,

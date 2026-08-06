@@ -449,7 +449,7 @@ function responseItemsToChatMessages({ instructions = '', input = [] } = {}) {
                     content: [
                         {
                             type: 'text',
-                            text: 'Visual artifact returned by the immediately preceding tool call. Inspect this image as tool output for the current request; it is not a new user request.'
+                            text: 'Visual artifact returned by the immediately preceding tool call. Inspect this image as tool evidence for the current request; it is not a new user request.'
                         },
                         ...outputImages
                     ]

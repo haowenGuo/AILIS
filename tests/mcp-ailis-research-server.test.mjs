@@ -10,16 +10,21 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const {
     TOOLS,
+    assessSearchConfidence,
     buildEffectiveSearchQuery,
+    buildEvidenceSnippets,
     buildWebResearchCandidates,
+    buildSearchClarificationChoices,
+    buildSuggestedCallsFromSearchResults,
     buildInvidiousVideoProxyUrl,
+    buildYouTubeEvidenceSearchQuery,
     buildYouTubeOEmbedUrl,
     chessPositionAnalyze,
     classifyYtDlpFailure,
     crawl4aiFetchConfig,
     extractArxivCandidatesFromAtom,
     extractBingResults,
-    extractBreakDelimitedLayoutCues,
+    extractBreakDelimitedLayoutEvidence,
     extractDuckDuckGoHtmlResults,
     extractGenericAnchorResults,
     extractGitHubRepositoryResults,
@@ -362,7 +367,24 @@ test('structured JSON source text is expanded before viewport and find processin
     assert.ok(expanded.split('\n').length > 5);
 });
 
-test('pdf extraction reports HTTP access blocks without injecting recovery strategy', async () => {
+test('query-focused evidence surfaces answer-bearing lines from the middle of long extracted text', () => {
+    const filler = Array.from({ length: 80 }, (_, index) => `unrelated appendix line ${index + 1}`);
+    const extracted = [
+        ...filler.slice(0, 40),
+        'The bag has a measured internal volume of 0.1777 m3 for the fish transport calculation.',
+        ...filler.slice(40)
+    ].join('\n');
+
+    const snippets = buildEvidenceSnippets(
+        extracted,
+        'What is the volume in m3 of the fish transport bag?'
+    );
+
+    assert.match(snippets, /0\.1777 m3/);
+    assert.ok(snippets.length < extracted.length);
+});
+
+test('pdf extraction classifies HTTP access blocks as source-recovery problems', async () => {
     await withServer((_request, response) => {
         response.writeHead(403, { 'content-type': 'text/html; charset=utf-8' });
         response.end('<html><body>Access denied</body></html>');
@@ -373,9 +395,12 @@ test('pdf extraction reports HTTP access blocks without injecting recovery strat
         });
 
         assert.equal(result.isError, true);
-        assert.equal(result.details.failureReason, 'http_403');
-        assert.equal(Object.hasOwn(result.details, 'evidenceGap'), false);
-        assert.equal(Object.hasOwn(result.details, 'suggestedNextCalls'), false);
+        assert.match(result.details.evidenceGap, /HTTP 403/);
+        assert.match(result.details.recoveryHint, /Do not keep retrying/i);
+        assert.equal(result.details.suggestedNextCalls[0].tool, 'web_search');
+        assert.deepEqual(result.details.suggestedNextCalls[0].args, {
+            query: 'exact quoted word from the article'
+        });
     });
 });
 
@@ -394,8 +419,16 @@ test('chess_position_analyze validates a transcribed FEN with local Stockfish an
     assert.equal(result.structuredContent.sideToMove, 'black');
     assert.equal(result.structuredContent.bestMove.san, 'Rd5');
     assert.equal(result.structuredContent.bestMove.uci, 'd8d5');
-    assert.equal(Object.hasOwn(result.structuredContent, 'bestAnswerCandidate'), false);
-    assert.equal(Object.hasOwn(result.structuredContent, 'answerCandidates'), false);
+    assert.deepEqual(result.structuredContent.bestAnswerCandidate, {
+        answer: 'Rd5',
+        source: 'stockfish_engine_best_move',
+        selected: true,
+        finalizable: true,
+        confidence: 0.99
+    });
+    assert.deepEqual(result.structuredContent.answerCandidates, [
+        result.structuredContent.bestAnswerCandidate
+    ]);
     assert.ok(result.structuredContent.analysis.reachedDepth >= 8);
     assert.equal(result.structuredContent.analysis.requestedAnalysisTimeMs, 3000);
     assert.match(result.content[0].text, /best_move_san=Rd5/);
@@ -445,8 +478,8 @@ test('headless screenshot defaults to a readable primary viewport and keeps full
     });
 });
 
-test('HTML layout cues map repeated leading whitespace to blank-line-delimited blocks', () => {
-    const cues = extractBreakDelimitedLayoutCues(`
+test('HTML layout evidence maps repeated leading whitespace to blank-line-delimited blocks', () => {
+    const evidence = extractBreakDelimitedLayoutEvidence(`
         <div class="verse">
             Opening line<br><br>
 First line of block two<br>
@@ -456,9 +489,9 @@ Last line of block two<br><br>
 Final block line<br>
         </div>
     `);
-    assert.equal(cues.status, 'differentiated_indentation_detected');
-    assert.equal(cues.blockCount, 3);
-    assert.deepEqual(cues.indentedBlocks, [{
+    assert.equal(evidence.status, 'differentiated_indentation_detected');
+    assert.equal(evidence.blockCount, 3);
+    assert.deepEqual(evidence.indentedBlocks, [{
         blockIndex: 2,
         indentedLineCount: 2,
         leadingColumns: 4,
@@ -466,7 +499,7 @@ Final block line<br>
     }]);
 
     assert.equal(
-        extractBreakDelimitedLayoutCues('<div>one<br>two<br>three<br>four<br>five</div>').status,
+        extractBreakDelimitedLayoutEvidence('<div>one<br>two<br>three<br>four<br>five</div>').status,
         'differentiated_indentation_not_detected'
     );
 });
@@ -511,6 +544,25 @@ test('YouTube tools expose recovery affordance before broad web search', async (
     assert.match(transcript.content[0].text, /suggested_next_calls/);
 });
 
+test('YouTube oEmbed helpers preserve exact video identity and task terms', () => {
+    assert.equal(extractYouTubeVideoId('https://www.youtube.com/watch?v=L1vXCYZAYYM&t=12s'), 'L1vXCYZAYYM');
+    assert.equal(extractYouTubeVideoId('https://youtu.be/L1vXCYZAYYM?si=abc'), 'L1vXCYZAYYM');
+
+    const oembedUrl = buildYouTubeOEmbedUrl('https://www.youtube.com/watch?v=L1vXCYZAYYM');
+    assert.match(oembedUrl, /^https:\/\/www\.youtube\.com\/oembed\?/);
+    assert.match(decodeURIComponent(oembedUrl), /watch\?v=L1vXCYZAYYM/);
+
+    const evidenceQuery = buildYouTubeEvidenceSearchQuery({
+        title: 'Penguin Chicks Stand Up To Giant Petrel',
+        uploader: 'John Downer Productions'
+    }, {
+        question: 'highest number of bird species on camera simultaneously'
+    });
+    assert.match(evidenceQuery, /"Penguin Chicks Stand Up To Giant Petrel"/);
+    assert.match(evidenceQuery, /"John Downer Productions"/);
+    assert.match(evidenceQuery, /highest number of bird species/);
+});
+
 test('yt-dlp failures classify YouTube anti-bot blocks as non-query problems', () => {
     const failure = classifyYtDlpFailure('Sign in to confirm you are not a bot. Use --cookies-from-browser.');
 
@@ -551,8 +603,8 @@ test('read_document extracts Word paragraphs and tables as structured JSON', asy
         assert.equal(result.structuredContent.completeness.fullDocumentRead, true);
         assert.equal(result.structuredContent.complete, true);
         assert.equal(result.structuredContent.truncated, false);
-        assert.equal(Object.hasOwn(result.structuredContent, 'reasoningReady'), false);
-        assert.equal(Object.hasOwn(result.structuredContent.observationContract, 'reasoning_ready'), false);
+        assert.equal(result.structuredContent.reasoningReady, true);
+        assert.equal(result.structuredContent.observationContract.reasoning_ready, true);
         assert.equal(result.structuredContent.observationContract.semantic_level, 'structure');
     } finally {
         fs.rmSync(tmpDir, { recursive: true, force: true });
@@ -633,12 +685,23 @@ test('paper_metadata_lookup returns ranked scholarly metadata from OpenAlex and 
         assert.equal(payload.bestMatch.doi, '10.1145/2702613.2732927');
         assert.equal(payload.bestMatch.authors[0].name, 'Antti Oulasvirta');
         assert.equal(payload.bestMatch.pdfUrl, 'https://example.org/pie-menus.pdf');
+        assert.match(payload.nextActionHint, /prior papers/);
+        assert.ok(payload.authorHistoryNextCalls.some((call) => call.args?.authorId === 'https://openalex.org/A1'));
+        assert.ok(payload.authorHistoryNextCalls.some((call) => call.args?.author === 'Antti Oulasvirta'));
+        assert.match(payload.authorDisambiguationHint, /bestMatch\.authors/);
+        assert.equal(payload.suggestedNextCalls[0].tool, 'pdf_find_and_extract');
+        assert.match(payload.suggestedNextCalls[0].args.query, /10\.1145\/2702613\.2732927/);
+        assert.ok(payload.suggestedNextCalls.some((call) => call.args?.authorId === 'https://openalex.org/A1'));
         assert.ok(payload.results[0].authorsSummary.includes('Antti Oulasvirta'));
         assert.equal(payload.results[0].authors, undefined);
         assert.equal(result.structuredContent.results[0].authors[1].name, 'Jussi Jokinen');
-        assert.equal(Object.hasOwn(result.structuredContent, 'nextActionHint'), false);
-        assert.equal(Object.hasOwn(result.structuredContent, 'authorHistoryNextCalls'), false);
-        assert.equal(Object.hasOwn(result.structuredContent, 'suggestedNextCalls'), false);
+        assert.match(result.structuredContent.nextActionHint, /prior papers/);
+        assert.ok(result.structuredContent.authorHistoryNextCalls.some((call) => call.args?.authorId === 'https://openalex.org/A1'));
+        assert.ok(result.structuredContent.authorHistoryNextCalls.some((call) => call.args?.author === 'Antti Oulasvirta'));
+        assert.equal(result.structuredContent.suggestedNextCalls[0].tool, 'pdf_find_and_extract');
+        assert.ok(result.content[0].text.indexOf('"bestMatch"') < result.content[0].text.indexOf('"suggestedNextCalls"'));
+        assert.ok(result.content[0].text.indexOf('"authorHistoryNextCalls"') < result.content[0].text.indexOf('"suggestedNextCalls"'));
+        assert.ok(result.content[0].text.indexOf('"suggestedNextCalls"') < result.content[0].text.indexOf('"results"'));
     });
 });
 
@@ -713,8 +776,8 @@ test('paper_metadata_lookup keeps exact-title OpenAlex lookup when year is provi
         assert.equal(payload.bestMatch.source, 'openalex');
         assert.equal(payload.bestMatch.title, 'Pie Menus or Linear Menus, Which Is Better?');
         assert.equal(payload.results.some((candidate) => candidate.title === 'Creating Menus'), false);
-        assert.equal(Object.hasOwn(result.structuredContent, 'nextActionHint'), false);
-        assert.equal(Object.hasOwn(result.structuredContent, 'authorHistoryNextCalls'), false);
+        assert.match(result.structuredContent.nextActionHint, /prior papers/);
+        assert.ok(result.structuredContent.authorHistoryNextCalls.some((call) => call.args?.authorId === 'https://openalex.org/A1'));
     });
 });
 
@@ -782,12 +845,20 @@ test('paper_metadata_lookup can list earlier works for an OpenAlex author id', a
 
         assert.equal(result.isError, undefined, result.content[0].text);
         const payload = JSON.parse(result.content[0].text);
-        assert.equal(Object.hasOwn(payload, 'answerCandidate'), false);
+        assert.equal(payload.answerCandidate.answer, 'Mapping Human Oriented Information to Software Agents for Online Systems Usage');
+        assert.equal(payload.answerCandidate.earliestWorkTitle, 'Mapping human-oriented information to software agents for online systems usage');
+        assert.deepEqual(payload.answerCandidate.titleVariants, [
+            'Mapping human-oriented information to software agents for online systems usage',
+            'Mapping Human Oriented Information to Software Agents for Online Systems Usage'
+        ]);
+        assert.equal(payload.answerCandidate.earliestWorkYear, 2001);
+        assert.equal(payload.answerCandidate.earliestWorkDate, '2001-01-01');
         assert.equal(payload.results.length, 2);
         assert.equal(payload.bestMatch.title, 'Mapping human-oriented information to software agents for online systems usage');
         assert.equal(payload.bestMatch.year, 2001);
         assert.equal(payload.results[1].title, 'A new software agent ?learning? algorithm');
-        assert.equal(Object.hasOwn(result.structuredContent, 'answerCandidate'), false);
+        assert.equal(result.structuredContent.answerCandidate.earliestWorkTitle, 'Mapping human-oriented information to software agents for online systems usage');
+        assert.ok(result.content[0].text.indexOf('"answerCandidate"') < result.content[0].text.indexOf('"bestMatch"'));
     });
 });
 
@@ -850,7 +921,7 @@ test('web_archive_lookup ranks dynamic archived URLs and opens a selected source
         assert.equal(captures.structuredContent.captures[0].timestamp, '20241212025015');
         assert.equal(captures.structuredContent.captures[0].matchCoverage, 1);
         assert.equal(captures.structuredContent.rankingPolicy, 'earliest_term_matching_capture');
-        assert.doesNotMatch(captures.content[0].text, /best_next_call=/);
+        assert.match(captures.content[0].text, /^best_next_call=web_archive_lookup/);
 
         const opened = await webArchiveLookup({
             url: captures.structuredContent.captures[0].originalUrl,
@@ -1627,6 +1698,41 @@ test('github_repo_read parses common GitHub repository references', () => {
     });
 });
 
+test('web_search suggests github_repo_read for a GitHub blob result', async () => {
+    await withServer((request, response) => {
+        const url = new URL(request.url || '/', 'http://127.0.0.1');
+        assert.equal(url.pathname, '/search');
+        response.writeHead(200, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({
+            results: [{
+                title: 'Project changelog source',
+                url: 'https://github.com/example/project/blob/v1.2/docs/changelog.rst',
+                content: 'Official release changelog source file.'
+            }]
+        }));
+    }, async (baseUrl) => {
+        const result = await webSearch({
+            query: 'project version 1.2 changelog',
+            provider: 'searxng',
+            searxngUrl: baseUrl,
+            maxResults: 5
+        });
+
+        assert.equal(result.isError, undefined, result.content[0].text);
+        assert.deepEqual(result.structuredContent.suggestedNextCalls[0], {
+            tool: 'github_repo_read',
+            args: {
+                repo: 'example/project',
+                mode: 'file',
+                path: 'docs/changelog.rst',
+                ref: 'v1.2',
+                maxChars: 30000
+            },
+            reason: 'Read the linked GitHub file through the repository API: Project changelog source'
+        });
+    });
+});
+
 test('web_search can parse Bing HTML result blocks for fallback search', () => {
     const html = `
         <html><body>
@@ -2119,7 +2225,7 @@ test('web_search uses SearXNG JSON provider before HTML fallback', async () => {
         assert.equal(result.structuredContent.backend, 'searxng_json');
         assert.equal(result.structuredContent.attempts[0].backend, 'searxng_json');
         assert.equal(result.structuredContent.results[0].url, 'https://www.bilibili.com/video/BV1rXBoBoEv1/');
-        assert.equal(Object.hasOwn(result.structuredContent, 'suggestedNextCalls'), false);
+        assert.equal(result.structuredContent.suggestedNextCalls[0].tool, 'open_page');
     });
 });
 
@@ -2158,6 +2264,41 @@ test('web_search python_search backend can call SearXNG-compatible JSON without 
         assert.equal(result.structuredContent.webSearchOutput.webSearchCall.action.search_context_size, 'medium');
         assert.equal(result.structuredContent.webSearchOutput.search.results[0].url, 'https://example.test/bbc-earth-silliest-animal-moments');
         assert.match(result.content[0].text, /rockhopper penguins/i);
+    });
+});
+
+test('web_search extracts typed country answer candidates from high-coverage search results', async () => {
+    await withServer((request, response) => {
+        const url = new URL(request.url || '/', 'http://127.0.0.1');
+        assert.equal(url.pathname, '/search');
+        response.writeHead(200, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({
+            results: [
+                {
+                    title: 'DDC 633 BASE unknown language flag unique country Guatemala answer',
+                    url: 'https://example.test/search?topic=DDC+633+BASE+unknown+language+unique+flag&country=Guatemala',
+                    content: 'Under DDC 633 on Bielefeld University Library BASE as of 2020, the unknown language article with the unique flag was from country Guatemala.'
+                },
+                {
+                    title: 'BASE home',
+                    url: 'https://openscience.ub.uni-bielefeld.de/',
+                    content: "BASE is one of the world's most voluminous search engines."
+                }
+            ]
+        }));
+    }, async (baseUrl) => {
+        const result = await webSearch({
+            query: "Under DDC 633 on Bielefeld University Library's BASE, as of 2020, from what country was the unknown language article with a flag unique from the others?",
+            provider: 'searxng',
+            searxngUrl: baseUrl,
+            maxResults: 5
+        });
+
+        assert.equal(result.isError, undefined, result.content[0].text);
+        assert.equal(result.structuredContent.answerCandidates[0].answer, 'Guatemala');
+        assert.equal(result.structuredContent.answerCandidates[0].type, 'country');
+        assert.ok(result.structuredContent.answerCandidates[0].score >= 60);
+        assert.match(result.content[0].text, /Structured answer candidates from search results/);
     });
 });
 
@@ -2211,6 +2352,61 @@ test('web_search falls from failed SearXNG JSON to Firecrawl search provider', a
         assert.equal(result.structuredContent.attempts[1].backend, 'firecrawl_search');
         assert.equal(result.structuredContent.results[0].url, 'https://docs.crawl4ai.com/core/quickstart/');
         assert.deepEqual(requests.map((item) => item.pathname), ['/search', '/v1/search']);
+    });
+});
+
+test('web_search aggregates provider chain when the first successful backend is off-target', async () => {
+    const requests = [];
+    await withServer((request, response) => {
+        const url = new URL(request.url || '/', 'http://127.0.0.1');
+        requests.push({ method: request.method, pathname: url.pathname });
+        if (url.pathname === '/search') {
+            response.writeHead(200, { 'content-type': 'application/json' });
+            response.end(JSON.stringify({
+                results: [
+                    {
+                        title: 'Date Calculator : Add to or Subtract From a Date',
+                        url: 'https://www.timeanddate.com/date/dateadd.html',
+                        content: 'The Date Calculator adds or subtracts days, weeks, months and years.'
+                    }
+                ]
+            }));
+            return;
+        }
+        if (url.pathname === '/v1/search') {
+            response.writeHead(200, { 'content-type': 'application/json' });
+            response.end(JSON.stringify({
+                success: true,
+                data: [
+                    {
+                        title: 'Crawl4AI agent web extraction guide',
+                        url: 'https://docs.crawl4ai.com/core/quickstart/',
+                        description: 'Crawl4AI extracts Markdown for LLM agent web tasks and preserves useful links.'
+                    }
+                ]
+            }));
+            return;
+        }
+        response.writeHead(404, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({ error: 'not found' }));
+    }, async (baseUrl) => {
+        const result = await webSearch({
+            query: 'Crawl4AI agent web extraction guide',
+            provider: 'searxng,firecrawl',
+            searxngUrl: baseUrl,
+            firecrawlUrl: baseUrl,
+            maxResults: 5
+        });
+
+        assert.equal(result.isError, undefined, result.content[0].text);
+        assert.equal(result.structuredContent.backend, 'aggregated');
+        assert.deepEqual(requests.map((item) => item.pathname), ['/search', '/v1/search']);
+        assert.equal(result.structuredContent.results[0].url, 'https://docs.crawl4ai.com/core/quickstart/');
+        assert.ok(result.structuredContent.results[0].sourceBackends.includes('firecrawl_search'));
+        assert.ok(result.structuredContent.searchAggregation.enabled);
+        assert.ok(result.structuredContent.searchAggregation.successfulBackends.includes('searxng_json'));
+        assert.ok(result.structuredContent.searchAggregation.successfulBackends.includes('firecrawl_search'));
+        assert.equal(result.structuredContent.suggestedNextCalls[0].tool, 'open_page');
     });
 });
 
@@ -2381,6 +2577,48 @@ test('github_repo_read falls back to raw GitHub content when API file read is un
     });
 });
 
+test('search follow-up suggestions prefer DOI and PDF candidates over generic fetches', () => {
+    const calls = buildSuggestedCallsFromSearchResults([
+        {
+            title: 'Carolyn Collins Petersen: Mysterious galactic threads - linked paper',
+            url: 'https://doi.org/10.3847/2041-8213/acd54b',
+            snippet: 'Universe Today linked study by Carolyn Collins Petersen'
+        },
+        {
+            title: 'Carolyn Collins Petersen linked paper PDF',
+            url: 'https://example.org/files/paper.pdf',
+            snippet: 'Full text PDF for the Universe Today article'
+        },
+        {
+            title: 'Example home',
+            url: 'https://example.org/',
+            snippet: 'Home page'
+        }
+    ], { query: 'Carolyn Collins Petersen Universe Today June 2023 linked paper' });
+
+    assert.equal(calls[0].tool, 'paper_metadata_lookup');
+    assert.equal(calls[0].args.doi, '10.3847/2041-8213/acd54b');
+    assert.equal(calls[1].tool, 'pdf_extract_text');
+    assert.equal(calls[1].args.url, 'https://example.org/files/paper.pdf');
+});
+
+test('search follow-up suggestions stay empty for off-target popular results', () => {
+    const calls = buildSuggestedCallsFromSearchResults([
+        {
+            title: 'Emily (2022 film) - Wikipedia',
+            url: 'https://en.wikipedia.org/wiki/Emily_(2022_film)',
+            snippet: 'Emily premiered at the Toronto International Film Festival.'
+        },
+        {
+            title: 'Emily (2022) - IMDb',
+            url: 'https://www.imdb.com/title/tt12374656/',
+            snippet: 'Cast, plot, and reviews for the movie Emily.'
+        }
+    ], { query: '"Emily Midkiff" Fafnir journal June 2014 dragon' });
+
+    assert.deepEqual(calls, []);
+});
+
 test('web_search reranks Chinese game guide results ahead of unrelated popular pages', () => {
     const results = [
         {
@@ -2400,15 +2638,20 @@ test('web_search reranks Chinese game guide results ahead of unrelated popular p
         }
     ];
     const ranked = rankSearchResultsForFollowup(results, '游戏 小光 角色 攻略 site:bilibili.com');
+    const calls = buildSuggestedCallsFromSearchResults(results, {
+        query: '游戏 小光 角色 攻略 site:bilibili.com'
+    });
 
     assert.equal(ranked[0].url, 'https://www.bilibili.com/video/BV1rXBoBoEv1/');
     assert.ok(ranked[0].queryScore >= 30);
     assert.ok(ranked[0].queryMatchedTerms.includes('小光'));
     assert.ok(ranked[0].queryMatchedTerms.includes('攻略'));
     assert.deepEqual(ranked[0].queryMatchedSites, ['bilibili.com']);
+    assert.equal(calls[0].tool, 'open_page');
+    assert.equal(calls[0].args.url, 'https://www.bilibili.com/video/BV1rXBoBoEv1/');
 });
 
-test('web_search returns ambiguous Chinese guide candidates without making the decision for the model', async () => {
+test('web_search extracts short Chinese guide targets and asks before following ambiguous results', async () => {
     assert.deepEqual(extractShortCjkEntityTerms('做一个小光的攻略'), ['小光']);
     assert.equal(buildEffectiveSearchQuery('做一个小光的攻略'), '小光 攻略');
 
@@ -2450,13 +2693,36 @@ test('web_search returns ambiguous Chinese guide candidates without making the d
         assert.equal(result.structuredContent.backend, 'searxng_json');
         assert.equal(result.structuredContent.backendQuery, '小光 攻略');
         assert.deepEqual(requestedQueries, ['小光 攻略']);
-        assert.equal(result.structuredContent.results.length, 3);
-        assert.equal(Object.hasOwn(result.structuredContent, 'clarificationRequired'), false);
-        assert.equal(Object.hasOwn(result.structuredContent, 'searchConfidence'), false);
-        assert.equal(Object.hasOwn(result.structuredContent, 'suggestedNextCalls'), false);
-        assert.equal(Object.hasOwn(result.structuredContent, 'candidateChoices'), false);
+        assert.equal(result.structuredContent.clarificationRequired, true);
+        assert.equal(result.structuredContent.searchConfidence.shouldAskUser, true);
+        assert.equal(result.structuredContent.searchConfidence.level, 'low');
+        assert.equal(result.structuredContent.suggestedNextCalls.length, 0);
+        assert.ok(result.structuredContent.candidateChoices.length >= 2);
+        assert.match(result.structuredContent.searchConfidence.clarificationQuestion, /具体指哪一个|clarif/i);
         assert.doesNotMatch(result.content[0].text, /Retrieval diagnostic|Additional retrieval context/);
     });
+});
+
+test('search confidence stays high when a short nickname has explicit game context', () => {
+    const ranked = rankSearchResultsForFollowup([
+        {
+            title: '【绝区零】叶瞬光角色攻略',
+            url: 'https://www.bilibili.com/video/BV1rXBoBoEv1/',
+            snippet: '小光攻略，技能机制、输出手法、配队配装、驱动盘和音擎。'
+        },
+        {
+            title: '《光遇》小光新手攻略',
+            url: 'https://example.com/sky/xiaoguang-guide',
+            snippet: '光遇小光任务路线、蜡烛和每日玩法攻略。'
+        }
+    ], '绝区零 叶瞬光 小光 攻略');
+    const confidence = assessSearchConfidence(ranked, '绝区零 叶瞬光 小光 攻略');
+    const choices = buildSearchClarificationChoices(ranked, '绝区零 叶瞬光 小光 攻略');
+
+    assert.equal(confidence.clarificationRequired, false);
+    assert.equal(confidence.shouldAskUser, false);
+    assert.equal(confidence.level, 'high');
+    assert.ok(choices.length >= 1);
 });
 
 test('web_search contracts an overstuffed quoted-target query before backend retrieval', () => {
@@ -2476,6 +2742,23 @@ test('web_search contracts an overstuffed quoted-target query before backend ret
         buildEffectiveSearchQuery('"short quoted phrase" source'),
         '"short quoted phrase" source'
     );
+});
+
+test('web_search does not treat a site match alone as relevant evidence', () => {
+    const calls = buildSuggestedCallsFromSearchResults([
+        {
+            title: '哔哩哔哩 (゜-゜)つロ 干杯~-bilibili',
+            url: 'https://www.bilibili.com/',
+            snippet: '国内知名的视频弹幕网站，这里有及时的动漫新番和活跃的 ACG 氛围。'
+        },
+        {
+            title: '《流水》管平湖(全版本)_哔哩哔哩_bilibili',
+            url: 'https://www.bilibili.com/video/BV1GW41157xT/',
+            snippet: '古琴曲集和演奏视频。'
+        }
+    ], { query: '游戏 小光 角色 攻略 site:bilibili.com' });
+
+    assert.deepEqual(calls, []);
 });
 
 test('web_search site-constrained rerank prefers high-signal NGA guide threads', () => {
@@ -2500,10 +2783,15 @@ test('web_search site-constrained rerank prefers high-signal NGA guide threads',
         results,
         '绝区零 叶瞬光 小光 完整攻略 技能 配装 配队 site:nga.cn'
     );
+    const calls = buildSuggestedCallsFromSearchResults(results, {
+        query: '绝区零 叶瞬光 小光 完整攻略 技能 配装 配队 site:nga.cn'
+    });
 
     assert.match(ranked[0].url, /bbs\.nga\.cn/);
     assert.deepEqual(ranked[0].queryMatchedSites, ['nga.cn']);
     assert.ok(ranked[0].queryMatchedTerms.includes('叶瞬光'));
+    assert.equal(calls[0].tool, 'open_page');
+    assert.match(calls[0].args.url, /bbs\.nga\.cn/);
 });
 
 test('web_search reranks official source documents ahead of mirrors and portal noise', () => {
@@ -2608,6 +2896,17 @@ test('search reranking caps lexical saturation so repeated query terms do not er
     assert.ok(ranked[0].sourceConsensusScore > ranked[1].sourceConsensusScore);
 });
 
+test('search follow-up suggestions resolve HTML PDF wrappers with pdf_find_and_extract', () => {
+    const calls = buildSuggestedCallsFromSearchResults([{
+        title: 'Dragons are Tricksy - PDF',
+        url: 'https://journal.example/article/view/164228',
+        snippet: 'Emily Midkiff Fafnir article PDF'
+    }], { query: 'Emily Midkiff Fafnir Dragons are Tricksy' });
+
+    assert.equal(calls[0].tool, 'pdf_find_and_extract');
+    assert.equal(calls[0].args.url, 'https://journal.example/article/view/164228');
+});
+
 test('research ranking prefers an article detail page over issue and archive collections', () => {
     const ranked = rankSearchResultsForFollowup([
         {
@@ -2631,7 +2930,7 @@ test('research ranking prefers an article detail page over issue and archive col
     assert.ok(ranked[0].sourceQualityScore > ranked[1].sourceQualityScore);
 });
 
-test('web_research returns raw search results and fetched page excerpts', async () => {
+test('web_research builds an evidence bundle from search and fetched pages', async () => {
     const requests = [];
     const guideBody = [
         '<h1>莱特 - 绝区零WIKI_BWIKI</h1>',
@@ -2680,17 +2979,24 @@ test('web_research returns raw search results and fetched page excerpts', async 
         assert.equal(result.structuredContent.webSearchCall.action.type, 'search');
         assert.equal(result.structuredContent.webSearchItem.type, 'web_search');
         assert.equal(result.structuredContent.webSearchOutput.type, 'function_call_output');
-        assert.equal(Object.hasOwn(result.structuredContent, 'suggestedNextCalls'), false);
-        assert.equal(Object.hasOwn(result.structuredContent.webSearchOutput, 'suggestedNextCalls'), false);
+        assert.deepEqual(result.structuredContent.suggestedNextCalls[0], {
+            tool: 'open_page',
+            args: { url: `${baseUrl}/guide`, lineno: 1 },
+            reason: 'Open source: 莱特 - 绝区零WIKI_BWIKI'
+        });
+        assert.deepEqual(
+            result.structuredContent.webSearchOutput.suggestedNextCalls,
+            result.structuredContent.suggestedNextCalls
+        );
         assert.equal(result.structuredContent.answerReadiness, undefined);
         assert.equal(result.structuredContent.fetchedPageCount, 1);
-        assert.equal(result.structuredContent.pages.length, 1);
-        assert.equal(result.structuredContent.pages[0].url, `${baseUrl}/guide`);
-        assert.equal(result.structuredContent.pages[0].evidenceQuality, undefined);
-        assert.equal(result.structuredContent.pages[0].reasoningReady, undefined);
-        assert.equal(result.structuredContent.pages[0].isEvidence, undefined);
-        assert.equal(result.structuredContent.pages[0].evidenceGap, undefined);
-        assert.equal(Object.hasOwn(result.structuredContent.pages[0], 'evidenceSnippets'), false);
+        assert.equal(result.structuredContent.evidencePages.length, 1);
+        assert.equal(result.structuredContent.evidencePages[0].url, `${baseUrl}/guide`);
+        assert.equal(result.structuredContent.evidencePages[0].evidenceQuality, undefined);
+        assert.equal(result.structuredContent.evidencePages[0].reasoningReady, undefined);
+        assert.equal(result.structuredContent.evidencePages[0].isEvidence, undefined);
+        assert.equal(result.structuredContent.evidencePages[0].evidenceGap, undefined);
+        assert.ok(result.structuredContent.evidencePages[0].evidenceSnippets.length >= 1);
         assert.equal(result.structuredContent.webSearchOutput.fetch.sources[0].ref_id, 'source_1');
         assert.deepEqual(result.structuredContent.webSearchOutput.fetch.sources[0].open_page, {
             type: 'open_page',
@@ -2700,8 +3006,8 @@ test('web_research returns raw search results and fetched page excerpts', async 
         assert.match(result.structuredContent.webSearchOutput.fetch.sources[0].excerpt, /莱特是一名适合火属性队伍/);
         assert.equal(result.structuredContent.pipelineSteps[0].stage, 'query_plan');
         assert.equal(result.structuredContent.search.searchQueries[0].role, 'original');
-        assert.ok(result.structuredContent.pages[0].htmlRelations.sections.some((section) => section.heading === '配队建议'));
-        assert.match(result.content[0].text, /AILIS web research results/);
+        assert.ok(result.structuredContent.evidencePages[0].htmlRelations.sections.some((section) => section.heading === '配队建议'));
+        assert.match(result.content[0].text, /AILIS web research evidence bundle/);
         assert.match(result.content[0].text, /Open page: open_page/);
         assert.ok(result.content[0].text.indexOf('Highest-ranked fetched sources:') >= 0);
         assert.ok(result.content[0].text.indexOf(`${baseUrl}/guide`) < 2000);
@@ -2709,6 +3015,78 @@ test('web_research returns raw search results and fetched page excerpts', async 
         assert.doesNotMatch(result.content[0].text, /Readiness:|Recovery hint:|Output policy:|Evidence gap:|Retrieval note:/);
         assert.ok(requests.filter((pathname) => pathname === '/search').length >= 1);
         assert.ok(requests.includes('/guide'));
+    });
+});
+
+test('web_research expands query variants and fetches the high-signal result', async () => {
+    const searchQueries = [];
+    const fetchedPaths = [];
+    const guideBody = [
+        '<h1>绝区零莱特攻略</h1>',
+        '<p>莱特攻略包含技能机制、配队、驱动盘、音擎和输出手法。</p>',
+        `<p>${'莱特是击破角色，攻略正文提供配队思路、驱动盘词条、音擎选择和实战循环。'.repeat(90)}</p>`
+    ].join('');
+    await withServer((request, response) => {
+        const url = new URL(request.url || '/', 'http://127.0.0.1');
+        if (url.pathname === '/search') {
+            const query = url.searchParams.get('q') || '';
+            searchQueries.push(query);
+            response.writeHead(200, { 'content-type': 'application/json' });
+            if (/帮我做一个/.test(query)) {
+                response.end(JSON.stringify({
+                    results: [
+                        {
+                            title: '莱特咖啡店活动资讯',
+                            url: `http://${request.headers.host}/noise`,
+                            content: '活动新闻、门店优惠和无关资讯。'
+                        }
+                    ]
+                }));
+                return;
+            }
+            response.end(JSON.stringify({
+                results: [
+                    {
+                        title: '绝区零莱特完整攻略',
+                        url: `http://${request.headers.host}/guide`,
+                        content: '莱特攻略，技能机制、配队、驱动盘、音擎和输出手法。'
+                    }
+                ]
+            }));
+            return;
+        }
+        fetchedPaths.push(url.pathname);
+        if (url.pathname === '/guide') {
+            response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+            response.end(`<html><head><title>绝区零莱特攻略</title></head><body>${guideBody}</body></html>`);
+            return;
+        }
+        if (url.pathname === '/noise') {
+            response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+            response.end('<html><body><p>无关新闻。</p></body></html>');
+            return;
+        }
+        response.writeHead(404);
+        response.end('not found');
+    }, async (baseUrl) => {
+        const result = await webResearch({
+            query: '帮我做一个绝区零 莱特 攻略 配队',
+            provider: 'searxng',
+            fetchProvider: 'builtin',
+            searxngUrl: baseUrl,
+            maxSearchQueries: 2,
+            maxPages: 1,
+            maxCharsPerPage: 12000
+        });
+
+        assert.equal(result.isError, undefined, result.content[0].text);
+        assert.equal(result.structuredContent.answerReadiness, undefined);
+        assert.equal(result.structuredContent.fetchedPageCount, 1);
+        assert.deepEqual(searchQueries, ['帮我做一个绝区零 莱特 攻略 配队', '绝区零 "莱特" 攻略']);
+        assert.deepEqual(fetchedPaths, ['/guide']);
+        assert.equal(result.structuredContent.search.searchAggregation.queryPlan, true);
+        assert.equal(result.structuredContent.search.searchQueries.length, 2);
+        assert.equal(result.structuredContent.evidencePages[0].url, `${baseUrl}/guide`);
     });
 });
 
@@ -2767,6 +3145,180 @@ test('web_research reserves fetch coverage for each explicit model query', () =>
         'https://first-mirror.example/fact',
         'https://second-alternate.example/fact'
     ]);
+});
+
+test('web_research exact entity planning preserves specific target terms', async () => {
+    const searchQueries = [];
+    const guideBody = [
+        '<h1>叶瞬光小光完整攻略</h1>',
+        '<p>叶瞬光也被玩家称为小光，攻略包含技能机制、驱动盘、音擎、配队和输出手法。</p>',
+        `<p>${'叶瞬光的队伍需要围绕核心技能窗口规划输出，驱动盘选择和音擎搭配会影响循环稳定性。'.repeat(90)}</p>`
+    ].join('');
+    await withServer((request, response) => {
+        const url = new URL(request.url || '/', 'http://127.0.0.1');
+        if (url.pathname === '/search') {
+            const query = url.searchParams.get('q') || '';
+            searchQueries.push(query);
+            response.writeHead(200, { 'content-type': 'application/json' });
+            if (query.includes('"叶瞬光"') && query.includes('"小光"')) {
+                response.end(JSON.stringify({
+                    results: [
+                        {
+                            title: '叶瞬光小光完整攻略',
+                            url: `http://${request.headers.host}/xiaoguang-guide`,
+                            content: '叶瞬光也叫小光，技能机制、驱动盘、音擎、配队和输出手法攻略。'
+                        }
+                    ]
+                }));
+                return;
+            }
+            response.end(JSON.stringify({
+                results: [
+                    {
+                        title: '《绝区零》官网',
+                        url: `http://${request.headers.host}/official-home`,
+                        content: '绝区零官方首页，新闻、版本动态和活动公告。'
+                    }
+                ]
+            }));
+            return;
+        }
+        if (url.pathname === '/xiaoguang-guide') {
+            response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+            response.end(`<html><head><title>叶瞬光小光完整攻略</title></head><body>${guideBody}</body></html>`);
+            return;
+        }
+        if (url.pathname === '/official-home') {
+            response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+            response.end('<html><body><h1>绝区零官网</h1><p>官方新闻和活动。</p></body></html>');
+            return;
+        }
+        response.writeHead(404);
+        response.end('not found');
+    }, async (baseUrl) => {
+        const result = await webResearch({
+            query: '绝区零 叶瞬光 小光 攻略',
+            provider: 'searxng',
+            fetchProvider: 'builtin',
+            searxngUrl: baseUrl,
+            maxSearchQueries: 3,
+            maxPages: 1,
+            maxCharsPerPage: 12000
+        });
+
+        assert.equal(result.isError, undefined, result.content[0].text);
+        assert.equal(result.structuredContent.answerReadiness, undefined);
+        assert.equal(result.structuredContent.fetchedPageCount, 1);
+        assert.ok(searchQueries.includes('绝区零 "叶瞬光" "小光" 攻略'));
+        assert.equal(result.structuredContent.evidencePages[0].url, `${baseUrl}/xiaoguang-guide`);
+        assert.equal(result.structuredContent.evidencePages[0].evidenceQuality, undefined);
+    });
+});
+
+test('web_research exact-answer planning preserves classification and answer-bearing phrases', async () => {
+    const searchQueries = [];
+    await withServer((request, response) => {
+        const url = new URL(request.url || '/', 'http://127.0.0.1');
+        if (url.pathname === '/search') {
+            const query = url.searchParams.get('q') || '';
+            searchQueries.push(query);
+            response.writeHead(200, { 'content-type': 'application/json' });
+            if (query.includes('DDC 633') && query.includes('"unknown language"') && query.includes('"unique flag"')) {
+                response.end(JSON.stringify({
+                    results: [{
+                        title: 'DDC 633 BASE unknown language flag unique country Guatemala answer',
+                        url: `http://${request.headers.host}/answer`,
+                        content: 'Bielefeld BASE DDC 633 2020 unknown language unique flag country Guatemala.'
+                    }]
+                }));
+                return;
+            }
+            response.end(JSON.stringify({
+                results: [{
+                    title: 'Bielefeld University Library BASE',
+                    url: `http://${request.headers.host}/broad`,
+                    content: 'BASE search portal and library discovery page.'
+                }]
+            }));
+            return;
+        }
+        if (url.pathname === '/answer') {
+            response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+            response.end('<html><body><h1>Answer</h1><p>Under DDC 633 on Bielefeld University Library BASE as of 2020, the unknown language article with the unique flag was from country Guatemala.</p></body></html>');
+            return;
+        }
+        response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+        response.end('<html><body><h1>BASE</h1><p>General BASE portal page.</p></body></html>');
+    }, async (baseUrl) => {
+        const result = await webResearch({
+            query: "Under DDC 633 on Bielefeld University Library's BASE, as of 2020, from what country was the unknown language article with a flag unique from the others?",
+            provider: 'searxng',
+            fetchProvider: 'builtin',
+            searxngUrl: baseUrl,
+            maxSearchQueries: 3,
+            maxPages: 1,
+            maxCharsPerPage: 12000
+        });
+
+        assert.equal(result.isError, undefined, result.content[0].text);
+        assert.ok(searchQueries.some((query) => query.includes('DDC 633') && query.includes('"unknown language"') && query.includes('"unique flag"')));
+        const exactVariant = result.structuredContent.search.searchQueries.find((item) => item.role === 'exact_answer_terms');
+        assert.ok(exactVariant);
+        assert.match(exactVariant.backendQuery, /DDC 633/);
+        assert.doesNotMatch(exactVariant.backendQuery, /^"?under bielefeld university/i);
+        assert.equal(result.structuredContent.answerCandidates[0].answer, 'Guatemala');
+    });
+});
+
+test('web_research does not mark broad source pages ready when target terms are missing', async () => {
+    const requests = [];
+    const broadBody = [
+        '<h1>绝区零 WIKI 首页</h1>',
+        '<p>这里包含绝区零新闻、角色索引、版本活动、基础玩法和社区入口。</p>',
+        `<p>${'绝区零是一款动作游戏，这个页面介绍游戏背景、官网入口、基础系统和版本动态。'.repeat(120)}</p>`
+    ].join('');
+    await withServer((request, response) => {
+        const url = new URL(request.url || '/', 'http://127.0.0.1');
+        requests.push(url.pathname);
+        if (url.pathname === '/search') {
+            response.writeHead(200, { 'content-type': 'application/json' });
+            response.end(JSON.stringify({
+                results: [
+                    {
+                        title: '绝区零 WIKI 首页',
+                        url: `http://${request.headers.host}/broad-wiki`,
+                        content: '绝区零新闻、角色索引、版本活动和基础系统。'
+                    }
+                ]
+            }));
+            return;
+        }
+        if (url.pathname === '/broad-wiki') {
+            response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+            response.end(`<html><head><title>绝区零 WIKI 首页</title></head><body>${broadBody}</body></html>`);
+            return;
+        }
+        response.writeHead(404);
+        response.end('not found');
+    }, async (baseUrl) => {
+        const result = await webResearch({
+            query: '绝区零 叶瞬光 小光 攻略',
+            provider: 'searxng',
+            fetchProvider: 'builtin',
+            searxngUrl: baseUrl,
+            maxSearchQueries: 2,
+            maxPages: 1,
+            maxCharsPerPage: 12000
+        });
+
+        assert.equal(result.isError, undefined, result.content[0].text);
+        assert.equal(result.structuredContent.answerReadiness, undefined);
+        assert.equal(result.structuredContent.fetchedPageCount, 0);
+        assert.deepEqual(result.structuredContent.evidencePages, []);
+        assert.equal(result.structuredContent.search.searchConfidence.level, 'low');
+        assert.ok(result.structuredContent.search.searchConfidence.reasons.includes('top_result_missing_specific_target_terms'));
+        assert.equal(requests.includes('/broad-wiki'), false);
+    });
 });
 
 test('web_research diversifies fetch candidates across hosts before retrying one host', async () => {
@@ -2830,13 +3382,120 @@ test('web_research diversifies fetch candidates across hosts before retrying one
             assert.equal(result.isError, undefined, result.content[0].text);
             assert.equal(result.structuredContent.answerReadiness, undefined);
             assert.equal(result.structuredContent.fetchedPageCount, 2);
-            assert.equal(result.structuredContent.pages.some((page) => page.url === `http://localhost:${guidePort}/guide`), true);
-            assert.equal(result.structuredContent.pages.filter((page) => page.url.includes(`127.0.0.1:${shellPort}`)).length, 1);
+            assert.equal(result.structuredContent.evidencePages.some((page) => page.url === `http://localhost:${guidePort}/guide`), true);
+            assert.equal(result.structuredContent.evidencePages.filter((page) => page.url.includes(`127.0.0.1:${shellPort}`)).length, 1);
         });
     } finally {
         await new Promise((resolve) => shellServer.close(resolve));
         await new Promise((resolve) => guideServer.close(resolve));
     }
+});
+
+test('web_research reranks fetched pages by evidence score instead of search order', async () => {
+    const guideBody = [
+        '<h1>星见雅攻略</h1>',
+        '<p>星见雅攻略包含技能加点、驱动盘、音擎、配队和输出循环。</p>',
+        '<h2>驱动盘</h2>',
+        '<p>推荐优先强化核心输出词条，并根据队伍选择暴击、异常或攻击属性。</p>',
+        `<p>${'星见雅配队需要兼顾站场输出、增益覆盖和异常积蓄，攻略给出不同队伍的打法。'.repeat(100)}</p>`
+    ].join('');
+    await withServer((request, response) => {
+        const url = new URL(request.url || '/', 'http://127.0.0.1');
+        if (url.pathname === '/search') {
+            response.writeHead(200, { 'content-type': 'application/json' });
+            response.end(JSON.stringify({
+                results: [
+                    {
+                        title: '星见雅攻略 - 加载中',
+                        url: `http://${request.headers.host}/shell`,
+                        content: '星见雅攻略、驱动盘、配队。'
+                    },
+                    {
+                        title: '星见雅完整攻略',
+                        url: `http://${request.headers.host}/guide`,
+                        content: '星见雅攻略包含技能加点、驱动盘、音擎、配队和输出循环。'
+                    }
+                ]
+            }));
+            return;
+        }
+        if (url.pathname === '/shell') {
+            response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+            response.end('<html><head><title>星见雅攻略</title></head><body><div id="app">Loading...</div><script src="/app.js"></script></body></html>');
+            return;
+        }
+        if (url.pathname === '/guide') {
+            response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+            response.end(`<html><head><title>星见雅完整攻略</title></head><body>${guideBody}</body></html>`);
+            return;
+        }
+        response.writeHead(404);
+        response.end('not found');
+    }, async (baseUrl) => {
+        const result = await webResearch({
+            query: '绝区零 星见雅 攻略 驱动盘 配队',
+            provider: 'searxng',
+            fetchProvider: 'builtin',
+            searxngUrl: baseUrl,
+            maxPages: 2,
+            maxCharsPerPage: 12000
+        });
+
+        assert.equal(result.isError, undefined, result.content[0].text);
+        assert.equal(result.structuredContent.answerReadiness, undefined);
+        assert.equal(result.structuredContent.fetchedPageCount, 2);
+        assert.equal(result.structuredContent.evidencePages.length, 2);
+        assert.equal(result.structuredContent.evidencePages[0].url, `${baseUrl}/guide`);
+        assert.equal(result.structuredContent.evidencePages[0].evidenceQuality, undefined);
+        assert.equal(result.structuredContent.evidencePages[1].url, `${baseUrl}/shell`);
+        assert.equal(result.structuredContent.evidencePages[0].evidenceScore, undefined);
+    });
+});
+
+test('web_research stops before fetching pages when search target is ambiguous', async () => {
+    const requests = [];
+    await withServer((request, response) => {
+        const url = new URL(request.url || '/', 'http://127.0.0.1');
+        requests.push(url.pathname);
+        if (url.pathname === '/search') {
+            response.writeHead(200, { 'content-type': 'application/json' });
+            response.end(JSON.stringify({
+                results: [
+                    {
+                        title: '【绝区零】叶瞬光角色攻略',
+                        url: `http://${request.headers.host}/zzz-xiaoguang`,
+                        content: '小光攻略，技能机制、输出手法、配队配装、驱动盘和音擎。'
+                    },
+                    {
+                        title: '《光遇》小光新手攻略',
+                        url: `http://${request.headers.host}/sky-xiaoguang`,
+                        content: '光遇小光任务路线、蜡烛和每日玩法攻略。'
+                    }
+                ]
+            }));
+            return;
+        }
+        response.writeHead(500);
+        response.end('web_research should not fetch ambiguous candidates');
+    }, async (baseUrl) => {
+        const result = await webResearch({
+            query: '做一个小光的攻略',
+            provider: 'searxng',
+            fetchProvider: 'builtin',
+            searxngUrl: baseUrl,
+            maxPages: 2
+        });
+
+        assert.equal(result.isError, undefined, result.content[0].text);
+        assert.equal(result.structuredContent.status, 'clarification_required');
+        assert.equal(result.structuredContent.answerReadiness, undefined);
+        assert.equal(result.structuredContent.clarificationRequired, undefined);
+        assert.equal(result.structuredContent.search.candidateChoices.length, 2);
+        assert.equal(result.structuredContent.evidencePages.length, 0);
+        assert.equal(result.structuredContent.search.clarificationRequired, undefined);
+        assert.ok(requests.length >= 1);
+        assert.ok(requests.every((pathname) => pathname === '/search'));
+    });
 });
 
 test('inferPaperMetadataArgsFromScholarlyQuery extracts author year venue and topic clues', () => {
@@ -2855,6 +3514,65 @@ test('inferPaperMetadataArgsFromScholarlyQuery keeps single-author surname clues
     assert.equal(args.year, 2010);
     assert.match(args.topic, /Vietnam/i);
     assert.match(args.topic, /Lepidoptera/i);
+});
+
+test('web_research returns candidate evidence for video metadata pages without a hard audit gate', async () => {
+    const videoBody = [
+        '<html><head><title>【绝区零】叶瞬光 超详细养成攻略教学_攻略</title></head><body>',
+        '<nav>首页 番剧 直播 游戏中心 会员购 漫画 赛事 投稿</nav>',
+        '<h1>【绝区零】叶瞬光 超详细养成攻略教学</h1>',
+        '<p>31.2万 654 2025-12-30 09:37:12 未经作者授权，禁止转载 正在缓冲...</p>',
+        '<p>叶瞬光 小光 攻略 绝区零 推荐视频 相关推荐 搜索更多视频。</p>',
+        `<section>${'相关推荐 视频播放 弹幕 投稿 收藏 转发 评论。'.repeat(80)}</section>`,
+        '</body></html>'
+    ].join('');
+    await withServer((request, response) => {
+        const url = new URL(request.url || '/', 'http://127.0.0.1');
+        if (url.pathname === '/search') {
+            response.writeHead(200, { 'content-type': 'application/json' });
+            response.end(JSON.stringify({
+                results: [
+                    {
+                        title: '【绝区零】叶瞬光 超详细养成攻略教学_攻略',
+                        url: `http://${request.headers.host}/video/BV1GevbBxEs8/`,
+                        content: '叶瞬光小光攻略视频，技能、驱动盘、音擎、配队。'
+                    }
+                ]
+            }));
+            return;
+        }
+        if (url.pathname === '/video/BV1GevbBxEs8/') {
+            response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+            response.end(videoBody);
+            return;
+        }
+        response.writeHead(404);
+        response.end('not found');
+    }, async (baseUrl) => {
+        const result = await webResearch({
+            query: '绝区零 叶瞬光 小光 攻略 技能 配队 音擎 驱动盘',
+            provider: 'searxng',
+            fetchProvider: 'builtin',
+            searxngUrl: baseUrl,
+            maxPages: 1,
+            maxCharsPerPage: 12000
+        });
+
+        assert.equal(result.isError, undefined, result.content[0].text);
+        assert.equal(result.structuredContent.answerReadiness, undefined);
+        assert.equal(result.structuredContent.requiresEvidenceAudit, undefined);
+        assert.equal(result.structuredContent.evidenceDecision, undefined);
+        assert.equal(result.structuredContent.evidencePages.length, 1);
+        assert.equal(result.structuredContent.evidencePages[0].pageType, 'video_page');
+        assert.equal(result.structuredContent.evidencePages[0].evidenceQuality, undefined);
+        assert.equal(result.structuredContent.evidencePages[0].reasoningReady, undefined);
+        assert.equal(result.structuredContent.evidencePages[0].recoveryHint, undefined);
+        assert.equal(result.structuredContent.evidencePages[0].evidenceGap, undefined);
+        assert.match(result.content[0].text, /Codex object: web_search_call action=search/);
+        assert.match(result.content[0].text, /Bundle contents: ranked search results, fetched page excerpts/);
+        assert.doesNotMatch(result.content[0].text, /Readiness:|Recovery hint:|Output policy:|Evidence decision:|Evidence gap:|Retrieval note:/);
+        assert.match(result.content[0].text, /Candidate snippets from search results/);
+    });
 });
 
 test('web_fetch does not classify technical documentation as a video page from generic terms', async () => {
@@ -3146,6 +3864,60 @@ test('web_fetch falls back to current HTML extraction when Crawl4AI is unavailab
     });
 });
 
+test('web_fetch keeps linked DOI and PDF follow-up actions structured without model-visible diagnostics', async () => {
+    await withServer((request, response) => {
+        response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+        response.end([
+            '<html><body>',
+            '<a href="/about">About</a>',
+            '<a href="https://doi.org/10.3847/2041-8213/acd54b">Linked paper</a>',
+            '<a href="/files/paper.pdf">Download PDF</a>',
+            '</body></html>'
+        ].join(''));
+    }, async (baseUrl) => {
+        const result = await webFetch({ url: `${baseUrl}/article`, query: 'linked paper' });
+
+        assert.equal(result.isError, undefined, result.content[0].text);
+        assert.equal(result.structuredContent.suggestedNextCalls[0].tool, 'paper_metadata_lookup');
+        assert.equal(result.structuredContent.suggestedNextCalls[0].args.doi, '10.3847/2041-8213/acd54b');
+        assert.equal(result.structuredContent.suggestedNextCalls[1].tool, 'pdf_extract_text');
+        assert.equal(result.structuredContent.observedRelevantLinks[0].kind, 'doi');
+        assert.doesNotMatch(result.content[0].text, /Available follow-up calls derived from retrieved links\/results/);
+        assert.doesNotMatch(result.content[0].text, /Retrieval diagnostic|Additional retrieval context/);
+        assert.match(result.content[0].text, /Candidate links observed by the fetcher/);
+    });
+});
+
+test('web_fetch preserves standard scholarly PDF resources when their short labels do not match the query', async () => {
+    await withServer((request, response) => {
+        response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+        response.end([
+            '<html><head>',
+            '<title>Container measurements in marine transport</title>',
+            '<meta name="citation_pdf_url" content="/article/download/733/684">',
+            '<link rel="alternate" type="application/pdf" href="/article/download/733/684?mirror=1">',
+            '</head><body>',
+            '<p>The study reports measurements for an irregular marine specimen and its transport container.</p>',
+            '<a class="obj_galley_link pdf" href="/article/view/733/684">PDF</a>',
+            '</body></html>'
+        ].join(''));
+    }, async (baseUrl) => {
+        const result = await webFetch({
+            url: `${baseUrl}/article/view/733`,
+            query: 'calculated bag volume irregular marine specimen'
+        });
+
+        assert.equal(result.isError, undefined, result.content[0].text);
+        const pdfCalls = result.structuredContent.suggestedNextCalls.filter((call) => call.tool === 'pdf_extract_text');
+        assert.ok(pdfCalls.some((call) => call.args.url === `${baseUrl}/article/download/733/684`));
+        assert.ok(pdfCalls.some((call) => call.args.url === `${baseUrl}/article/download/733/684?mirror=1`));
+        assert.ok(result.structuredContent.observedRelevantLinks.some((link) => (
+            link.kind === 'pdf' && link.url === `${baseUrl}/article/download/733/684`
+        )));
+        assert.match(result.content[0].text, /Candidate links observed by the fetcher/);
+    });
+});
+
 test('web_fetch extracts HTML relationship map for model reasoning', async () => {
     await withServer((request, response) => {
         response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
@@ -3223,8 +3995,8 @@ test('web_fetch projects complete query-relevant columns from wide multi-row HTM
         assert.match(result.content[0].text, /CUB \| 1/);
         assert.match(result.content[0].text, /PAN \| 1/);
         assert.match(result.content[0].text, /rows=3; rows_complete=true/);
-        assert.equal(Object.hasOwn(result.structuredContent, 'structuredTableCoversTask'), false);
-        assert.equal(Object.hasOwn(result.structuredContent, 'reasoningReady'), false);
+        assert.equal(result.structuredContent.structuredTableCoversTask, true);
+        assert.equal(result.structuredContent.reasoningReady, true);
         assert.equal(result.structuredContent.structuredTables[0].rowCount, 3);
         assert.deepEqual(
             result.structuredContent.structuredTables[0].projection.columns,
@@ -3285,7 +4057,7 @@ test('web_fetch preserves multi-row headers when rendered Markdown contains a wi
         assert.match(result.content[0].text, /columns=Country \| Total \/ all/);
         assert.match(result.content[0].text, /CUB \| 1/);
         assert.match(result.content[0].text, /PAN \| 1/);
-        assert.equal(Object.hasOwn(result.structuredContent, 'structuredTableCoversTask'), false);
+        assert.equal(result.structuredContent.structuredTableCoversTask, true);
         assert.equal(result.structuredContent.structuredTables[0].projection.rowsComplete, true);
     });
 });
@@ -3332,7 +4104,31 @@ test('extractWikipediaPageTitle handles canonical and language-variant article p
     assert.equal(extractWikipediaPageTitle('https://zh.wikipedia.org/w/index.php?title=%E6%9C%88%E7%90%83'), '');
 });
 
-test('web_fetch reports anti-bot page status without an evidence verdict', async () => {
+test('web_fetch does not suggest unrelated PDFs when query terms are absent', async () => {
+    await withServer((request, response) => {
+        response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+        response.end([
+            '<html><body>',
+            '<h1>Current issue</h1>',
+            '<a href="/articles/current.pdf">PDF</a>',
+            '<a href="/issue/archive/2">Next</a>',
+            '<p>Mass surveillance and monomyth essays.</p>',
+            '</body></html>'
+        ].join(''));
+    }, async (baseUrl) => {
+        const result = await webFetch({
+            url: `${baseUrl}/issue/archive`,
+            query: 'Emily Midkiff June 2014 dragon'
+        });
+
+        assert.equal(result.isError, undefined, result.content[0].text);
+        assert.equal(result.structuredContent.suggestedNextCalls[0].tool, 'open_page');
+        assert.equal(result.structuredContent.suggestedNextCalls[0].args.url, `${baseUrl}/issue/archive/2`);
+        assert.ok(!result.structuredContent.suggestedNextCalls.some((call) => call.tool === 'pdf_extract_text'));
+    });
+});
+
+test('web_fetch marks anti-bot challenge pages as low-value evidence', async () => {
     await withServer((request, response) => {
         response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
         response.end('<html><body><h1>Access denied</h1><p>Protected by Radware Bot Manager. Verify you are human.</p></body></html>');
@@ -3341,12 +4137,12 @@ test('web_fetch reports anti-bot page status without an evidence verdict', async
 
         assert.equal(result.isError, undefined, result.content[0].text);
         assert.equal(result.structuredContent.pageStatus, 'access_challenge');
-        assert.equal(Object.hasOwn(result.structuredContent, 'evidenceGap'), false);
-        assert.equal(Object.hasOwn(result.structuredContent, 'recoveryHint'), false);
+        assert.match(result.structuredContent.evidenceGap, /anti-bot challenge/i);
+        assert.match(result.structuredContent.recoveryHint, /Do not keep refetching/i);
     });
 });
 
-test('web_fetch identifies JavaScript loading shells without an evidence verdict', async () => {
+test('web_fetch classifies JavaScript loading shells as non-evidence', async () => {
     await withServer((request, response) => {
         response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
         response.end('<html><body><div id="root">米游社 Loading...</div></body></html>');
@@ -3354,9 +4150,11 @@ test('web_fetch identifies JavaScript loading shells without an evidence verdict
         const result = await webFetch({ url: `${baseUrl}/zzz/article/59714036` });
 
         assert.equal(result.isError, undefined, result.content[0].text);
-        assert.equal(result.structuredContent.pageType, 'js_shell');
-        assert.equal(Object.hasOwn(result.structuredContent, 'evidenceQuality'), false);
-        assert.equal(Object.hasOwn(result.structuredContent, 'isEvidence'), false);
+        assert.equal(result.structuredContent.evidenceQuality, 'js_shell');
+        assert.equal(result.structuredContent.isEvidence, false);
+        assert.equal(result.structuredContent.observationContract.reasoning_ready, false);
+        assert.match(result.structuredContent.evidenceGap, /JavaScript loading shell/i);
+        assert.match(result.structuredContent.recoveryHint, /Do not refetch/i);
     });
 });
 
@@ -3402,7 +4200,7 @@ test('web_fetch retries rendered Crawl4AI-style extraction after static JavaScri
         assert.equal(result.isError, undefined, result.content[0].text);
         assert.equal(crawlCalls, 2);
         assert.equal(result.structuredContent.fetchBackend, 'crawl4ai');
-        assert.equal(Object.hasOwn(result.structuredContent, 'evidenceQuality'), false);
+        assert.equal(result.structuredContent.evidenceQuality, 'sufficient_evidence');
         assert.equal(result.structuredContent.renderedFallbackUsed, true);
         assert.equal(result.structuredContent.renderedFallbackTrigger, 'js_shell');
         assert.equal(result.structuredContent.crawl4aiAttempt.ok, false);
@@ -3423,7 +4221,30 @@ test('web_fetch repairs common UTF-8 mojibake before evidence classification', a
         assert.equal(result.isError, undefined, result.content[0].text);
         assert.match(result.content[0].text, /绝区零莱特攻略/);
         assert.equal(result.structuredContent.encodingRepair, 'latin1_to_utf8');
-        assert.equal(Object.hasOwn(result.structuredContent, 'evidenceQuality'), false);
+        assert.notEqual(result.structuredContent.evidenceQuality, 'encoding_failure');
+    });
+});
+
+test('web_fetch marks long relevant HTML text as reasoning-ready evidence', async () => {
+    const guideBody = [
+        '<h1>莱特 - 绝区零WIKI_BWIKI</h1>',
+        '<p>莱特攻略包含技能加点、驱动盘、音擎、配队和养成材料。</p>',
+        `<p>${'莱特是一名适合火属性队伍的角色，攻略正文提供技能说明和配队建议。'.repeat(80)}</p>`,
+        '<a href="/zzz/other">其他角色</a>'
+    ].join('');
+    await withServer((request, response) => {
+        response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+        response.end(`<html><body>${guideBody}</body></html>`);
+    }, async (baseUrl) => {
+        const result = await webFetch({ url: `${baseUrl}/zzz/lighter`, query: '绝区零 莱特 攻略 配队 驱动盘' });
+
+        assert.equal(result.isError, undefined, result.content[0].text);
+        assert.equal(result.structuredContent.evidenceQuality, 'sufficient_evidence');
+        assert.equal(result.structuredContent.isEvidence, true);
+        assert.equal(result.structuredContent.complete, true);
+        assert.equal(result.structuredContent.reasoningReady, true);
+        assert.equal(result.structuredContent.observationContract.reasoning_ready, true);
+        assert.equal(result.structuredContent.evidenceGap, '');
     });
 });
 
@@ -3449,7 +4270,8 @@ test('web_fetch returns Codex-style source viewport with line navigation', async
         assert.match(result.content[0].text, /Source viewport:/);
         assert.match(result.content[0].text, /Total lines: 70/);
         assert.match(result.content[0].text, /L31: ### Studio albums/);
-        assert.match(result.content[0].text, /focused source viewport/);
+        assert.match(result.content[0].text, /candidate-set boundary/);
+        assert.match(result.content[0].text, /remaining relevant lines or sections/);
         const deprecatedPreviewMarker = new RegExp(['output', 'Complete=false'].join(''));
         assert.doesNotMatch(result.content[0].text, deprecatedPreviewMarker);
         assert.equal(result.structuredContent.modelVisibleMode, 'source_viewport');
@@ -3588,7 +4410,7 @@ test('open_page, find_in_page, and continue_page share one source viewport chain
         assert.equal(opened.isError, undefined, opened.content[0].text);
         assert.equal(opened.structuredContent.sourceWindow.action.tool, 'open_page');
         assert.equal(opened.structuredContent.source.has_more_after, true);
-        assert.equal(Object.hasOwn(opened.structuredContent, 'suggestedNextCalls'), false);
+        assert.equal(opened.structuredContent.suggestedNextCalls[0].tool, 'continue_page');
 
         const continued = await continuePage({ url, lineno: 23, maxLines: 5, provider: 'builtin' });
         assert.match(continued.content[0].text, /Actual Enrollment 90/);
@@ -3806,7 +4628,7 @@ test('pdf_find_and_extract follows OJS article search results before extracting 
     });
 });
 
-test('pdf_find_and_extract returns focused quoted source text', async () => {
+test('pdf_find_and_extract promotes quoted answer candidates near rare evidence terms', async () => {
     const pdfText = [
         'Title: "Dragons are Tricksy": The Uncanny Dragons of Children Literature.',
         'Earlier dragon lore describes two guardians and many dragon conflicts without the target evidence.',
@@ -3834,9 +4656,10 @@ test('pdf_find_and_extract returns focused quoted source text', async () => {
         });
 
         assert.equal(result.isError, undefined, result.content[0].text);
-        assert.match(result.content[0].text, /fluffy/i);
-        assert.match(result.content[0].text, /distaste/i);
-        assert.equal(Object.hasOwn(result.structuredContent, 'answerCandidates'), false);
+        assert.equal(result.structuredContent.answerCandidates[0].answer, 'fluffy');
+        assert.match(result.content[0].text, /^PDF answer candidates:/);
+        assert.ok(result.content[0].text.indexOf('fluffy') < result.content[0].text.indexOf('Dragons are Tricksy'));
+        assert.match(result.structuredContent.evidenceSnippets, /distaste/i);
     });
 });
 
@@ -3886,9 +4709,9 @@ test('pdf_find_and_extract falls back to full-text HTML when discovered PDFs are
         assert.equal(result.isError, undefined, result.content[0].text);
         assert.equal(result.structuredContent.htmlFallback, true);
         assert.equal(result.structuredContent.htmlUrl, `${baseUrl}/articles/dragons-are-tricksy`);
-        assert.match(result.content[0].text, /fluffy/i);
-        assert.match(result.content[0].text, /distaste/i);
-        assert.equal(Object.hasOwn(result.structuredContent, 'answerCandidates'), false);
+        assert.equal(result.structuredContent.answerCandidates[0].answer, 'fluffy');
+        assert.match(result.content[0].text, /^HTML answer candidates:/);
+        assert.match(result.structuredContent.evidenceSnippets, /distaste/i);
     });
 });
 
@@ -3917,8 +4740,8 @@ test('pdf_find_and_extract searches beyond the returned text window for award id
         });
 
         assert.equal(result.isError, undefined, result.content[0].text);
+        assert.equal(result.structuredContent.answerCandidates[0].answer, '80GSFC21M0002');
         assert.match(result.content[0].text, /80GSFC21M0002/);
-        assert.equal(Object.hasOwn(result.structuredContent, 'answerCandidates'), false);
         assert.equal(result.structuredContent.extractionMaxChars >= 80000, true);
     });
 });
@@ -3935,7 +4758,7 @@ test('web_extract_links rejects non-HTML content', async () => {
     });
 });
 
-test('web_extract_links ranks useful links without prescribing follow-up calls', async () => {
+test('web_extract_links ranks research links ahead of navigation noise and suggests follow-up calls', async () => {
     await withServer((request, response) => {
         response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
         response.end([
@@ -3952,7 +4775,8 @@ test('web_extract_links ranks useful links without prescribing follow-up calls',
         assert.equal(result.isError, undefined, result.content[0].text);
         assert.equal(result.details.links[0].url, 'https://doi.org/10.3847/2041-8213/acd54b');
         assert.equal(result.details.links[1].url, `${baseUrl}/files/paper.pdf`);
-        assert.equal(Object.hasOwn(result.structuredContent, 'suggestedNextCalls'), false);
+        assert.equal(result.structuredContent.suggestedNextCalls[0].tool, 'paper_metadata_lookup');
+        assert.equal(result.structuredContent.suggestedNextCalls[1].tool, 'pdf_extract_text');
         assert.ok(rankLinksForResearch(result.details.links, `${baseUrl}/article`)[0].score >= rankLinksForResearch(result.details.links, `${baseUrl}/article`)[1].score);
     });
 });
@@ -4008,7 +4832,9 @@ test('web_extract_links preserves duplicate OJS issue titles and archive paginat
         const issueLink = result.details.links.find((link) => link.url === `${baseUrl}/issue/view/12461`);
         assert.equal(issueLink.text, 'Vol. 1 No. 2/2014 (2014)');
         assert.ok(result.details.links.some((link) => link.url === `${baseUrl}/issue/archive/2` && link.text === 'Next'));
-        assert.equal(Object.hasOwn(result.structuredContent, 'suggestedNextCalls'), false);
+        assert.ok(result.structuredContent.suggestedNextCalls.some((call) => (
+            call.tool === 'open_page' && call.args?.url === `${baseUrl}/issue/archive/2`
+        )));
         assert.match(result.content[0].text, /Vol\. 1 No\. 2\/2014/);
     });
 });
@@ -4038,6 +4864,7 @@ test('web_extract_links uses aria-labelled article titles for OJS PDF links', as
         const pdfLink = result.details.links.find((link) => link.url === `${baseUrl}/article/view/164228/106850`);
         assert.match(pdfLink.text, /Dragons are Tricksy/);
         assert.match(pdfLink.text, /PDF/);
-        assert.equal(Object.hasOwn(result.structuredContent, 'suggestedNextCalls'), false);
+        assert.equal(result.structuredContent.suggestedNextCalls[0].tool, 'pdf_extract_text');
+        assert.equal(result.structuredContent.suggestedNextCalls[0].args.url, `${baseUrl}/article/view/164228/106850`);
     });
 });

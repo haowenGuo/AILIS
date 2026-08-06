@@ -128,6 +128,8 @@ function itemSummaryForPrompt(item = {}, maxChars = 360) {
         ok: item.ok,
         result_status: item.result_status || null,
         error_type: item.error_type || item.errorType || null,
+        evidence_gap: item.evidence_gap || item.evidenceGap || null,
+        artifact_evidence: item.artifact_evidence || item.artifactEvidence || null,
         preview: item.preview ? summarizeValue(item.preview, maxChars) : undefined,
         compacted: item.compacted === true
     };
@@ -240,6 +242,46 @@ function previewBudgetForToolResult({ tool = '', response = {}, result = {}, pre
     return DEFAULT_PREVIEW_CHARS;
 }
 
+function getArtifactEvidenceSummary(response = {}) {
+    const details = getResponseDetails(response);
+    const evidence = details.evidence && typeof details.evidence === 'object' ? details.evidence : {};
+    const coverage = details.coverage && typeof details.coverage === 'object'
+        ? details.coverage
+        : (evidence.coverage && typeof evidence.coverage === 'object' ? evidence.coverage : null);
+    const artifactId = normalizeText(details.artifactId || evidence.artifactId);
+    if (!artifactId && !coverage && !evidence.evidenceId) {
+        return null;
+    }
+    return {
+        artifactId,
+        evidenceId: normalizeText(details.pinnedEvidenceId || evidence.evidenceId),
+        action: normalizeText(details.action || evidence.action),
+        sheet: normalizeText(details.sheet || evidence.sheet || coverage?.sheet),
+        range: normalizeText(details.range || evidence.range || coverage?.range),
+        complete: details.complete === true || evidence.complete === true,
+        truncated: details.truncated === true || evidence.truncated === true,
+        reasoningReady: details.reasoningReady === true || evidence.reasoningReady === true,
+        coveredByEvidence: details.coveredByEvidence && typeof details.coveredByEvidence === 'object'
+            ? {
+                evidenceId: details.coveredByEvidence.evidenceId,
+                range: details.coveredByEvidence.range,
+                sheet: details.coveredByEvidence.sheet,
+                complete: details.coveredByEvidence.complete,
+                truncated: details.coveredByEvidence.truncated,
+                reasoningReady: details.coveredByEvidence.reasoningReady
+            }
+            : null,
+        coverage: coverage ? {
+            kind: coverage.kind,
+            queryAction: coverage.queryAction,
+            sheet: coverage.sheet,
+            range: coverage.range,
+            complete: coverage.complete,
+            truncated: coverage.truncated
+        } : null
+    };
+}
+
 function getCommandProgram(command = '') {
     const text = normalizeText(command);
     if (!text) {
@@ -283,6 +325,101 @@ function classifyToolFailureObservation({ tool = '', args = {}, response = {}, p
     return null;
 }
 
+function classifyEvidenceGapObservation({ tool = '', args = {}, response = {}, preview = '' } = {}) {
+    if (response?.ok !== true) {
+        return null;
+    }
+    const toolId = normalizeText(tool);
+    const action = normalizeText(args.action || args.operation || args.intent).toLowerCase();
+    const details = getResponseDetails(response);
+    const url = normalizeText(args.url || args.href || details.url || response.result?.url);
+    const observationContract = details.observationContract || details.observation_contract || {};
+    const evidenceQuality = normalizeText(details.evidenceQuality || details.evidence_quality || observationContract.evidence_quality);
+    const text = `${url}\n${preview}\n${extractToolResultText(response.result)}`.toLowerCase();
+    const isWebSearch = toolId === 'web_search' ||
+        toolId === 'mcp__ailis_research__web_search' ||
+        /web_search$/.test(toolId) ||
+        action === 'web_search' ||
+        action === 'search';
+    const searchConfidence = details.searchConfidence || details.search_confidence || {};
+    const clarificationRequired = details.clarificationRequired === true ||
+        details.clarification_required === true ||
+        searchConfidence.clarificationRequired === true ||
+        searchConfidence.clarification_required === true ||
+        searchConfidence.shouldAskUser === true ||
+        searchConfidence.should_ask_user === true;
+    if (isWebSearch && (clarificationRequired || /search confidence is .*ambiguous|query appears ambiguous|should be clarified/i.test(text))) {
+        const question = normalizeText(
+            searchConfidence.clarificationQuestion ||
+            searchConfidence.clarification_question ||
+            details.clarificationQuestion
+        );
+        return {
+            evidence_gap: 'ambiguous_search_requires_clarification',
+            summary: question
+                ? `Web search returned multiple plausible target clusters. Clarification question from tool: ${question}`
+                : 'Web search returned multiple plausible target clusters.'
+        };
+    }
+    if (isWebSearch && /evidence gap|discovery only|candidate evidence|open a result|suggested next calls|high-signal links|url:/i.test(text)) {
+        return null;
+    }
+    const isWebFetch = toolId === 'web_fetch' ||
+        toolId === 'mcp__ailis_research__web_fetch' ||
+        /web_fetch$/.test(toolId) ||
+        action === 'web_fetch' ||
+        action === 'fetch';
+    if (!isWebFetch) {
+        return null;
+    }
+    if (evidenceQuality === 'sufficient_evidence') {
+        return null;
+    }
+    if (evidenceQuality === 'js_shell') {
+        return {
+            evidence_gap: 'js_shell_no_content',
+            summary: 'Web fetch returned a JavaScript loading shell, not answer-bearing page content.'
+        };
+    }
+    if (evidenceQuality === 'encoding_failure') {
+        return {
+            evidence_gap: 'encoding_failure',
+            summary: 'Web fetch returned mojibake/incorrectly decoded text that is not reliable evidence.'
+        };
+    }
+    if (evidenceQuality === 'thin_content') {
+        return {
+            evidence_gap: 'thin_content',
+            summary: 'Web fetch returned too little text to support an answer.'
+        };
+    }
+    if (/clinicaltrials\.gov|nct\d{8}/i.test(text)) {
+        return {
+            evidence_gap: 'structured_api_preferred',
+            summary: 'Web fetch returned page text, but this task likely needs a structured ClinicalTrials.gov study field.'
+        };
+    }
+    if (/youtube\.com|youtu\.be/.test(text)) {
+        return {
+            evidence_gap: 'video_evidence_required',
+            summary: 'A fetched YouTube page is not enough for visual counting or frame-level questions.'
+        };
+    }
+    if (/\.pdf(\?|#|$)|application\/pdf|pdf/.test(text)) {
+        return {
+            evidence_gap: 'document_parser_preferred',
+            summary: 'The target appears to be a PDF or paper; page fetch alone may miss the answer-bearing text.'
+        };
+    }
+    if (/\.docx(\?|#|$)|wordprocessingml|secret santa/.test(text)) {
+        return {
+            evidence_gap: 'document_parser_preferred',
+            summary: 'The target appears to be a DOCX/document task; raw web or zip text is not reliable evidence.'
+        };
+    }
+    return null;
+}
+
 function formatFailureHint(failure = null) {
     if (!failure) {
         return '';
@@ -290,6 +427,16 @@ function formatFailureHint(failure = null) {
     return [
         `error_type=${failure.error_type}`,
         failure.summary
+    ].filter(Boolean).join(' | ');
+}
+
+function formatEvidenceGapHint(gap = null) {
+    if (!gap) {
+        return '';
+    }
+    return [
+        `evidence_gap=${gap.evidence_gap}`,
+        gap.summary
     ].filter(Boolean).join(' | ');
 }
 
@@ -319,6 +466,11 @@ function buildToolResultItem(event = {}) {
         response,
         preview: event.preview || event.error || ''
     });
+    const evidenceGap = event.ok ? (
+        event.evidenceGap && typeof event.evidenceGap === 'object'
+            ? event.evidenceGap
+            : null
+    ) : null;
     const preview = summarizeValue(event.preview || event.error || event.result || '', previewBudget);
     return {
         type: 'tool_result',
@@ -328,8 +480,10 @@ function buildToolResultItem(event = {}) {
         tool: event.tool || null,
         ok: event.ok === true,
         result_status: event.status || 'unknown',
-        preview: summarizeValue([preview, formatFailureHint(failure)].filter(Boolean).join('\n'), previewBudget),
+        preview: summarizeValue([preview, formatFailureHint(failure), formatEvidenceGapHint(evidenceGap)].filter(Boolean).join('\n'), previewBudget),
         error_type: failure?.error_type || null,
+        evidence_gap: evidenceGap?.evidence_gap || null,
+        artifact_evidence: getArtifactEvidenceSummary(event.response || event.result || {}),
         iteration: Number.isFinite(event.iteration) ? event.iteration : null
     };
 }
@@ -352,6 +506,12 @@ function buildToolResultItemFromStep(stepResult = {}) {
         response,
         preview: basePreview
     });
+    const evidenceGap = response.ok === true ? classifyEvidenceGapObservation({
+        tool: stepResult.tool,
+        args: stepResult.args,
+        response,
+        preview: basePreview
+    }) : null;
     const baseItem = toolOutputToThreadItem(toolOutput);
     return {
         ...baseItem,
@@ -361,8 +521,10 @@ function buildToolResultItemFromStep(stepResult = {}) {
         tool: stepResult.tool || null,
         ok: response.ok === true,
         result_status: response.status || 'unknown',
-        preview: summarizeValue([basePreview, formatFailureHint(failure)].filter(Boolean).join('\n'), previewBudget),
+        preview: summarizeValue([basePreview, formatFailureHint(failure), formatEvidenceGapHint(evidenceGap)].filter(Boolean).join('\n'), previewBudget),
         error_type: failure?.error_type || null,
+        evidence_gap: evidenceGap?.evidence_gap || null,
+        artifact_evidence: getArtifactEvidenceSummary(response),
         iteration: Number.isFinite(stepResult.iteration) ? stepResult.iteration : null
     };
 }
@@ -484,7 +646,9 @@ function buildObservationLedgerPromptObject(input = {}) {
 module.exports = {
     buildAilisThreadItems,
     buildObservationLedgerPromptObject,
+    classifyEvidenceGapObservation,
     classifyToolFailureObservation,
+    formatEvidenceGapHint,
     formatFailureHint,
     sanitizeToolArgsForPrompt
 };

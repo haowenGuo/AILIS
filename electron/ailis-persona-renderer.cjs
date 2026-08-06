@@ -64,6 +64,7 @@ const ALLOWED_SOCIAL_TONES = new Set(['soft', 'bright', 'calm', 'serious', 'play
 const ALLOWED_GAZE_TARGETS = new Set(['user', 'side', 'down', 'screen', 'away', 'none']);
 const ALLOWED_DURATION_HINTS = new Set(['short', 'medium', 'long', 'hold']);
 const ALLOWED_APPROVAL_STATES = new Set(['none', 'required', 'optional']);
+const ALLOWED_EVIDENCE_STATES = new Set(['unknown', 'present', 'missing', 'none']);
 const USER_FACING_CONTROL_TAG_PATTERN = /(?:\[\s*|【\s*)(?:action|expression|emotion|gestureIntent|socialTone|taskState|speechEnergy|gazeTarget|durationHint)\s*[:=：＝][^\]】\r\n]*(?:\]|】)/gi;
 const EXPRESSION_TO_EMOTION = Object.freeze({
     happy: 'happy',
@@ -224,6 +225,11 @@ function isSurfaceOnlyTaskState(value) {
 function normalizeApprovalState(value) {
     const state = normalizeText(value, 'none').toLowerCase();
     return ALLOWED_APPROVAL_STATES.has(state) ? state : 'none';
+}
+
+function normalizeEvidenceState(value) {
+    const state = normalizeText(value, 'unknown').toLowerCase();
+    return ALLOWED_EVIDENCE_STATES.has(state) ? state : 'unknown';
 }
 
 function sanitizeUserFacingText(value) {
@@ -525,6 +531,7 @@ function renderPersonaSurfaceGateway(input = {}) {
         input.approvalState ||
         (taskState === 'needs_approval' || input.confirmationRequired ? 'required' : 'none')
     );
+    const evidenceState = normalizeEvidenceState(input.evidence_state || input.evidenceState || 'unknown');
     const errorCode = normalizeText(input.error_code || input.errorCode || input.status || '');
     const relationshipStage = normalizeRelationshipStage(input.relationship_stage || input.relationshipStage || 'trusted');
     const emotionHint = normalizeEmotionHint(input.emotion_hint || input.emotionHint || 'neutral');
@@ -634,9 +641,11 @@ function renderPersonaSurfaceGateway(input = {}) {
                 experience: input.experience || getToolExperience(toolId)
             });
         }
-        const statusLine = emailConfigMissing
+        const evidenceLine = emailConfigMissing
             ? '我还没连上邮箱，不会假装已经看过邮件。'
-            : '';
+            : evidenceState === 'missing'
+                ? '我还没拿到足够证据，不会把这一步说成已经完成。'
+                : '';
         const extraReason = reasonText && reasonText !== failureReason && !isInternalFailureDetail(reasonText)
             ? `补充信息：${reasonText}。`
             : '';
@@ -646,7 +655,7 @@ function renderPersonaSurfaceGateway(input = {}) {
         const text = [
             `${emotionLead}这一步我先停住，不拿不稳的结果冒进。`,
             `目前卡点：${failureReason}。`,
-            statusLine,
+            evidenceLine,
             extraReason,
             nextActionLine
         ].filter(Boolean).join('\n');
@@ -676,7 +685,9 @@ function renderPersonaSurfaceGateway(input = {}) {
             requestedText &&
             !isInternalFailureDetail(requestedText) &&
             !/AILIS_|<PROVIDER>|tool_call|raw observation/i.test(requestedText);
-        const statusLine = '这轮还没有形成可交付的结果。';
+        const evidenceLine = evidenceState === 'missing' || evidenceState === 'none'
+            ? '这轮还没拿到足够的实际证据。'
+            : '这轮已经停下，还没有继续执行新的动作。';
         const extraReason = reasonText && !isInternalFailureDetail(reasonText)
             ? `当前卡点：${reasonText}。`
             : '';
@@ -684,7 +695,7 @@ function renderPersonaSurfaceGateway(input = {}) {
             ? `如果要继续，下一步建议是：${nextAction}。`
             : '';
         const text = [
-            `${emotionLead}${statusLine}`,
+            `${emotionLead}${evidenceLine}`,
             extraReason,
             nextActionLine
         ].filter(Boolean).join('\n');
@@ -736,6 +747,7 @@ function attachPersonaSurface(result = {}, surface = null) {
     const personaSurface = surface || renderPersonaSurfaceGateway({
         task_state: result.ok ? 'completed' : (result.status || 'failed'),
         approval_state: result.confirmationRequired ? 'required' : 'none',
+        evidence_state: Array.isArray(result.steps) && result.steps.length ? 'present' : 'unknown',
         error_code: result.error || result.status || '',
         text: result.displayText || result.error || '我处理好了。',
         source: result.planner || 'agent',
@@ -778,6 +790,7 @@ function renderApprovalSurface({
     return renderPersonaSurfaceGateway({
         task_state: dryRun ? 'planned' : 'needs_approval',
         approval_state: dryRun ? 'none' : 'required',
+        evidence_state: dryRun ? 'none' : 'missing',
         relationship_stage: 'trusted',
         emotion_hint: 'neutral',
         next_action: nextAction,
@@ -805,6 +818,7 @@ function renderStatusSurface({
     const surface = renderPersonaSurfaceGateway({
         task_state: taskState,
         approval_state: status === 'needs_approval' ? 'required' : 'none',
+        evidence_state: 'unknown',
         error_code: status,
         relationship_stage: 'trusted',
         emotion_hint: ok ? 'neutral' : 'anxious',
@@ -855,6 +869,7 @@ function renderToolFailureSurface({
     return renderPersonaSurfaceGateway({
         task_state: status === 'needs_approval' ? 'needs_approval' : 'failed',
         approval_state: status === 'needs_approval' ? 'required' : 'none',
+        evidence_state: response?.ok ? 'present' : 'missing',
         error_code: status,
         relationship_stage: relationHint,
         emotion_hint: emotionHint,
@@ -892,6 +907,7 @@ function renderMaxStepsSurface({
     return renderPersonaSurfaceGateway({
         task_state: 'blocked',
         approval_state: 'none',
+        evidence_state: stepCount > 0 ? 'present' : 'missing',
         error_code: 'max_steps_reached',
         relationship_stage: 'trusted',
         emotion_hint: 'neutral',

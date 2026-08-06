@@ -56,7 +56,7 @@ test('artifact_query accepts context-owned handles and rejects artifact_tools ha
     }
 });
 
-test('artifact_query reports an unknown context artifact id generically', async () => {
+test('artifact_query explains evidence-ref misuse instead of generic artifact_not_found', async () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ailis-context-artifact-misuse-'));
     try {
         const store = new AILISContextArtifactStore({ rootDir: tmpDir });
@@ -68,8 +68,9 @@ test('artifact_query reports an unknown context artifact id generically', async 
 
         assert.equal(result.isError, true);
         assert.equal(result.details.code, 'artifact_not_found');
-        assert.equal(Object.hasOwn(result.details, 'evidenceRefMisuse'), false);
-        assert.match(result.content[0].text, /No managed context artifact found/);
+        assert.equal(result.details.evidenceRefMisuse, true);
+        assert.match(result.content[0].text, /evidence_ref/);
+        assert.match(result.details.recoveryHint, /final_answer\.evidence_refs/);
     } finally {
         fs.rmSync(tmpDir, { recursive: true, force: true });
     }

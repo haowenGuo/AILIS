@@ -269,7 +269,7 @@ function formatArtifactRuntimeSearch(record = {}, result = {}) {
         }
         lines.push(truncateForObservation(match.content || ''));
     }
-    lines.push('result_status=complete:true truncated:false');
+    lines.push('observation_contract=complete:true truncated:false reasoning_ready:true');
     return lines.join('\n');
 }
 

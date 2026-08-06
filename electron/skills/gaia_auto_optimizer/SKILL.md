@@ -21,8 +21,8 @@ This skill defines the default optimization policy for AILIS self-evolution work
 ## Core Policy
 
 - Run exactly one GAIA/GIAI task per optimization iteration unless the user explicitly asks for a batch.
-- After every task, extract the execution chain before changing code: prompt, tool discovery, tool calls, MCP calls, observations, loop guards, natural final response, and score/verdict.
-- If the task succeeds, optimize efficiency: reduce loop count and remove redundant tool calls without adding benchmark-specific answer rules.
+- After every task, extract the execution chain before changing code: prompt, tool discovery, tool calls, MCP calls, observations, loop guards, finalization, answer gate, score/verdict.
+- If the task succeeds, optimize efficiency: reduce loop count, remove redundant tool calls, improve per-turn evidence use, and keep the exact-answer path reliable.
 - If the task fails, mark it as a priority repair item and classify the bottleneck before patching.
 - Prefer generalized fixes. Do not hard-code task IDs, answers, URLs, names, or one-off heuristics.
 - Optimize Tools and MCP first. Modify Agent or Harness only when the chain shows a general orchestration, stopping, schema, finalization, or evaluation issue.
@@ -34,10 +34,10 @@ Use these classes before repair:
 
 - `tools_mcp`: parser, fetcher, document reader, spreadsheet reader, PDF/audio/image/tool schema, MCP registration, or tool result contract issue.
 - `web_retrieval_mcp`: web_search/web_fetch ranking, extraction, JS shell, anti-bot, content quality, or source-followup issue.
-- `agent_architecture`: wrong tool choice, repeated loops, failure to adapt after an error, or tool_search misuse.
-- `harness_finalization`: natural final-response transport, scorer integration, or transcript linkage issue.
+- `agent_architecture`: wrong tool choice, failure to stop after ready evidence, repeated loops, tool_search misuse, or ignoring recovery hints.
+- `harness_finalization`: answer gate, exact-answer extraction, scorer integration, transcript linkage, or artifact provenance issue.
 - `environment`: missing credentials, missing dataset, network, local service unavailable, rate limit, process timeout.
-- `model_reasoning`: the available observations were sufficient, but the model reasoned incorrectly.
+- `model_reasoning`: evidence was sufficient and accessible, but the model reasoned incorrectly.
 
 ## Repair Order
 

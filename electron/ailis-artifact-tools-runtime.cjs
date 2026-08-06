@@ -1370,16 +1370,16 @@ function createDefaultArtifactToolsRuntime(options = {}) {
             format: 'xlsx',
             goal: 'Answer a path/color question using exact cell values, fills, and coordinates.',
             requiredCapabilities: ['load', 'inspect', 'render', 'validate'],
-            expectedOutputs: ['cell values', 'fill colors', 'coordinates'],
+            expectedEvidence: ['cell values', 'fill colors', 'coordinates'],
             checks: ['structured equality', 'render nonblank']
         },
         {
             id: 'pdf_text_layer_search',
             artifactKind: 'pdf',
             format: 'pdf',
-            goal: 'Search text-layer spans and report their page locations without OCR.',
+            goal: 'Search text-layer spans and cite page evidence without OCR.',
             requiredCapabilities: ['load', 'inspect', 'search', 'render'],
-            expectedOutputs: ['page number', 'text span', 'coordinates'],
+            expectedEvidence: ['page number', 'text span', 'coordinates'],
             checks: ['text match', 'page render nonblank']
         },
         {
@@ -1388,7 +1388,7 @@ function createDefaultArtifactToolsRuntime(options = {}) {
             format: 'docx',
             goal: 'Render DOCX pages and detect layout failures before delivery.',
             requiredCapabilities: ['load', 'inspect', 'render', 'validate'],
-            expectedOutputs: ['page images', 'layout diagnostics'],
+            expectedEvidence: ['page images', 'layout diagnostics'],
             checks: ['render nonblank', 'no fatal diagnostics']
         },
         {
@@ -1397,7 +1397,7 @@ function createDefaultArtifactToolsRuntime(options = {}) {
             format: 'pptx',
             goal: 'Render slide previews and verify slide inventory.',
             requiredCapabilities: ['load', 'inspect', 'render', 'validate'],
-            expectedOutputs: ['slide count', 'rendered slides'],
+            expectedEvidence: ['slide count', 'rendered slides'],
             checks: ['render nonblank', 'slide inventory']
         }
     ];
