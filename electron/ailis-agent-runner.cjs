@@ -108,6 +108,7 @@ const ARTIFACT_OBSERVATION_ROW_WINDOW_TEXT_CHARS = 8000;
 const MAX_MCP_TOOL_DESCRIPTION_CHARS = 900;
 const DEFAULT_AGENT_LOOP_STEPS = 30;
 const MAX_AGENT_LOOP_STEPS = 30;
+const TASK_AGENT_MAX_MODEL_ROUNDS = 9;
 const TASK_AGENT_FINALIZATION_CONTEXT_CHARS = 18000;
 const PERSONA_SUBAGENT_FINALIZATION_CONTEXT_CHARS = 24000;
 const DEFAULT_PENDING_PLAN_TTL_MS = 30 * 60 * 1000;
@@ -4590,15 +4591,14 @@ function toolProgressFingerprint(stepResult = {}) {
         stepResult?.response?.result?.details?.output_id ||
         stepResult?.response?.details?.outputId
     );
-    const repeatedDiscoveryCall = tool === 'tool_search';
     return JSON.stringify({
         tool,
         target: target?.key || '',
         args: target ? null : sanitizeToolArgsForPrompt(args),
         ok: stepResult?.response?.ok === true,
         status: normalizeText(stepResult?.response?.status),
-        evidenceRefs: repeatedDiscoveryCall ? [] : evidenceRefs,
-        outputId: repeatedDiscoveryCall ? '' : outputId
+        evidenceRefs,
+        outputId
     });
 }
 
@@ -6670,9 +6670,6 @@ function buildAgentDirectToolSpecs(
         return [];
     }
     if (isPersonaOrchestratorRole(resolveAgentRuntimeRole({}, requestContext))) {
-        if (requestContext.taskAgentOwnsExecution === true || requestContext.personaTaskResultRender === true) {
-            return [];
-        }
         const handoffAlreadyAttempted = stepResults.some((stepResult) =>
             canonicalDirectToolId(stepResult?.tool) === PERSONA_HANDOFF_TOOL_ID
         );
@@ -8785,8 +8782,6 @@ function buildLlmAgentDirectToolPrompt({
     requireExecutionEvidence = false,
     safetyFinalizationReason = '',
     unrestrictedToolExecution = false,
-    taskAgentOwnsExecution = false,
-    personaTaskResultRender = false,
     ephemeralDeveloperMessage = '',
     suppressCurrentUserMessage = false
 }) {
@@ -8835,27 +8830,16 @@ function buildLlmAgentDirectToolPrompt({
         'You are the only user-facing AILIS persona. Keep ordinary conversation natural and answer it directly; do not let task-execution instructions or internal terminology enter your personality, relationship memory, or visible reply.',
         'The runtime_environment object is the authoritative host clock. Use its current_date, current_time, timezone, and utc_offset instead of assuming the training-data date.',
         'For facts that may have changed, use fresh evidence already present in the conversation or verify them through TaskAgent. Do not present pretrained knowledge as current fact when freshness matters.',
-        taskAgentOwnsExecution
-            ? 'The system TaskAgent independently receives every user turn and owns all execution decisions. You are the dialogue output renderer: answer ordinary conversation now, or render the authoritative TaskResult supplied by the runtime. Never promise future work and never attempt to transfer or schedule a task.'
-            : 'When the user asks for concrete task execution that cannot be answered safely from the visible conversation, call handoff_task exactly once. The Harness transfers the immutable current user request; do not restate, rewrite, expand, or plan the task in tool arguments.',
-        !taskAgentOwnsExecution
-            ? 'When the latest user message continues, corrects, or redirects previously executed work, treat it as a concrete execution request and call handoff_task. The persistent TaskAgent Session owns the relevant Turn, Goal, and execution history; do not reconstruct that lifecycle inside Persona.'
-            : '',
-        !taskAgentOwnsExecution
-            ? 'When calling handoff_task, emit only the native function call in that model response. Do not include assistant text alongside the tool call; public task progress is delivered separately by the Harness event channel.'
-            : '',
-        requireTaskExecution && !taskAgentOwnsExecution
+        'When the user asks for concrete task execution that cannot be answered safely from the visible conversation, call handoff_task exactly once. The Harness transfers the immutable current user request; do not restate, rewrite, expand, or plan the task in tool arguments.',
+        'When the latest user message continues, corrects, or redirects previously executed work, treat it as a concrete execution request and call handoff_task. The persistent TaskAgent Session owns the relevant Turn, Goal, and execution history; do not reconstruct that lifecycle inside Persona.',
+        'When calling handoff_task, emit only the native function call in that model response. Do not include assistant text alongside the tool call; public task progress is delivered separately by the Harness event channel.',
+        requireTaskExecution
             ? 'This turn has an explicit task-execution contract. Call handoff_task exactly once before producing any answer; do not answer the task directly from model memory or arithmetic.'
             : '',
-        exactAnswerMode && !taskAgentOwnsExecution
+        exactAnswerMode
             ? 'In exact-answer mode, arithmetic, multi-step logic, optimization, best/maximum/minimum/guaranteed claims, source lookup, and cross-record identity are concrete verification tasks: call handoff_task instead of answering them from intuition. Answer directly only when the requested value is explicitly established in the visible conversation and needs no new calculation or verification.'
             : '',
-        !taskAgentOwnsExecution
-            ? 'handoff_task blocks while the system Harness runs or resumes the single TaskAgent. You do not create, wait for, resume, list, or close agents. After the tool returns, render its TaskResult packet instead of calling another orchestration tool.'
-            : '',
-        personaTaskResultRender
-            ? 'This is a render-only response. The ephemeral developer message contains the authoritative TaskResult. Return its result to the user in AILIS voice, preserving facts, uncertainty, failure state, sources, and artifacts. Do not do more task work, call tools, or claim anything absent from that packet or the visible conversation.'
-            : '',
+        'handoff_task blocks while the system Harness runs or resumes the single TaskAgent. You do not create, wait for, resume, list, or close agents. After the tool returns, render its TaskResult packet instead of calling another orchestration tool.',
         'The TaskResult packet is the factual boundary. You may rewrite tone and presentation, but you must not add a name, number, quote, link, claim, or conclusion absent from final_answer, partial_answer, source_refs, or the visible conversation. If status is incomplete, explain the concrete unresolved field naturally instead of silently starting another execution.',
         'Never mention TaskAgent, subagent, worker, handoff, capsule, or internal orchestration to the user.',
         'Only call tools present in the current tools array. Do not mention tool schemas, runtime state, prompt rules, or orchestration details in an ordinary conversational reply.'
@@ -11201,13 +11185,12 @@ class AILISAgentRunner {
         const agentRuntimeRole = resolveAgentRuntimeRole(request, requestContext);
         const requireTaskExecution = isTaskExecutionRequired(request, requestContext);
         const requireExecutionEvidence = isExecutionEvidenceRequired(request, requestContext);
-        const taskAgentNaturalTermination = isTaskAgentRole(agentRuntimeRole);
         const requestedMaxSteps = Number(request.maxAgentSteps || requestContext.maxAgentSteps || DEFAULT_AGENT_LOOP_STEPS);
         const boundedMaxSteps = Math.max(1, Math.min(Number.isFinite(requestedMaxSteps) ? requestedMaxSteps : DEFAULT_AGENT_LOOP_STEPS, MAX_AGENT_LOOP_STEPS));
-        let maxSteps = taskAgentNaturalTermination ? 0 : boundedMaxSteps;
-        const baseFinalizationIteration = taskAgentNaturalTermination
-            ? Number.POSITIVE_INFINITY
-            : Math.max(0, maxSteps - 1);
+        let maxSteps = isTaskAgentRole(agentRuntimeRole)
+            ? Math.max(2, Math.min(boundedMaxSteps, TASK_AGENT_MAX_MODEL_ROUNDS))
+            : boundedMaxSteps;
+        const baseFinalizationIteration = Math.max(0, maxSteps - 1);
         let finalizationIteration = baseFinalizationIteration;
         const events = initialEvents.slice();
         const stepResults = initialStepResults.slice();
@@ -11266,7 +11249,6 @@ class AILISAgentRunner {
         let latestDecision = null;
         let cumulativeInputTokens = 0;
         let safetyFinalizationAttempted = false;
-        let loopStopReason = 'maximum_tool_rounds';
         let exactAnswerAuditRepairInstruction = '';
         const exactAnswerAuditRepairWarningsAttempted = new Set();
         let exactAnswerAuditRecoveryToolCallsRemaining = 0;
@@ -11289,10 +11271,7 @@ class AILISAgentRunner {
             settings.maxCumulativeInputTokens
         ], initialContextWindow.tokens * 4);
         const pauseAfterRound = async ({ iteration, reason = 'round_completed', decision = null, step = null } = {}) => {
-            if (
-                !debugBreakAfterRound ||
-                (!taskAgentNaturalTermination && iteration + 1 >= maxSteps)
-            ) {
+            if (!debugBreakAfterRound || iteration + 1 >= maxSteps) {
                 return null;
             }
             const debugSession = this.storePendingAgentDebugSession({
@@ -11346,11 +11325,7 @@ class AILISAgentRunner {
             }, { reason });
         };
 
-        for (
-            let iteration = startIteration;
-            taskAgentNaturalTermination || iteration <= finalizationIteration;
-            iteration += 1
-        ) {
+        for (let iteration = startIteration; iteration <= finalizationIteration; iteration += 1) {
             const interruptedBeforeRound = await maybeFinishInterruptedRun(`before_round_${iteration}`);
             if (interruptedBeforeRound) {
                 return interruptedBeforeRound;
@@ -11396,7 +11371,7 @@ class AILISAgentRunner {
             const noProgressReason =
                 detectInvalidDecisionNoProgress(invalidDecisionHistory, requestContext) ||
                 detectAgentNoProgress(stepResults, requestContext);
-            const safetyFinalizationReason = !taskAgentNaturalTermination && iteration >= finalizationIteration
+            const safetyFinalizationReason = iteration >= finalizationIteration
                 ? 'maximum_tool_rounds'
                 : Date.now() - startedAt >= maxLoopDurationMs
                     ? 'time_budget'
@@ -11404,7 +11379,6 @@ class AILISAgentRunner {
                         ? 'cumulative_input_budget'
                         : noProgressReason;
             if (safetyFinalizationReason && safetyFinalizationAttempted) {
-                loopStopReason = safetyFinalizationReason;
                 break;
             }
             if (safetyFinalizationReason) {
@@ -11573,8 +11547,6 @@ class AILISAgentRunner {
                 requireTaskExecution,
                 requireExecutionEvidence,
                 safetyFinalizationReason,
-                taskAgentOwnsExecution: requestContext.taskAgentOwnsExecution === true,
-                personaTaskResultRender: requestContext.personaTaskResultRender === true,
                 ephemeralDeveloperMessage: [
                     normalizeText(
                         request.ephemeralDeveloperMessage ||
@@ -11595,9 +11567,7 @@ class AILISAgentRunner {
                     request.suppressCurrentUserMessage === true ||
                     requestContext.suppressCurrentUserMessage === true,
                 toolSummary: isPersonaOrchestratorRole(agentRuntimeRole)
-                    ? requestContext.taskAgentOwnsExecution === true
-                        ? 'Persona has no execution tools in this turn. TaskAgent independently owns task intake and execution; Persona only renders dialogue and TaskResult packets.'
-                        : 'Persona tool surface: handoff_task transfers the immutable current user request to the system TaskAgent and returns one compact TaskResult packet. The Harness owns lifecycle and internal orchestration remains invisible to the user.'
+                    ? 'Persona tool surface: handoff_task transfers the immutable current user request to the system TaskAgent and returns one compact TaskResult packet. The Harness owns lifecycle and internal orchestration remains invisible to the user.'
                     : directToolSpecs.length
                         ? `Native direct tools exposed: ${directToolSpecs.map((tool) => tool.name).slice(0, 16).join(', ')}${directToolSpecs.length > 16 ? ', ...' : ''}.`
                         : 'No native tools are exposed in this turn; answer directly if possible.'
@@ -11888,16 +11858,6 @@ class AILISAgentRunner {
                 return interruptedAfterDecision;
             }
             if (decision.budgetExhausted === true) {
-                loopStopReason = safetyFinalizationReason || loopStopReason;
-                if (loopStopReason !== 'maximum_tool_rounds') {
-                    decision.intent = `task_agent_${loopStopReason}`;
-                    decision.summary = loopStopReason === 'time_budget'
-                        ? '任务已达到本轮时间预算，执行现场和检查点已经保留。'
-                        : loopStopReason === 'cumulative_input_budget'
-                            ? '任务已达到本轮上下文预算，执行现场和检查点已经保留。'
-                            : '检测到连续重复或无效的工具调用，任务已停止空转并保留检查点。';
-                    decision.blockedReason = decision.summary;
-                }
                 break;
             }
             if (!decision.ok && isTerminalAgentDecisionFailure(decision)) {
@@ -12289,9 +12249,7 @@ class AILISAgentRunner {
                         recoveryToolCalls: exactAnswerAuditRecoveryToolCallsRemaining
                     });
                     safetyFinalizationAttempted = false;
-                    if (!taskAgentNaturalTermination) {
-                        maxSteps = finalizationIteration + 1;
-                    }
+                    maxSteps = finalizationIteration + 1;
                     exactAnswerAuditRepairInstruction = [
                         'Exact-answer soft audit: do not repeat the same unsupported final submission.',
                         exactAnswerAuditRecoveryGap.instruction,
@@ -12502,9 +12460,7 @@ class AILISAgentRunner {
                         auditIteration: iteration,
                         recoveryToolCalls: exactAnswerAuditRecoveryToolCallsRemaining
                     });
-                    if (!taskAgentNaturalTermination) {
-                        maxSteps = finalizationIteration + 1;
-                    }
+                    maxSteps = finalizationIteration + 1;
                 } else {
                     exactAnswerAuditRecoveryToolCallsRemaining = Math.max(
                         0,
@@ -13125,14 +13081,9 @@ class AILISAgentRunner {
 
         const fallbackExactAnswerSubmission = latestExactAnswerCandidate?.submission || null;
         const fallbackExactAnswer = normalizeText(fallbackExactAnswerSubmission?.answer);
-        const fallbackStatus = loopStopReason === 'maximum_tool_rounds'
-            ? 'max_steps_reached'
-            : loopStopReason === 'time_budget'
-                ? 'timeout'
-                : 'stalled';
         const taskRunHandoff = buildTaskRunHandoffPackage({
-            status: fallbackStatus,
-            reason: loopStopReason,
+            status: 'max_loop',
+            reason: 'max_steps_reached',
             runId,
             sessionId,
             message,
@@ -13144,7 +13095,7 @@ class AILISAgentRunner {
             exactAnswer: fallbackExactAnswer,
             finalAnswer: fallbackExactAnswer,
             partialAnswer: fallbackExactAnswer,
-            contextManagerCheckpoint: contextManagerCheckpoint(fallbackStatus, stepResults.length)
+            contextManagerCheckpoint: contextManagerCheckpoint('max_steps_reached', stepResults.length)
         });
         const displayText = taskRunHandoff.userVisibleSummary;
         const fallbackSurface = renderMaxStepsSurface({
@@ -13157,16 +13108,14 @@ class AILISAgentRunner {
             task_state: 'blocked',
             approval_state: 'none',
             evidence_state: stepResults.length > 0 ? 'present' : 'missing',
-            error_code: fallbackStatus,
+            error_code: 'max_steps_reached',
             relationship_stage: 'trusted',
             emotion_hint: 'neutral',
             next_action: taskRunHandoff.nextStep?.recommendation || fallbackSurface.nextAction || '',
             text: displayText || fallbackSurface.text,
             bubble_text: '我整理好执行现场了。',
             text_is_persona_safe: true,
-            source: fallbackStatus === 'max_steps_reached'
-                ? 'agent_max_steps_handoff'
-                : 'agent_safety_fuse_handoff',
+            source: 'agent_max_steps_handoff',
             experience: {
                 ...(fallbackSurface.experience || {}),
                 userSafePreview: 'task_run_handoff',
@@ -13177,10 +13126,10 @@ class AILISAgentRunner {
             ok: false,
             runId,
             sessionId,
-            status: fallbackStatus,
+            status: 'max_steps_reached',
             mode: 'task',
             planner: 'llm-agentic-executor',
-            intent: latestDecision?.intent || `llm_agent_${fallbackStatus}`,
+            intent: latestDecision?.intent || 'llm_agent_max_steps',
             executionRequired: stepResults.length > 0,
             durationMs: Date.now() - startedAt,
             message,
