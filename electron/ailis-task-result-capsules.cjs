@@ -102,11 +102,10 @@ function atomicWriteJson(filePath, value) {
     fs.renameSync(temporaryPath, filePath);
 }
 
-function collectRefs(items = []) {
+function collectOutputRefs(items = []) {
     const refs = [];
     for (const item of Array.isArray(items) ? items : []) {
         for (const value of [
-            ...(Array.isArray(item?.evidenceRefs) ? item.evidenceRefs : []),
             item?.outputId,
             item?.artifactId
         ]) {
@@ -167,7 +166,7 @@ function buildCapsule(input = {}) {
         2400
     );
     const collectedData = Array.isArray(handoff.collectedData) ? handoff.collectedData : [];
-    const outputRefs = collectRefs(collectedData);
+    const outputRefs = collectOutputRefs(collectedData);
     return {
         version: CAPSULE_STORE_VERSION,
         id: normalizeString(input.id, `task_result_${randomUUID()}`),
@@ -179,7 +178,6 @@ function buildCapsule(input = {}) {
         answer,
         summary,
         claims: collectedData.map((item) => truncate(item.summary || item.title, 500)).filter(Boolean).slice(0, 24),
-        evidenceRefs: collectRefs(collectedData),
         outputRefs,
         sourceRefs: normalizeSourceRefs(handoff.sourceRefs),
         unresolvedFields: (Array.isArray(input.unresolvedFields)
@@ -208,7 +206,6 @@ function normalizeStoredCapsule(raw = {}) {
         answer: truncate(raw.answer, 16000),
         summary: truncate(raw.summary || raw.answer, 2400),
         claims: (Array.isArray(raw.claims) ? raw.claims : []).map((value) => truncate(value, 500)).filter(Boolean).slice(0, 24),
-        evidenceRefs: normalizeRefs(raw.evidenceRefs),
         outputRefs: normalizeRefs(raw.outputRefs),
         sourceRefs: normalizeSourceRefs(raw.sourceRefs),
         unresolvedFields: (Array.isArray(raw.unresolvedFields) ? raw.unresolvedFields : [])
@@ -238,8 +235,6 @@ function normalizeActiveTask(raw = {}) {
         summary: truncate(raw.summary, 2400),
         unresolvedFields: (Array.isArray(raw.unresolvedFields) ? raw.unresolvedFields : [])
             .map((value) => truncate(value, 400)).filter(Boolean).slice(0, 24),
-        evidenceRefs: (Array.isArray(raw.evidenceRefs) ? raw.evidenceRefs : [])
-            .map((value) => normalizeString(value)).filter(Boolean).slice(0, 80),
         outputRefs: (Array.isArray(raw.outputRefs) ? raw.outputRefs : [])
             .map((value) => normalizeString(value)).filter(Boolean).slice(0, 80),
         sourceRefs: normalizeSourceRefs(raw.sourceRefs),
@@ -353,8 +348,7 @@ class AILISTaskResultCapsuleStore {
                 handoff.failureAnalysis?.bottleneck,
                 handoff.nextStep?.recommendation
             ].filter(Boolean),
-            evidenceRefs: collectRefs(collectedData),
-            outputRefs: collectRefs(collectedData),
+            outputRefs: collectOutputRefs(collectedData),
             sourceRefs: normalizeSourceRefs(handoff.sourceRefs),
             checkpoint,
             checkpointAvailable: Boolean(checkpoint),
@@ -484,7 +478,6 @@ class AILISTaskResultCapsuleStore {
                 `  summary: ${truncate(capsule.summary, 700)}`,
                 capsule.answer ? `  answer_preview: ${truncate(capsule.answer, 1000)}` : '',
                 `  full_result: use task_results action=get with id=${capsule.id}`,
-                capsule.evidenceRefs.length ? `  evidence_refs: ${capsule.evidenceRefs.slice(0, 8).join(', ')}` : '',
                 capsule.outputRefs.length ? `  output_refs: ${capsule.outputRefs.slice(0, 8).join(', ')}` : '',
                 capsule.sourceRefs.length ? `  source_refs: ${capsule.sourceRefs.slice(0, 8).map((source) => source.url).join(', ')}` : '',
                 capsule.unresolvedFields.length ? `  unresolved_fields: ${truncate(capsule.unresolvedFields.join('；'), 500)}` : ''

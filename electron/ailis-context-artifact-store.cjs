@@ -357,9 +357,9 @@ function buildSpreadsheetRangeCoverage(sheet = {}, parsedRange = {}, outsideStor
     return coverage;
 }
 
-function createPinnedEvidence(record = {}, details = {}) {
+function createPinnedCoverage(record = {}, details = {}) {
     const coverage = details.coverage && typeof details.coverage === 'object' ? details.coverage : null;
-    if (!coverage || details.complete !== true || details.truncated === true || details.reasoningReady !== true) {
+    if (!coverage || details.complete !== true || details.truncated === true) {
         return null;
     }
     const basis = [
@@ -369,9 +369,9 @@ function createPinnedEvidence(record = {}, details = {}) {
         coverage.range || details.range,
         coverage.queryAction
     ].filter(Boolean).join(':');
-    const evidenceId = `ev-${stableHash(basis)}`;
+    const coverageId = `cov-${stableHash(basis)}`;
     return {
-        evidenceId,
+        coverageId,
         artifactId: record.id,
         artifactKind: record.kind,
         artifactType: record.type,
@@ -382,9 +382,8 @@ function createPinnedEvidence(record = {}, details = {}) {
         coverage,
         complete: true,
         truncated: false,
-        reasoningReady: true,
-        claim: [
-            'Complete artifact evidence is already available',
+        description: [
+            'Artifact range is already loaded',
             coverage.sheet ? `sheet=${coverage.sheet}` : '',
             coverage.range ? `range=${coverage.range}` : ''
         ].filter(Boolean).join('; '),
@@ -414,32 +413,30 @@ function coverageContains(outer = {}, inner = {}) {
         Number(outer.endCol) >= Number(inner.endCol);
 }
 
-function findCoveringEvidence(record = {}, coverage = null, skipEvidenceId = '') {
+function findCoveringCache(record = {}, coverage = null, skipCoverageId = '') {
     if (!coverage || !record?.metadata || typeof record.metadata !== 'object') {
         return null;
     }
-    const pinned = Array.isArray(record.metadata.pinnedEvidence) ? record.metadata.pinnedEvidence : [];
+    const pinned = Array.isArray(record.metadata.pinnedCoverage) ? record.metadata.pinnedCoverage : [];
     const match = pinned.find((entry) =>
-        entry?.evidenceId &&
-        entry.evidenceId !== skipEvidenceId &&
+        entry?.coverageId &&
+        entry.coverageId !== skipCoverageId &&
         entry.complete === true &&
         entry.truncated !== true &&
-        entry.reasoningReady === true &&
         coverageContains(entry.coverage, coverage)
     );
     if (!match) {
         return null;
     }
     return {
-        evidenceId: match.evidenceId,
+        coverageId: match.coverageId,
         artifactId: match.artifactId,
         action: match.action,
         sheet: match.sheet,
         range: match.range,
-        claim: match.claim,
+        description: match.description,
         complete: true,
-        truncated: false,
-        reasoningReady: true
+        truncated: false
     };
 }
 
@@ -452,7 +449,7 @@ function formatSpreadsheetSummary(record = {}, payload = {}) {
         record.sourcePath ? `source=${record.sourcePath}` : '',
         record.summary ? `summary=${record.summary}` : '',
         `sheets=${sheets.map((sheet) => sheet.name).join(', ') || '(none)'}`,
-        'observation_contract=complete:true truncated:false reasoning_ready:true',
+        'result_status=complete:true truncated:false',
         'query_tools=artifact_query actions: summary, grid, range, search, runtime_schema, chunk_search, schema'
     ].filter(Boolean);
     for (const sheet of sheets.slice(0, 12)) {
@@ -498,7 +495,7 @@ function formatSpreadsheetGrid(sheet = {}, args = {}) {
     if (rows.length > visibleRows.length || columns.length > visibleColumns.length) {
         lines.push('truncated=true; ask artifact_query range/search for a narrower slice.');
     } else {
-        lines.push('truncated=false; reasoning_ready=true');
+        lines.push('truncated=false');
     }
     return lines.join('\n');
 }
@@ -547,9 +544,9 @@ function formatSpreadsheetRange(sheet = {}, args = {}) {
     const coverage = buildSpreadsheetRangeCoverage(sheet, parsedRange, outsideStoredRange, returnedCells);
     if (outsideStoredRange) {
         lines.push(`storedRange=${cellAddress(firstRow, firstCol)}:${cellAddress(lastRow, lastCol)}`);
-        lines.push('outsideStoredRange=true; complete=false; reasoning_ready=false; query a wider range/maxRows/maxCols through artifact_tools or artifact_query.');
+        lines.push('outsideStoredRange=true; complete=false; query a wider range/maxRows/maxCols through artifact_tools or artifact_query.');
     } else {
-        lines.push('truncated=false; complete=true; reasoning_ready=true');
+        lines.push('truncated=false; complete=true');
     }
     return createTextResult(lines.join('\n'), {
         status: 'completed',
@@ -563,11 +560,9 @@ function formatSpreadsheetRange(sheet = {}, args = {}) {
         coverage,
         complete: !outsideStoredRange,
         truncated: false,
-        reasoningReady: !outsideStoredRange,
         observationContract: {
             complete: !outsideStoredRange,
-            truncated: false,
-            reasoning_ready: !outsideStoredRange
+            truncated: false
         }
     });
 }
@@ -617,7 +612,7 @@ function searchSpreadsheet(payload = {}, args = {}) {
         ...matches.map((match) =>
             `${match.sheet}!${match.address}: value=${JSON.stringify(match.value)} text=${JSON.stringify(match.text)} fill=${match.fill || '-'} formula=${match.formula || '-'}`
         ),
-        `truncated=${matches.length >= limit}; reasoning_ready=true`
+        `truncated=${matches.length >= limit}`
     ];
     return createTextResult(lines.join('\n'), {
         status: 'completed',
@@ -627,8 +622,7 @@ function searchSpreadsheet(payload = {}, args = {}) {
         query,
         matchCount: matches.length,
         matches,
-        truncated: matches.length >= limit,
-        reasoningReady: true
+        truncated: matches.length >= limit
     }, {
         matches,
         truncated: matches.length >= limit
@@ -683,7 +677,7 @@ function formatTextArtifactSummary(record = {}, textArtifact = {}) {
         `bytes=${record.payloadBytes || textArtifact.bytes || 0} chars=${text.length} lines=${lines.length}`,
         `encoding=${textArtifact.encoding || 'utf8'} type=${textArtifact.type || record.type || 'text'}`,
         'query_tools=artifact_query actions: text_schema, text_range, text_search, text_tail, runtime_schema, chunk_search',
-        'observation_contract=complete:true truncated:false reasoning_ready:true',
+        'result_status=complete:true truncated:false',
         '--- first lines ---',
         numberedLines(previewLines, 1),
         lines.length > previewLines.length ? `... ${lines.length - previewLines.length} more lines; use text_range/text_search/text_tail.` : ''
@@ -727,8 +721,7 @@ function textSchemaResult(record = {}, textArtifact = {}) {
         action: 'text_schema',
         artifactId: record.id,
         complete: true,
-        truncated: false,
-        reasoningReady: true
+        truncated: false
     });
 }
 
@@ -743,7 +736,7 @@ function textRangeResult(record = {}, textArtifact = {}, args = {}) {
         return createTextResult([
             `TEXT_ARTIFACT_RANGE artifactId=${record.id} offset=${offset} limit=${limit}`,
             `charsReturned=${slice.length} nextOffset=${nextOffset} hasMore=${nextOffset < text.length}`,
-            'observation_contract=complete:true truncated:false reasoning_ready:true',
+            'result_status=complete:true truncated:false',
             '--- text ---',
             slice
         ].join('\n'), {
@@ -757,8 +750,7 @@ function textRangeResult(record = {}, textArtifact = {}, args = {}) {
             nextOffset,
             hasMore: nextOffset < text.length,
             complete: true,
-            truncated: false,
-            reasoningReady: true
+            truncated: false
         }, { text: slice, offset, nextOffset, hasMore: nextOffset < text.length });
     }
     const lines = splitLines(text);
@@ -769,7 +761,7 @@ function textRangeResult(record = {}, textArtifact = {}, args = {}) {
     return createTextResult([
         `TEXT_ARTIFACT_RANGE artifactId=${record.id} lines=${startLine}-${endLine}/${lines.length}`,
         `hasMore=${endLine < lines.length}`,
-        'observation_contract=complete:true truncated:false reasoning_ready:true',
+        'result_status=complete:true truncated:false',
         '--- lines ---',
         numberedLines(selected, startLine)
     ].join('\n'), {
@@ -782,8 +774,7 @@ function textRangeResult(record = {}, textArtifact = {}, args = {}) {
         lineCount: lines.length,
         hasMore: endLine < lines.length,
         complete: true,
-        truncated: false,
-        reasoningReady: true
+        truncated: false
     }, { lines: selected, startLine, endLine, hasMore: endLine < lines.length });
 }
 
@@ -860,8 +851,7 @@ function searchTextLines({ record = {}, text = '', args = {}, action = 'text_sea
         matchCount: matches.length,
         matches,
         truncated: matches.length >= limit,
-        complete: true,
-        reasoningReady: true
+        complete: true
     }, { matches });
 }
 
@@ -872,7 +862,7 @@ function textTailResult(record = {}, textArtifact = {}, args = {}) {
         const slice = text.slice(-chars);
         return createTextResult([
             `TEXT_ARTIFACT_TAIL artifactId=${record.id} chars=${slice.length}/${text.length}`,
-            'observation_contract=complete:true truncated:false reasoning_ready:true',
+            'result_status=complete:true truncated:false',
             '--- tail ---',
             slice
         ].join('\n'), {
@@ -882,8 +872,7 @@ function textTailResult(record = {}, textArtifact = {}, args = {}) {
             artifactId: record.id,
             charsReturned: slice.length,
             complete: true,
-            truncated: false,
-            reasoningReady: true
+            truncated: false
         }, { text: slice });
     }
     const allLines = splitLines(text);
@@ -892,7 +881,7 @@ function textTailResult(record = {}, textArtifact = {}, args = {}) {
     const selected = allLines.slice(startLine - 1);
     return createTextResult([
         `TEXT_ARTIFACT_TAIL artifactId=${record.id} lines=${startLine}-${allLines.length}/${allLines.length}`,
-        'observation_contract=complete:true truncated:false reasoning_ready:true',
+        'result_status=complete:true truncated:false',
         '--- tail lines ---',
         numberedLines(selected, startLine)
     ].join('\n'), {
@@ -903,8 +892,7 @@ function textTailResult(record = {}, textArtifact = {}, args = {}) {
         startLine,
         endLine: allLines.length,
         complete: true,
-        truncated: false,
-        reasoningReady: true
+        truncated: false
     }, { lines: selected, startLine, endLine: allLines.length });
 }
 
@@ -920,7 +908,7 @@ function formatDocumentArtifactSummary(record = {}, documentArtifact = {}) {
         `format=${documentArtifact.format || record.type || 'document'} parser=${documentArtifact.parser || 'unknown'}`,
         `pages=${pages.length} sections=${sections.length} chars=${text.length} lines=${splitLines(text).length}`,
         'query_tools=artifact_query actions: document_schema, document_search, document_page, document_section, runtime_schema, chunk_search',
-        'observation_contract=complete:true truncated:false reasoning_ready:true',
+        'result_status=complete:true truncated:false',
         '--- preview ---',
         preview.text
     ].filter(Boolean).join('\n');
@@ -963,8 +951,7 @@ function documentSchemaResult(record = {}, documentArtifact = {}) {
         action: 'document_schema',
         artifactId: record.id,
         complete: true,
-        truncated: false,
-        reasoningReady: true
+        truncated: false
     });
 }
 
@@ -1028,8 +1015,7 @@ function documentSearchResult(record = {}, documentArtifact = {}, args = {}) {
         matchCount: matches.length,
         matches,
         truncated: matches.length >= limit,
-        complete: true,
-        reasoningReady: true
+        complete: true
     }, { matches });
 }
 
@@ -1047,7 +1033,7 @@ function documentPageResult(record = {}, documentArtifact = {}, args = {}) {
     }
     return createTextResult([
         `DOCUMENT_ARTIFACT_PAGE artifactId=${record.id} page=${pageNumber}`,
-        'observation_contract=complete:true truncated:false reasoning_ready:true',
+        'result_status=complete:true truncated:false',
         '--- page text ---',
         page.text || ''
     ].join('\n'), {
@@ -1058,8 +1044,7 @@ function documentPageResult(record = {}, documentArtifact = {}, args = {}) {
         page: pageNumber,
         chars: String(page.text || '').length,
         complete: true,
-        truncated: false,
-        reasoningReady: true
+        truncated: false
     }, { page });
 }
 
@@ -1092,7 +1077,7 @@ function documentSectionResult(record = {}, documentArtifact = {}, args = {}) {
     }
     return createTextResult([
         `DOCUMENT_ARTIFACT_SECTION artifactId=${record.id} index=${section.index ?? sections.indexOf(section)} title=${JSON.stringify(section.title || '')}`,
-        'observation_contract=complete:true truncated:false reasoning_ready:true',
+        'result_status=complete:true truncated:false',
         '--- section text ---',
         section.text || ''
     ].join('\n'), {
@@ -1104,8 +1089,7 @@ function documentSectionResult(record = {}, documentArtifact = {}, args = {}) {
         title: section.title || '',
         chars: String(section.text || '').length,
         complete: true,
-        truncated: false,
-        reasoningReady: true
+        truncated: false
     }, { section });
 }
 
@@ -1159,7 +1143,7 @@ function profileSpreadsheetArtifact(record = {}, payload = {}, args = {}) {
         ...profiles.map((profile) =>
             `Sheet "${profile.sheet}": range=${profile.inspectedRange} rows=${profile.rows} cols=${profile.columns} nonEmpty=${profile.nonEmptyCells} formulas=${profile.formulas} merged=${profile.mergedRanges} fills=${profile.fillColors.map((fill) => `${fill.rgb}:${fill.count}`).join(', ') || '-'} complete=${profile.complete}`
         ),
-        'observation_contract=complete:true truncated:false reasoning_ready:true'
+        'result_status=complete:true truncated:false'
     ];
     return createTextResult(lines.join('\n'), {
         status: 'completed',
@@ -1168,11 +1152,9 @@ function profileSpreadsheetArtifact(record = {}, payload = {}, args = {}) {
         artifactId: record.id,
         complete: true,
         truncated: false,
-        reasoningReady: true,
         observationContract: {
             complete: true,
-            truncated: false,
-            reasoning_ready: true
+            truncated: false
         }
     }, {
         profiles
@@ -1441,7 +1423,7 @@ function computeSpreadsheetPath(record = {}, payload = {}, args = {}) {
         ? pathCells[extractionIndex]
         : null;
     const extractField = normalizeString(args.extractField || args.extract_field || args.returnField || args.return_field).toLowerCase();
-    const answerCandidate = extractedCell
+    const extractedValue = extractedCell
         ? (/address/.test(extractField)
             ? extractedCell.address
             : /value|display/.test(extractField)
@@ -1456,7 +1438,7 @@ function computeSpreadsheetPath(record = {}, payload = {}, args = {}) {
         zeroBasedPathIndex: extractionIndex,
         oneBasedPathIndex: extractionIndex + 1,
         extractField: extractField || 'cell_color_hex',
-        answerCandidate,
+        extractedValue,
         cell: extractedCell ? {
             address: extractedCell.address,
             row: extractedCell.row,
@@ -1475,9 +1457,9 @@ function computeSpreadsheetPath(record = {}, payload = {}, args = {}) {
             ? `path=${visiblePath.map((cell) => cell.address).join(' -> ')}${pathCells.length > visiblePath.length ? ` -> ... (${pathCells.length - visiblePath.length} more)` : ''}`
             : 'path=(none)',
         extraction ? `turn_extraction=turn:${stepToExtract || ''} stepSize:${stepSize || ''} pathIndex:${extractionIndex} cell:${extractedCell?.address || '(out_of_range)'} fill:${extractedCell?.fill || ''} value:${extractedCell?.display || ''}` : '',
-        extraction?.answerCandidate ? `answer_candidate=${extraction.answerCandidate}` : '',
+        extraction?.extractedValue ? `extracted_value=${extraction.extractedValue}` : '',
         pathCells.length > visiblePath.length ? 'path_truncated=true; call artifact_compute with a larger maxPathCells or narrower range if the full path is needed.' : 'path_truncated=false',
-        'observation_contract=complete:true truncated:false reasoning_ready:true'
+        'result_status=complete:true truncated:false'
     ].filter(Boolean);
     const result = {
         pathFound,
@@ -1501,7 +1483,6 @@ function computeSpreadsheetPath(record = {}, payload = {}, args = {}) {
         range: bounds.range,
         complete: true,
         truncated: false,
-        reasoningReady: true,
         result
     }, result);
 }
@@ -1533,8 +1514,8 @@ class AILISContextArtifactStore {
         return sorted;
     }
 
-    async pinEvidence(record = {}, evidence = null) {
-        if (!record?.id || !evidence?.evidenceId) {
+    async pinCoverage(record = {}, coverageEntry = null) {
+        if (!record?.id || !coverageEntry?.coverageId) {
             return null;
         }
         const artifacts = await this.readIndex();
@@ -1544,17 +1525,17 @@ class AILISContextArtifactStore {
                 return entry;
             }
             const metadata = entry.metadata && typeof entry.metadata === 'object' ? entry.metadata : {};
-            const existing = Array.isArray(metadata.pinnedEvidence) ? metadata.pinnedEvidence : [];
+            const existing = Array.isArray(metadata.pinnedCoverage) ? metadata.pinnedCoverage : [];
             const merged = [
-                evidence,
-                ...existing.filter((item) => item?.evidenceId !== evidence.evidenceId)
+                coverageEntry,
+                ...existing.filter((item) => item?.coverageId !== coverageEntry.coverageId)
             ].slice(0, 120);
-            pinned = evidence;
+            pinned = coverageEntry;
             return {
                 ...entry,
                 metadata: {
                     ...metadata,
-                    pinnedEvidence: merged
+                    pinnedCoverage: merged
                 }
             };
         });
@@ -1562,59 +1543,58 @@ class AILISContextArtifactStore {
             return null;
         }
         await this.writeIndex(next);
-        this.emitGatewayEvent('context_artifact.evidence_pinned', {
-            artifactId: evidence.artifactId,
-            evidenceId: evidence.evidenceId,
+        this.emitGatewayEvent('context_artifact.coverage_cached', {
+            artifactId: coverageEntry.artifactId,
+            coverageId: coverageEntry.coverageId,
             runId: record.runId,
             sessionId: record.sessionId,
-            action: evidence.action,
-            sheet: evidence.sheet,
-            range: evidence.range,
-            complete: evidence.complete,
-            truncated: evidence.truncated,
-            reasoningReady: evidence.reasoningReady
+            action: coverageEntry.action,
+            sheet: coverageEntry.sheet,
+            range: coverageEntry.range,
+            complete: coverageEntry.complete,
+            truncated: coverageEntry.truncated
         });
         return pinned;
     }
 
-    async attachPinnedEvidence(record = {}, result = {}) {
+    async attachPinnedCoverage(record = {}, result = {}) {
         const details = result?.details && typeof result.details === 'object' ? result.details : {};
-        const evidence = createPinnedEvidence(record, details);
-        const coveredByEvidence = findCoveringEvidence(record, details.coverage, evidence?.evidenceId || '');
-        if (coveredByEvidence) {
+        const coverageEntry = createPinnedCoverage(record, details);
+        const coveredByCache = findCoveringCache(record, details.coverage, coverageEntry?.coverageId || '');
+        if (coveredByCache) {
             result.details = {
                 ...details,
-                coveredByEvidence
+                coveredByCache
             };
             if (Array.isArray(result.content) && result.content[0]?.type === 'text') {
                 result.content[0].text = [
                     result.content[0].text,
-                    `covered_by_pinned_evidence=${coveredByEvidence.evidenceId}; coveredRange=${coveredByEvidence.range}; complete=true; truncated=false; reasoning_ready=true`
+                    `covered_by_cache=${coveredByCache.coverageId}; coveredRange=${coveredByCache.range}; complete=true; truncated=false`
                 ].filter(Boolean).join('\n');
             }
         }
-        if (!evidence) {
+        if (!coverageEntry) {
             return result;
         }
         try {
-            const pinned = await this.pinEvidence(record, evidence);
+            const pinned = await this.pinCoverage(record, coverageEntry);
             if (pinned) {
                 result.details = {
                     ...(result.details || details),
-                    evidence: pinned,
-                    pinnedEvidenceId: pinned.evidenceId
+                    cachedCoverage: pinned,
+                    pinnedCoverageId: pinned.coverageId
                 };
                 if (result.structuredContent && typeof result.structuredContent === 'object') {
                     result.structuredContent = {
                         ...result.structuredContent,
-                        evidence: pinned
+                        cachedCoverage: pinned
                     };
                 }
             }
         } catch (error) {
             result.details = {
                 ...details,
-                evidencePinError: error?.message || String(error)
+                coverageCacheError: error?.message || String(error)
             };
         }
         return result;
@@ -1780,8 +1760,7 @@ class AILISContextArtifactStore {
             },
             observation_contract: {
                 complete: 'query-scoped completeness',
-                truncated: 'true only when this query preview was bounded',
-                reasoning_ready: 'true when returned evidence is ready for final reasoning'
+                truncated: 'true only when this query preview was bounded'
             }
         }, null, 2), {
             status: 'completed',
@@ -1793,7 +1772,7 @@ class AILISContextArtifactStore {
     computeSchemaResult() {
         return createTextResult(JSON.stringify({
             tool: CONTEXT_ARTIFACT_COMPUTE_TOOL_ID,
-            purpose: 'Run deterministic data-worker computations on managed artifacts and return compact evidence instead of raw payloads.',
+            purpose: 'Run deterministic data-worker computations on managed artifacts and return compact results instead of raw payloads.',
             actions: ['schema', 'profile', 'spreadsheet_profile', 'find_path', 'spreadsheet_find_path'],
             args: {
                 artifactId: 'required for profile/find_path',
@@ -1812,8 +1791,7 @@ class AILISContextArtifactStore {
             },
             observation_contract: {
                 complete: 'true when the requested compute was fully evaluated',
-                truncated: 'false for compute evidence; long paths may have pathTruncated while compute remains complete',
-                reasoning_ready: 'true when the compact compute result can be used for answer reasoning'
+                truncated: 'false for compute results; long paths may have pathTruncated while compute remains complete'
             }
         }, null, 2), {
             status: 'completed',
@@ -1880,18 +1858,6 @@ class AILISContextArtifactStore {
         }
         const record = await this.getRecord(artifactId);
         if (!record) {
-            if (/^artifact-[a-f0-9]{8,}$/i.test(artifactId)) {
-                return createErrorResult(
-                    'artifact_not_found',
-                    `No managed context artifact found for ${artifactId}. This looks like an evidence_ref from evidence_artifacts, not a queryable context artifactId.`,
-                    {
-                        action,
-                        artifactId,
-                        evidenceRefMisuse: true,
-                        recoveryHint: 'Use evidence_ref ids only in final_answer.evidence_refs. For more document/table content, use the prior tool observation text, rerun the parser, or call artifact_query only with a context artifact id returned as details.artifactId/contextArtifact.id.'
-                    }
-                );
-            }
             return createErrorResult('artifact_not_found', `No managed context artifact found for ${artifactId}.`, {
                 action,
                 artifactId
@@ -1914,8 +1880,7 @@ class AILISContextArtifactStore {
                 action: 'runtime_schema',
                 artifactId: record.id,
                 complete: true,
-                truncated: false,
-                reasoningReady: true
+                truncated: false
             }, schema);
         }
         if (action === 'chunk_search' || action === 'runtime_search' || action === 'hybrid_search') {
@@ -1929,8 +1894,7 @@ class AILISContextArtifactStore {
                 matchCount: searchResult.matches.length,
                 totalMatches: searchResult.total,
                 truncated: searchResult.truncated,
-                complete: true,
-                reasoningReady: true
+                complete: true
             }, searchResult);
         }
 
@@ -2013,8 +1977,7 @@ class AILISContextArtifactStore {
                 action: 'summary',
                 artifactId: record.id,
                 truncated: preview.truncated,
-                complete: true,
-                reasoningReady: true
+                complete: true
             });
         }
         if (action === 'text_schema') {
@@ -2053,8 +2016,7 @@ class AILISContextArtifactStore {
                 action: 'summary',
                 artifactId: record.id,
                 truncated: preview.truncated,
-                complete: true,
-                reasoningReady: true
+                complete: true
             });
         }
         if (action === 'document_schema') {
@@ -2088,8 +2050,7 @@ class AILISContextArtifactStore {
                 artifactKind: record.kind,
                 truncated: preview.truncated,
                 originalTextChars: preview.originalChars,
-                complete: true,
-                reasoningReady: true
+                complete: true
             }, {
                 artifact: record,
                 workbook: payload.workbook,
@@ -2109,7 +2070,7 @@ class AILISContextArtifactStore {
             const preview = truncateText(raw, normalizeNumber(args.maxChars || args.max_chars, DEFAULT_MAX_TEXT_CHARS, 1000, 30000));
             const coverage = buildSpreadsheetGridCoverage(sheet, args);
             const truncated = preview.truncated || coverage.truncated || /truncated=true/.test(raw);
-            return this.attachPinnedEvidence(record, createTextResult(preview.text, {
+            return this.attachPinnedCoverage(record, createTextResult(preview.text, {
                 status: 'completed',
                 ok: true,
                 action,
@@ -2118,16 +2079,14 @@ class AILISContextArtifactStore {
                 coverage,
                 truncated,
                 complete: !truncated,
-                reasoningReady: !truncated,
                 observationContract: {
                     complete: !truncated,
-                    truncated,
-                    reasoning_ready: !truncated
+                    truncated
                 }
             }));
         }
         if (action === 'range') {
-            return this.attachPinnedEvidence(record, formatSpreadsheetRange(sheet, args));
+            return this.attachPinnedCoverage(record, formatSpreadsheetRange(sheet, args));
         }
         if (action === 'search') {
             return searchSpreadsheet(payload, args);
@@ -2152,8 +2111,7 @@ class AILISContextArtifactStore {
                 queryHints: record.queryHints,
                 observation_contract: {
                     complete: true,
-                    truncated: false,
-                    reasoning_ready: true
+                    truncated: false
                 }
             }, null, 2);
             const preview = truncateText(raw, normalizeNumber(args.maxChars || args.max_chars, DEFAULT_MAX_TEXT_CHARS, 1000, 30000));
@@ -2163,8 +2121,7 @@ class AILISContextArtifactStore {
                 action: 'summary',
                 artifactId: record.id,
                 truncated: preview.truncated,
-                complete: true,
-                reasoningReady: true
+                complete: true
             });
         }
         if (action === 'search') {
@@ -2190,8 +2147,7 @@ class AILISContextArtifactStore {
                 query,
                 matchCount: matches.length,
                 matches,
-                truncated: matches.length >= limit,
-                reasoning_ready: true
+                truncated: matches.length >= limit
             }, null, 2), {
                 status: 'completed',
                 ok: true,
@@ -2199,8 +2155,7 @@ class AILISContextArtifactStore {
                 artifactId: record.id,
                 matchCount: matches.length,
                 matches,
-                truncated: matches.length >= limit,
-                reasoningReady: true
+                truncated: matches.length >= limit
             }, { matches });
         }
         return createErrorResult('unsupported_action', `Unsupported artifact_query action for ${record.kind}: ${action}.`, {

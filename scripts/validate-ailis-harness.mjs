@@ -8,10 +8,6 @@ const {
     getToolContractPromptText
 } = require('../electron/ailis-tool-contracts.cjs');
 const { listAILISSkills } = require('../electron/ailis-skills.cjs');
-const {
-    createEvidenceArtifact,
-    validateEvidenceArtifact
-} = require('../electron/ailis-evidence-artifacts.cjs');
 const { buildObservationLedgerPromptObject } = require('../electron/ailis-turn-items.cjs');
 
 const REQUIRED_TOOLS = [
@@ -74,21 +70,6 @@ for (const skill of skills) {
     }
 }
 
-const sampleArtifact = createEvidenceArtifact({
-    taskType: 'github_workflow',
-    evidenceId: 'repo_state',
-    observation: {
-        id: 'validate-git-status',
-        tool: 'code',
-        action: 'git_status',
-        title: 'validate repo state',
-        status: 'completed',
-        ok: true,
-        preview: '## main...origin/main\n M package.json'
-    }
-});
-assert.equal(validateEvidenceArtifact(sampleArtifact).ok, true, 'typed evidence artifact validation failed');
-
 const turnItems = buildObservationLedgerPromptObject({
     stepResults: [
         {
@@ -113,6 +94,5 @@ console.log(JSON.stringify({
     contracts: contracts.length,
     skills: skills.length,
     checkedTools: REQUIRED_TOOLS.length,
-    evidenceArtifacts: true,
     turnItems: turnItems.items.length
 }, null, 2));

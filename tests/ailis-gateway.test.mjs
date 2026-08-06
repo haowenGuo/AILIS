@@ -527,34 +527,7 @@ test('AILIS exposes Codex-style web_run and preserves refs across search and ope
         assert.equal(bridgeRequests.at(-1).args.matchType, 'prefix');
         assert.match(archiveResponse.result.content[0].text, /Country: gt/);
 
-        const anchoredSelectorResponse = await gateway.callTool({
-            tool: 'web_run',
-            args: {
-                search_query: [{
-                    q: 'Cornell LII Rule 601 last amendment deleted word'
-                }]
-            },
-            context: {
-                workspace: workspaceRoot,
-                runId: 'run-anchored-selector',
-                sessionId: 'session-anchored-selector',
-                iteration: 0,
-                exactAnswerMode: true,
-                currentUserMessage: 'Under the rules index, what was deleted from the first rule in the article with the most exact title matches?'
-            }
-        });
-        assert.equal(anchoredSelectorResponse.ok, true, JSON.stringify(anchoredSelectorResponse));
-        assert.equal(
-            anchoredSelectorResponse.result.structuredContent.search.queryAssumptionAudit.status,
-            'unverified_intermediate_anchor_advisory'
-        );
-        assert.deepEqual(
-            anchoredSelectorResponse.result.structuredContent.search.queryAssumptionAudit.queryGuidance.remove_unverified_anchors,
-            ['Rule 601']
-        );
-        assert.match(anchoredSelectorResponse.result.content[0].text, /search still ran/i);
-
-        const selectorComparisonResponse = await gateway.callTool({
+        const neutralSearchResponse = await gateway.callTool({
             tool: 'web_run',
             args: {
                 search_query: [{ q: 'nested selector comparison fixture' }],
@@ -562,337 +535,41 @@ test('AILIS exposes Codex-style web_run and preserves refs across search and ope
             },
             context: {
                 workspace: workspaceRoot,
-                runId: 'run-selector-comparison',
-                sessionId: 'session-selector-comparison',
-                iteration: 1,
-                exactAnswerMode: true,
-                currentUserMessage: 'Which article has "witnesses" in the most titles?'
-            }
-        });
-        assert.equal(selectorComparisonResponse.ok, true, JSON.stringify(selectorComparisonResponse));
-        const selectionAudit = selectorComparisonResponse.result.structuredContent.search.selectionAudit;
-        assert.equal(selectionAudit.status, 'incomplete_candidate_set');
-        assert.equal(selectionAudit.quoted_term, 'witnesses');
-        assert.equal(selectionAudit.result_ranking_is_selection_evidence, false);
-        assert.equal(selectionAudit.candidate_set_coverage_sufficient, false);
-        assert.equal(
-            selectorComparisonResponse.result.structuredContent.search.queryGuidance.strategy,
-            'compare_visible_parents_and_expand_candidate_boundary'
-        );
-        assert.deepEqual(
-            selectionAudit.candidates.map((candidate) => [
-                candidate.ref_id,
-                candidate.visible_snippet_occurrences
-            ]),
-            [
-                ['turn1search1', 3],
-                ['turn1search0', 2]
-            ]
-        );
-        assert.match(selectorComparisonResponse.result.content[0].text, /search ranking does not answer/i);
-        assert.match(selectorComparisonResponse.result.content[0].text, /not final per-group title counts/i);
-        assert.deepEqual(
-            selectorComparisonResponse.result.structuredContent.search.suggestedNextCalls[0].args,
-            { open: [{ ref_id: 'turn1search1' }] }
-        );
-
-        const partialSelectorResponse = await gateway.callTool({
-            tool: 'web_run',
-            args: {
-                search_query: [{ q: 'nested selector partial fixture' }],
-                response_length: 'medium'
-            },
-            context: {
-                workspace: workspaceRoot,
-                runId: 'run-selector-partial',
-                sessionId: 'session-selector-partial',
-                iteration: 2,
-                exactAnswerMode: true,
-                currentUserMessage: 'Which article has "witnesses" in the most titles?'
-            }
-        });
-        assert.equal(partialSelectorResponse.ok, true, JSON.stringify(partialSelectorResponse));
-        const partialAudit = partialSelectorResponse.result.structuredContent.search.selectionAudit;
-        assert.equal(partialAudit.status, 'incomplete_candidate_set');
-        assert.equal(partialAudit.candidate_set_coverage_sufficient, false);
-        assert.deepEqual(partialAudit.parent_index_candidates, ['turn2search1']);
-        assert.equal(
-            partialSelectorResponse.result.structuredContent.search.queryGuidance.strategy,
-            'nearest_url_ancestor_first'
-        );
-        assert.deepEqual(
-            partialSelectorResponse.result.structuredContent.search.suggestedNextCalls[0].args,
-            { open: [{ ref_id: 'turn2search1' }] }
-        );
-        assert.match(partialSelectorResponse.result.content[0].text, /open the nearest parent index/i);
-
-        const partialSelectionState = gateway.getWebRunSession({ runId: 'run-selector-partial' });
-        partialSelectionState.selectionProtocol.ranges = [[1, 115]];
-        partialSelectionState.selectionProtocol.totalLines = 153;
-
-        const repeatedDiscoveryResponse = await gateway.callTool({
-            tool: 'web_run',
-            args: {
-                search_query: [{ q: 'nested selector comparison fixture repeated discovery' }],
-                response_length: 'medium'
-            },
-            context: {
-                workspace: workspaceRoot,
-                runId: 'run-selector-partial',
-                sessionId: 'session-selector-partial',
-                iteration: 3,
-                exactAnswerMode: true,
-                currentUserMessage: 'Which article has "witnesses" in the most titles?'
-            }
-        });
-        assert.equal(repeatedDiscoveryResponse.ok, true, JSON.stringify(repeatedDiscoveryResponse));
-        assert.equal(repeatedDiscoveryResponse.result.structuredContent.search.selectionAudit, undefined);
-        assert.equal(
-            repeatedDiscoveryResponse.result.structuredContent.search.selectionProtocol.parent_index_ref,
-            'turn2search1'
-        );
-        assert.deepEqual(
-            repeatedDiscoveryResponse.result.structuredContent.search.suggestedNextCalls[0].args,
-            { open: [{ ref_id: 'turn2search1', lineno: 116 }] }
-        );
-        assert.match(repeatedDiscoveryResponse.result.content[0].text, /cannot replace that pending evidence action/i);
-        partialSelectionState.selectionProtocol.ranges = [];
-        partialSelectionState.selectionProtocol.totalLines = 0;
-
-        const indexOnlySelectorResponse = await gateway.callTool({
-            tool: 'web_run',
-            args: {
-                search_query: [{ q: 'nested selector index only fixture' }],
-                response_length: 'medium'
-            },
-            context: {
-                workspace: workspaceRoot,
-                runId: 'run-selector-index-only',
-                sessionId: 'session-selector-index-only',
-                iteration: 2,
-                exactAnswerMode: true,
-                currentUserMessage: 'Which article has "witnesses" in the most titles?'
-            }
-        });
-        assert.equal(indexOnlySelectorResponse.ok, true, JSON.stringify(indexOnlySelectorResponse));
-        const indexOnlyAudit = indexOnlySelectorResponse.result.structuredContent.search.selectionAudit;
-        assert.equal(indexOnlyAudit.status, 'parent_index_required');
-        assert.equal(indexOnlyAudit.parent_index_candidates.length, 1);
-        assert.deepEqual(
-            indexOnlySelectorResponse.result.structuredContent.search.suggestedNextCalls[0].args,
-            { open: [{ ref_id: indexOnlyAudit.parent_index_candidates[0] }] }
-        );
-        assert.match(indexOnlySelectorResponse.result.content[0].text, /open the nearest parent index/i);
-
-        const refinableSelectorResponse = await gateway.callTool({
-            tool: 'web_run',
-            args: {
-                search_query: [{ q: 'nested selector refinable collection fixture' }],
-                response_length: 'medium'
-            },
-            context: {
-                workspace: workspaceRoot,
-                runId: 'run-selector-refinement',
-                sessionId: 'session-selector-refinement',
+                runId: 'run-neutral-search',
+                sessionId: 'session-neutral-search',
                 iteration: 0,
                 exactAnswerMode: true,
                 currentUserMessage: 'Which article has "witnesses" in the most titles?'
             }
         });
-        assert.equal(refinableSelectorResponse.ok, true, JSON.stringify(refinableSelectorResponse));
-        assert.equal(
-            refinableSelectorResponse.result.structuredContent.search.selectionAudit.parent_index_candidates.length,
-            1
-        );
+        assert.equal(neutralSearchResponse.ok, true, JSON.stringify(neutralSearchResponse));
+        const neutralSearch = neutralSearchResponse.result.structuredContent.search;
+        assert.ok(Array.isArray(neutralSearch.results));
+        assert.equal(Object.hasOwn(neutralSearch, 'selectionAudit'), false);
+        assert.equal(Object.hasOwn(neutralSearch, 'selectionProtocol'), false);
+        assert.equal(Object.hasOwn(neutralSearch, 'queryAssumptionAudit'), false);
+        assert.equal(Object.hasOwn(neutralSearch, 'queryGuidance'), false);
+        assert.equal(Object.hasOwn(neutralSearch, 'suggestedNextCalls'), false);
 
-        const refinedParentIndexResponse = await gateway.callTool({
+        const neutralOpenResponse = await gateway.callTool({
             tool: 'web_run',
             args: {
                 open: [{ ref_id: 'https://example.test/collections/evidence', lineno: 1 }]
             },
             context: {
                 workspace: workspaceRoot,
-                runId: 'run-selector-refinement',
-                sessionId: 'session-selector-refinement',
+                runId: 'run-neutral-open',
+                sessionId: 'session-neutral-open',
                 iteration: 1,
                 exactAnswerMode: true,
                 currentUserMessage: 'Which article has "witnesses" in the most titles?'
             }
         });
-        assert.equal(refinedParentIndexResponse.ok, true, JSON.stringify(refinedParentIndexResponse));
-        assert.equal(refinedParentIndexResponse.result.structuredContent.selectionDependencyAdvisory, undefined);
-        assert.equal(
-            refinedParentIndexResponse.result.structuredContent.selectionProtocol.boundary_complete,
-            true
-        );
-        assert.equal(
-            refinedParentIndexResponse.result.structuredContent.selectionProtocol.winning_group,
-            'ARTICLE VII'
-        );
-        assert.deepEqual(
-            refinedParentIndexResponse.result.structuredContent.selectionProtocol.exact_title_match_counts
-                .map((group) => [group.group, group.count]),
-            [
-                ['ARTICLE VII', 2],
-                ['ARTICLE VI', 1],
-                ['ARTICLE I', 0]
-            ]
-        );
-
-        const terminalFactSearchResponse = await gateway.callTool({
-            tool: 'web_run',
-            args: {
-                search_query: [{ q: 'nested selector comparison fixture' }],
-                response_length: 'medium'
-            },
-            context: {
-                workspace: workspaceRoot,
-                runId: 'run-selector-refinement',
-                sessionId: 'session-selector-refinement',
-                iteration: 2,
-                exactAnswerMode: true,
-                currentUserMessage: 'Which article has "witnesses" in the most titles?'
-            }
-        });
-        assert.equal(terminalFactSearchResponse.ok, true, JSON.stringify(terminalFactSearchResponse));
-        assert.equal(terminalFactSearchResponse.result.structuredContent.search.selectionAudit, undefined);
-
-        const prematureChildResponse = await gateway.callTool({
-            tool: 'web_run',
-            args: {
-                open: [{ ref_id: 'turn2search0', lineno: 1 }]
-            },
-            context: {
-                workspace: workspaceRoot,
-                runId: 'run-selector-partial',
-                sessionId: 'session-selector-partial',
-                iteration: 4,
-                exactAnswerMode: true,
-                currentUserMessage: 'Which article has "witnesses" in the most titles?'
-            }
-        });
-        assert.equal(prematureChildResponse.ok, true, JSON.stringify(prematureChildResponse));
-        assert.equal(
-            prematureChildResponse.result.structuredContent.selectionDependencyAdvisory.required_parent_index_ref,
-            'turn2search1'
-        );
-        assert.match(prematureChildResponse.result.content[0].text, /opened anyway/i);
-
-        const completedParentIndexResponse = await gateway.callTool({
-            tool: 'web_run',
-            args: {
-                open: [{ ref_id: 'turn2search1', lineno: 1 }]
-            },
-            context: {
-                workspace: workspaceRoot,
-                runId: 'run-selector-partial',
-                sessionId: 'session-selector-partial',
-                iteration: 5,
-                exactAnswerMode: true,
-                currentUserMessage: 'Which article has "witnesses" in the most titles?'
-            }
-        });
-        assert.equal(completedParentIndexResponse.ok, true, JSON.stringify(completedParentIndexResponse));
-        assert.equal(
-            completedParentIndexResponse.result.structuredContent.selectionProtocol.boundary_complete,
-            true
-        );
-        assert.deepEqual(
-            completedParentIndexResponse.result.structuredContent.selectionProtocol.exact_title_match_counts
-                .map((group) => [group.group, group.count]),
-            [
-                ['ARTICLE VII', 2],
-                ['ARTICLE VI', 1],
-                ['ARTICLE I', 0]
-            ]
-        );
-        assert.equal(
-            completedParentIndexResponse.result.structuredContent.selectionProtocol.winning_group,
-            'ARTICLE VII'
-        );
-        assert.match(
-            completedParentIndexResponse.result.content[0].text,
-            /Unique winning group: ARTICLE VII/
-        );
-
-        const allowedChildResponse = await gateway.callTool({
-            tool: 'web_run',
-            args: {
-                open: [{ ref_id: 'turn2search0', lineno: 1 }]
-            },
-            context: {
-                workspace: workspaceRoot,
-                runId: 'run-selector-partial',
-                sessionId: 'session-selector-partial',
-                iteration: 6,
-                exactAnswerMode: true,
-                currentUserMessage: 'Which article has "witnesses" in the most titles?'
-            }
-        });
-        assert.equal(allowedChildResponse.ok, true, JSON.stringify(allowedChildResponse));
-
-        const parentIndexAfterChildResponse = await gateway.callTool({
-            tool: 'web_run',
-            args: {
-                open: [{ ref_id: 'turn2search1', lineno: 1 }]
-            },
-            context: {
-                workspace: workspaceRoot,
-                runId: 'run-selector-partial',
-                sessionId: 'session-selector-partial',
-                iteration: 6,
-                exactAnswerMode: true,
-                currentUserMessage: 'Which article has "witnesses" in the most titles?'
-            }
-        });
-        assert.equal(parentIndexAfterChildResponse.ok, true, JSON.stringify(parentIndexAfterChildResponse));
-        assert.deepEqual(
-            parentIndexAfterChildResponse.result.structuredContent.selectionProtocol.exact_title_match_counts
-                .map((group) => [group.group, group.count]),
-            [
-                ['ARTICLE VII', 2],
-                ['ARTICLE VI', 1],
-                ['ARTICLE I', 0]
-            ]
-        );
-        assert.equal(
-            parentIndexAfterChildResponse.result.structuredContent.selectionProtocol.winning_group,
-            'ARTICLE VII'
-        );
-
-        const pagedSelectorResponse = await gateway.callTool({
-            tool: 'web_run',
-            args: {
-                open: [{ ref_id: 'https://example.test/paged-view', lineno: 58 }]
-            },
-            context: {
-                workspace: workspaceRoot,
-                runId: 'run-selector-paged',
-                sessionId: 'session-selector-paged',
-                iteration: 3,
-                exactAnswerMode: true,
-                currentUserMessage: 'Which article has "witnesses" in the most titles?'
-            }
-        });
-        assert.equal(pagedSelectorResponse.ok, true, JSON.stringify(pagedSelectorResponse));
-        assert.deepEqual(
-            pagedSelectorResponse.result.structuredContent.suggestedNextCalls[0],
-            {
-                tool: 'web_run',
-                args: {
-                    open: [{
-                        ref_id: 'turn3view0',
-                        lineno: 106
-                    }]
-                },
-                reason: 'Continue the same parent index at the next unread line before selecting a child; the current viewport does not establish the candidate-set boundary.'
-            }
-        );
-        assert.match(pagedSelectorResponse.result.content[0].text, /Next recommended call/);
-        assert.match(
-            pagedSelectorResponse.result.content[0].text,
-            /web_run \{"open":\[\{"ref_id":"turn3view0","lineno":106\}\]\}/
-        );
+        assert.equal(neutralOpenResponse.ok, true, JSON.stringify(neutralOpenResponse));
+        assert.match(neutralOpenResponse.result.content[0].text, /opened source/i);
+        assert.equal(Object.hasOwn(neutralOpenResponse.result.structuredContent, 'selectionProtocol'), false);
+        assert.equal(Object.hasOwn(neutralOpenResponse.result.structuredContent, 'selectionDependencyAdvisory'), false);
+        assert.equal(Object.hasOwn(neutralOpenResponse.result.structuredContent, 'suggestedNextCalls'), false);
 
         const noResultsResponse = await gateway.callTool({
             tool: 'web_run',
@@ -908,15 +585,9 @@ test('AILIS exposes Codex-style web_run and preserves refs across search and ope
         });
         assert.equal(noResultsResponse.ok, true, JSON.stringify(noResultsResponse));
         assert.equal(noResultsResponse.result.structuredContent.search.status, 'empty');
-        assert.match(noResultsResponse.result.content[0].text, /omit optional recency\/domain filters/i);
-        assert.deepEqual(noResultsResponse.result.structuredContent.search.suggestedNextCalls, [{
-            tool: 'web_run',
-            args: {
-                search_query: [{ q: 'no results fixture' }],
-                response_length: 'medium'
-            },
-            reason: 'Retry the same model-authored queries without optional recency or domain transport filters.'
-        }]);
+        assert.match(noResultsResponse.result.content[0].text, /No search results/i);
+        assert.equal(noResultsResponse.result.structuredContent.search.suggestedNextCalls, undefined);
+        assert.equal(noResultsResponse.result.structuredContent.search.queryGuidance, undefined);
         const bloatedNoResultsResponse = await gateway.callTool({
             tool: 'web_run',
             args: {
@@ -929,15 +600,7 @@ test('AILIS exposes Codex-style web_run and preserves refs across search and ope
         });
         assert.equal(bloatedNoResultsResponse.ok, true, JSON.stringify(bloatedNoResultsResponse));
         assert.equal(bloatedNoResultsResponse.result.structuredContent.search.suggestedNextCalls, undefined);
-        assert.equal(
-            bloatedNoResultsResponse.result.structuredContent.search.queryGuidance.repeat_previous_query,
-            false
-        );
-        assert.equal(
-            bloatedNoResultsResponse.result.structuredContent.search.queryGuidance.strategy,
-            'fresh_concise_query'
-        );
-        assert.match(bloatedNoResultsResponse.result.content[0].text, /do not concatenate or repeat/i);
+        assert.equal(bloatedNoResultsResponse.result.structuredContent.search.queryGuidance, undefined);
         const broadNoResultsResponse = await gateway.callTool({
             tool: 'web_run',
             args: { search_query: [{ q: 'no results fixture' }] },
@@ -960,26 +623,8 @@ test('AILIS exposes Codex-style web_run and preserves refs across search and ope
             }
         });
         assert.equal(historicalNoResultsResponse.ok, true, JSON.stringify(historicalNoResultsResponse));
-        assert.equal(
-            historicalNoResultsResponse.result.structuredContent.search.queryGuidance.strategy,
-            'historical_archive'
-        );
-        assert.deepEqual(
-            historicalNoResultsResponse.result.structuredContent.search.suggestedNextCalls[0].args,
-            {
-                archive: [{
-                    url: 'https://base-search.net/Search/Results',
-                    mode: 'search',
-                    matchType: 'prefix',
-                    query: 'As of 2022, which country was listed in the public BASE database catalog record?'
-                }]
-            }
-        );
-        assert.match(historicalNoResultsResponse.result.content[0].text, /Next recommended call/);
-        assert.match(
-            historicalNoResultsResponse.result.content[0].text,
-            /web_run \{"archive":\[\{"url":"https:\/\/base-search\.net\/Search\/Results"/
-        );
+        assert.equal(historicalNoResultsResponse.result.structuredContent.search.queryGuidance, undefined);
+        assert.equal(historicalNoResultsResponse.result.structuredContent.search.suggestedNextCalls, undefined);
         const failedSearchResponse = await gateway.callTool({
             tool: 'web_run',
             args: { search_query: [{ q: 'bridge validation failure fixture', domains: ['example.test'] }] },
@@ -1010,10 +655,7 @@ test('AILIS exposes Codex-style web_run and preserves refs across search and ope
         ]);
         const results = searchResponse.result.structuredContent.search.results;
         assert.deepEqual(results.map((result) => result.ref_id), ['turn0search0', 'turn0search1']);
-        assert.equal(searchResponse.result.structuredContent.search.suggestedNextCalls[0].tool, 'web_run');
-        assert.deepEqual(searchResponse.result.structuredContent.search.suggestedNextCalls[0].args, {
-            open: [{ ref_id: 'turn0search0' }]
-        });
+        assert.equal(searchResponse.result.structuredContent.search.suggestedNextCalls, undefined);
         const partialStartedAt = Date.now();
         const partialSearchResponse = await gateway.executeWebRunSearch({
             search_query: [
@@ -1040,14 +682,8 @@ test('AILIS exposes Codex-style web_run and preserves refs across search and ope
             context: { workspace: workspaceRoot, runId: 'run-github', sessionId: 'session-github', iteration: 0 }
         });
         assert.equal(githubSearchResponse.ok, true, JSON.stringify(githubSearchResponse));
-        assert.equal(
-            githubSearchResponse.result.structuredContent.search.suggestedNextCalls[0].tool,
-            'github_repo_read'
-        );
-        assert.equal(
-            githubSearchResponse.result.__ailisSuggestedMcpTools[0].id,
-            'mcp__ailis_research__github_repo_read'
-        );
+        assert.equal(githubSearchResponse.result.structuredContent.search.suggestedNextCalls, undefined);
+        assert.equal(githubSearchResponse.result.__ailisSuggestedMcpTools, undefined);
 
         const evaluationSearchResponse = await gateway.callTool({
             tool: 'web_run',
@@ -1064,16 +700,8 @@ test('AILIS exposes Codex-style web_run and preserves refs across search and ope
         const evaluationSearch = evaluationSearchResponse.result.structuredContent.search;
         assert.equal(evaluationSearch.results.length, 1);
         assert.equal(evaluationSearch.results[0].url, 'https://clinicaltrials.gov/study/NCT03411733');
-        assert.equal(evaluationSearch.evaluationLeakAudit.excluded_count, 2);
-        assert.equal(evaluationSearch.suggestedNextCalls[0].tool, 'tool_search');
-        assert.equal(
-            evaluationSearch.suggestedNextCalls[0].args.query,
-            'What was the actual enrollment count of the clinical trial on H. pylori in acne vulgaris patients from Jan-May 2018 as listed on the NIH website?'
-        );
-        assert.match(
-            evaluationSearchResponse.result.content[0].text,
-            /labeled benchmark answers are not source evidence/i
-        );
+        assert.equal(evaluationSearch.evaluationLeakAudit, undefined);
+        assert.equal(evaluationSearch.suggestedNextCalls, undefined);
 
         const openResponse = await gateway.callTool({
             tool: 'web_run',
@@ -1439,7 +1067,9 @@ test('AILIS Gateway TaskAgent thread reuses parent LLM settings', async () => {
             sessionId: 'parent-session',
             sessionKey: 'parent-session',
             llmSettings,
-            approved: true
+            permissionProfile: 'read-only',
+            approvalPolicy: 'always',
+            approved: false
         }
     });
 
@@ -1454,6 +1084,14 @@ test('AILIS Gateway TaskAgent thread reuses parent LLM settings', async () => {
     assert.equal(Object.hasOwn(calls[0].context, 'maxAgentSteps'), false);
     assert.deepEqual(calls[0].llmSettings, llmSettings);
     assert.deepEqual(calls[0].context.llmSettings, llmSettings);
+    assert.equal(calls[0].context.taskAgentPermissionMode, 'unrestricted');
+    assert.equal(calls[0].context.permissionProfile, 'danger-full-access');
+    assert.equal(calls[0].context.approvalPolicy, 'never');
+    assert.equal(calls[0].context.confirmationPolicy, 'never');
+    assert.equal(calls[0].context.approved, true);
+    assert.equal(calls[0].context.autoConfirm, false);
+    assert.equal(calls[0].context.requireApprovalForMutations, false);
+    assert.equal(calls[0].context.allowSystemMutation, true);
 });
 
 test('AILIS Gateway exposes health, tools, guarded tool calls, and audit', async () => {
@@ -2316,7 +1954,7 @@ test('AILIS Gateway turns large text and parsed documents into queryable artifac
         assert.equal(readScannedPdf.body.ok, false);
         assert.equal(readScannedPdf.body.status, 'scanned_pdf_needs_ocr');
         assert.equal(readScannedPdf.body.result.details.documentParseCode, 'scanned_pdf_needs_ocr');
-        assert.equal(readScannedPdf.body.result.details.observationContract.needs_ocr, true);
+        assert.equal(Object.hasOwn(readScannedPdf.body.result.details.observationContract, 'reasoning_ready'), false);
         assert.equal(readScannedPdf.body.result.details.suggestedNext.tool, 'tool_search');
         assert.doesNotMatch(readScannedPdf.body.result.content[0].text, /DOCUMENT_ARTIFACT_CREATED/);
         assert.equal(readScannedPdf.body.result.details.artifactId, undefined);

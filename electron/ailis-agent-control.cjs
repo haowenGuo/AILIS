@@ -703,14 +703,6 @@ class AgentControl {
             null;
         const task_result = {
             status: normalize_string(handoff?.status || agent.status, 'completed'),
-            exact_answer: normalize_string(
-                handoff?.exactAnswer ||
-                handoff?.exact_answer ||
-                agent.result?.exactAnswerSubmission?.answer ||
-                agent.result?.exact_answer_submission?.answer ||
-                agent.result?.exactAnswer ||
-                agent.result?.exact_answer
-            ),
             final_answer: normalize_string(
                 handoff?.finalAnswer ||
                 agent.result?.finalAnswer ||
@@ -720,13 +712,7 @@ class AgentControl {
             source_refs: Array.isArray(handoff?.sourceRefs)
                 ? clone_json(handoff.sourceRefs)
                 : [],
-            trace_ref: normalize_string(handoff?.traceRef || agent.thread_id),
-            evidence_boundary: {
-                mode: 'source_only',
-                may_rephrase: true,
-                may_add_facts: false,
-                insufficient_action: 'followup_task'
-            }
+            trace_ref: normalize_string(handoff?.traceRef || agent.thread_id)
         };
         const notification = new SubagentNotification(child_path, status, task_result).render();
         return await this.send_inter_agent_communication({ sessionId: agent.parent_session_id }, new InterAgentCommunication({

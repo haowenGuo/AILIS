@@ -99,6 +99,10 @@ function isRuntimeContextMessage(item = {}) {
         (item?.role === 'user' && /"type"\s*:\s*"context"/.test(text));
 }
 
+function isSessionCheckpointMessage(item = {}) {
+    return /<ailis_(?:context|session)_checkpoint>/i.test(messageText(item));
+}
+
 function uniqueMessages(items = []) {
     const seen = new Set();
     return (Array.isArray(items) ? items : []).filter((item) => {
@@ -443,7 +447,6 @@ class ContextManager {
             recentResponseItems: this.items,
             toolSummary: options.toolSummary || null,
             toolSchemas: options.toolSchemas || options.tools || null,
-            pinnedEvidenceManifest: options.pinnedEvidenceManifest || options.evidenceManifest || null,
             availableOutputRefs: collectAvailableOutputRefs(this.items)
         }, options.budgetConfig || options.contextBudget || {});
     }
@@ -477,9 +480,6 @@ class ContextManager {
             referenceContextItem: this.reference_context_item ? cloneJson(this.reference_context_item) : null,
             recentResponseItems: items,
             toolSummary: normalizeContextPackageValue(options.toolSummary || null, 4000),
-            pinnedEvidenceManifest: Array.isArray(options.pinnedEvidenceManifest || options.evidenceManifest)
-                ? cloneJson(options.pinnedEvidenceManifest || options.evidenceManifest)
-                : [],
             availableOutputRefs: collectAvailableOutputRefs(items),
             droppedItemsManifest: buildDroppedItemsManifest(items),
             budgetReport
@@ -490,11 +490,28 @@ class ContextManager {
         const packageBefore = this.buildContextPackage(options);
         const contextMode = String(options.contextMode || 'task_agent').trim().toLowerCase();
         const personaMode = contextMode === 'persona';
-        const contextMessages = this.items.filter(isRuntimeContextMessage).slice(-4);
+        const persistentTaskAgentSession = contextMode === 'task_agent_session';
+        const contextMessages = this.items
+            .filter((item) => persistentTaskAgentSession
+                ? isRuntimeContextMessage(item) && !isSessionCheckpointMessage(item)
+                : isRuntimeContextMessage(item))
+            .slice(-4);
         const userMessages = uniqueMessages(this.items.filter((item) =>
-            item?.type === 'message' && item?.role === 'user' && !isRuntimeContextMessage(item)
+            item?.type === 'message' && item?.role === 'user' &&
+            !isRuntimeContextMessage(item) &&
+            (!persistentTaskAgentSession || !isSessionCheckpointMessage(item))
         ));
-        const originalTaskText = String(options.goal || messageText(userMessages[0]) || '').trim();
+        const currentRequestText = String(
+            options.taskState?.current_request || messageText(userMessages.at(-1)) || ''
+        ).trim();
+        const activeGoal = options.taskState?.active_goal && typeof options.taskState.active_goal === 'object'
+            ? cloneJson(options.taskState.active_goal)
+            : String(options.goal || '').trim()
+                ? { objective: String(options.goal).trim(), status: 'active' }
+                : null;
+        const originalTaskText = personaMode || !persistentTaskAgentSession
+            ? String(options.goal || messageText(userMessages[0]) || '').trim()
+            : '';
         const originalTask = originalTaskText
             ? ResponseItem.message({
                   role: 'user',
@@ -505,37 +522,75 @@ class ContextManager {
             .filter((item) => messageText(item) !== originalTaskText)
             .slice(-2)
             .map(cloneJson);
-        const checkpoint = {
-            schema: 'ailis.semantic_context_checkpoint.v1',
-            contextMode,
-            reason: String(options.compactionReason || packageBefore.budgetReport.level || 'context_budget'),
-            originalGoalPreservedVerbatim: Boolean(originalTaskText),
-            originalGoal: originalTaskText,
-            constraints: normalizeManifestList(options.constraints || options.taskState?.constraints || [], 24),
-            currentPlan: normalizeContextPackageValue(
-                options.currentPlan || options.taskState?.currentPlan || options.taskState?.plan || null,
-                5000
-            ),
-            unresolvedFields: normalizeManifestList(
-                options.unresolvedFields || options.taskState?.unresolvedFields || [],
-                24
-            ),
-            taskState: normalizeContextPackageValue(options.taskState || null, 5000),
-            evidenceManifest: normalizeManifestList(
-                options.pinnedEvidenceManifest || options.evidenceManifest || [],
-                16
-            ),
-            outputRefs: packageBefore.availableOutputRefs.slice(-24),
-            droppedItemsManifest: packageBefore.droppedItemsManifest,
-            instruction: personaMode
-                ? 'Continue the same visible conversation. Use the active task state and recent user/assistant turns as context; do not invent missing history.'
-                : 'Continue the same task from this checkpoint. Do not repeat completed work. Use the preserved original task and constraints as the authority.'
-        };
+        const checkpoint = personaMode
+            ? {
+                  schema: 'ailis.semantic_context_checkpoint.v1',
+                  contextMode,
+                  reason: String(options.compactionReason || packageBefore.budgetReport.level || 'context_budget'),
+                  originalGoalPreservedVerbatim: Boolean(originalTaskText),
+                  originalGoal: originalTaskText,
+                  constraints: normalizeManifestList(options.constraints || options.taskState?.constraints || [], 24),
+                  currentPlan: normalizeContextPackageValue(
+                      options.currentPlan || options.taskState?.currentPlan || options.taskState?.plan || null,
+                      5000
+                  ),
+                  unresolvedFields: normalizeManifestList(
+                      options.unresolvedFields || options.taskState?.unresolvedFields || [],
+                      24
+                  ),
+                  taskState: normalizeContextPackageValue(options.taskState || null, 5000),
+                  outputRefs: packageBefore.availableOutputRefs.slice(-24),
+                  droppedItemsManifest: packageBefore.droppedItemsManifest,
+                  instruction: 'Continue the same visible conversation. Use the active task state and recent user/assistant turns as context; do not invent missing history.'
+              }
+            : persistentTaskAgentSession
+                ? {
+                  schema: 'ailis.session_context_checkpoint.v2',
+                  contextMode,
+                  reason: String(options.compactionReason || packageBefore.budgetReport.level || 'context_budget'),
+                  activeGoal,
+                  currentRequest: currentRequestText,
+                  constraints: normalizeManifestList(options.constraints || options.taskState?.constraints || [], 24),
+                  currentPlan: normalizeContextPackageValue(
+                      options.currentPlan || options.taskState?.currentPlan || options.taskState?.plan || null,
+                      5000
+                  ),
+                  unresolvedFields: normalizeManifestList(
+                      options.unresolvedFields || options.taskState?.unresolvedFields || [],
+                      24
+                  ),
+                  taskState: normalizeContextPackageValue(options.taskState || null, 5000),
+                  outputRefs: packageBefore.availableOutputRefs.slice(-24),
+                  droppedItemsManifest: packageBefore.droppedItemsManifest,
+                  instruction: 'Continue the persistent Session. The latest Turn input is authoritative; activeGoal is optional durable context. Completed Turn commands and stale tool errors are history, not current instructions.'
+              }
+                : {
+                  schema: 'ailis.semantic_context_checkpoint.v1',
+                  contextMode,
+                  reason: String(options.compactionReason || packageBefore.budgetReport.level || 'context_budget'),
+                  originalGoalPreservedVerbatim: Boolean(originalTaskText),
+                  originalGoal: originalTaskText,
+                  constraints: normalizeManifestList(options.constraints || options.taskState?.constraints || [], 24),
+                  currentPlan: normalizeContextPackageValue(
+                      options.currentPlan || options.taskState?.currentPlan || options.taskState?.plan || null,
+                      5000
+                  ),
+                  unresolvedFields: normalizeManifestList(
+                      options.unresolvedFields || options.taskState?.unresolvedFields || [],
+                      24
+                  ),
+                  taskState: normalizeContextPackageValue(options.taskState || null, 5000),
+                  outputRefs: packageBefore.availableOutputRefs.slice(-24),
+                  droppedItemsManifest: packageBefore.droppedItemsManifest,
+                  instruction: 'Continue the same task from this checkpoint. Do not repeat completed work. Use the preserved original task and constraints as the authority.'
+              };
         const checkpointMessage = ResponseItem.message({
-            role: 'user',
+            role: persistentTaskAgentSession ? 'developer' : 'user',
             content: [{
                 type: 'input_text',
-                text: `<ailis_context_checkpoint>\n${JSON.stringify(checkpoint)}\n</ailis_context_checkpoint>`
+                text: persistentTaskAgentSession
+                    ? `<ailis_session_checkpoint>\n${JSON.stringify(checkpoint)}\n</ailis_session_checkpoint>`
+                    : `<ailis_context_checkpoint>\n${JSON.stringify(checkpoint)}\n</ailis_context_checkpoint>`
             }]
         });
         const recentPairs = collectRecentCallOutputPairs(
@@ -550,8 +605,11 @@ class ContextManager {
                 30000
             )
         );
-        const recentVisibleMessages = personaMode
-            ? collectRecentVisibleMessages(this.items, personaVisibleBudget)
+        const recentVisibleMessages = personaMode || persistentTaskAgentSession
+            ? collectRecentVisibleMessages(
+                  this.items,
+                  personaMode ? personaVisibleBudget : Math.max(8000, Math.min(personaVisibleBudget, 24000))
+              )
             : [];
         const replacementHistory = personaMode
             ? [
@@ -560,7 +618,14 @@ class ContextManager {
                   checkpointMessage,
                   ...recentPairs
               ].filter(Boolean)
-            : [
+            : persistentTaskAgentSession
+                ? [
+                  ...contextMessages.map(cloneJson),
+                  checkpointMessage,
+                  ...recentVisibleMessages,
+                  ...recentPairs
+              ].filter(Boolean)
+                : [
                   ...contextMessages.map(cloneJson),
                   originalTask,
                   ...recentUserMessages,
@@ -568,7 +633,12 @@ class ContextManager {
                   ...recentPairs
               ].filter(Boolean);
         return {
-            message: `Semantic context checkpoint created for: ${summarizeForModel(originalTaskText, 240)}`,
+            message: `Semantic context checkpoint created for: ${summarizeForModel(
+                persistentTaskAgentSession
+                    ? currentRequestText || activeGoal?.objective || 'persistent Session'
+                    : originalTaskText,
+                240
+            )}`,
             replacement_history: replacementHistory,
             checkpoint,
             packageBefore
