@@ -4033,48 +4033,12 @@ function toolProgressFingerprint(stepResult = {}) {
     });
 }
 
-function toolObservationFingerprint(stepResult = {}) {
-    const response = stepResult?.response || {};
-    const rawObservation = [
-        normalizeText(response.error),
-        extractToolResultText(response.result)
-    ].filter(Boolean).join('\n');
-    if (!rawObservation) {
-        return '';
-    }
-    const normalizedObservation = rawObservation
-        .replace(/\boutputId\s*[=:]\s*["']?[^\s,"'}]+/gi, 'outputId=<volatile>')
-        .replace(/\s+/g, ' ')
-        .trim()
-        .slice(0, 6000);
-    return JSON.stringify({
-        ok: response.ok === true,
-        status: normalizeText(response.status),
-        observation: normalizedObservation
-    });
-}
-
 function detectAgentNoProgress(stepResults = [], requestContext = {}) {
     if (requestContext.disableNoProgressFuse === true) {
         return '';
     }
-    const allStepResults = Array.isArray(stepResults) ? stepResults : [];
-    const observationWindowSize = Math.max(
-        3,
-        Math.min(Number(requestContext.noProgressObservationWindow || 3), 8)
-    );
-    const recentObservations = allStepResults
-        .slice(-observationWindowSize)
-        .map(toolObservationFingerprint);
-    if (
-        recentObservations.length === observationWindowSize &&
-        recentObservations.every(Boolean) &&
-        new Set(recentObservations).size === 1
-    ) {
-        return 'repeated_identical_observation';
-    }
     const windowSize = Math.max(3, Math.min(Number(requestContext.noProgressWindow || 4), 8));
-    const recent = allStepResults.slice(-windowSize);
+    const recent = (Array.isArray(stepResults) ? stepResults : []).slice(-windowSize);
     if (recent.length < windowSize) {
         return '';
     }
@@ -8674,86 +8638,6 @@ class AILISAgentRunner {
         const completedSubagentNotifications = [];
         const invalidDecisionHistory = [];
         const legacyAgentMailboxEnabled = requestContext.enableLegacyAgentMailbox === true;
-        const initialContextWindow = resolveModelContextWindowTokens(settings, requestContext);
-        const maxLoopDurationMs = firstPositiveNumber([
-            request.agentLoopMaxDurationMs,
-            requestContext.agentLoopMaxDurationMs,
-            requestContext.maxTaskDurationMs
-        ], 15 * 60 * 1000);
-        const maxCumulativeInputTokens = firstPositiveNumber([
-            request.maxCumulativeInputTokens,
-            requestContext.maxCumulativeInputTokens,
-            settings.maxCumulativeInputTokens
-        ], initialContextWindow.tokens * 4);
-        const finishSafetyFuse = async ({ reason, iteration } = {}) => {
-            const status = reason === 'time_budget' ? 'timeout' : 'stalled';
-            const displayText = reason === 'time_budget'
-                ? '任务已达到本轮时间预算，已停止继续调用工具并保留检查点。'
-                : reason === 'cumulative_input_budget'
-                    ? '任务已达到本轮上下文预算，已停止继续调用工具并保留检查点。'
-                    : '检测到连续重复的工具观察，任务已停止空转并保留检查点。';
-            events.push({
-                type: 'runtime_note',
-                status: 'safety_fuse',
-                iteration,
-                reason,
-                cumulativeInputTokens,
-                elapsedMs: Date.now() - startedAt
-            });
-            const taskRunHandoff = buildTaskRunHandoffPackage({
-                status,
-                reason,
-                runId,
-                sessionId,
-                message: currentTurnRequest,
-                startedAt,
-                maxSteps,
-                stepResults,
-                events,
-                latestDecision,
-                finalAnswer: '',
-                partialAnswer: normalizeText(latestDecision?.summary),
-                unresolvedFields: [reason],
-                contextManagerCheckpoint: contextManagerCheckpoint('safety_fuse', iteration)
-            });
-            await appendRuntimeItem({
-                type: 'agent.safety_fuse',
-                status,
-                payload: {
-                    iteration,
-                    reason,
-                    cumulativeInputTokens,
-                    elapsedMs: Date.now() - startedAt
-                }
-            });
-            return await finishRuntimeRun(attachPersonaSurface({
-                ok: false,
-                runId,
-                sessionId,
-                status,
-                mode: 'task',
-                planner: 'llm-agentic-executor',
-                intent: `agent_${status}`,
-                executionRequired: stepResults.length > 0,
-                durationMs: Date.now() - startedAt,
-                message: currentTurnRequest,
-                displayText,
-                speechText: displayText,
-                plan: [],
-                steps: stepResults,
-                events,
-                taskRunHandoff
-            }, renderStatusSurface({
-                text: displayText,
-                status,
-                ok: false,
-                source: 'agent_safety_fuse',
-                expression: 'anxious'
-            })), {
-                source: 'agent_safety_fuse',
-                nextAction: '从已保留的检查点继续或调整任务要求'
-            });
-        };
         const pauseAfterRound = async ({ iteration, reason = 'round_completed', decision = null, step = null } = {}) => {
             if (!debugBreakAfterRound) {
                 return null;
@@ -11521,7 +11405,6 @@ module.exports = {
     buildResearchProgressState,
     buildDirectModelImageAttachments,
     buildInvalidDecisionProgressRecord,
-    detectAgentNoProgress,
     detectInvalidDecisionNoProgress,
     resolveAgentDirectToolChoice,
     resolveMemoryPolicy,

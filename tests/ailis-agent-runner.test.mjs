@@ -27,7 +27,6 @@ const {
         buildTaskRunHandoffPackage,
         build_forked_context_checkpoint,
         buildToolObservationDigest,
-        detectAgentNoProgress,
         detectInvalidDecisionNoProgress,
     isAgentLlmSettingsMissing,
     looksLikeLeakedAgentProtocol,
@@ -996,30 +995,6 @@ test('AILIS Persona heartbeat reuses ordinary history and ends with an ephemeral
     assert.match(messages.at(-1).content[0].text, /not a user message/);
 });
 
-test('TaskAgent no-progress fuse compares observations independently of command arguments', () => {
-    const stepResults = [1, 2, 3].map((attempt) => ({
-        tool: 'exec',
-        args: { command: `search-provider-${attempt} --query example` },
-        response: {
-            ok: true,
-            status: 'completed',
-            result: {
-                content: [{
-                    type: 'text',
-                    text: `outputId=search-${attempt}-volatile\nOpenAI — https://openai.com/`
-                }]
-            }
-        }
-    }));
-
-    assert.equal(
-        detectAgentNoProgress(stepResults),
-        'repeated_identical_observation'
-    );
-    stepResults[2].response.result.content[0].text =
-        'outputId=search-3-volatile\nOpenAI Developers — https://developers.openai.com/';
-    assert.equal(detectAgentNoProgress(stepResults), '');
-});
 test('AILIS refreshes ephemeral developer guidance on every reused context turn', () => {
     const first = buildLlmAgentDirectToolPrompt({
         message: 'Continue the task.',
