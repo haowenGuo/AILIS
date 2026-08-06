@@ -113,6 +113,9 @@ test('TaskAgent execution decision bypasses Persona handoff and returns through 
     assert.deepEqual(calls.handoff[0].context.taskAgentVisibleHistory, history);
     assert.equal(calls.persona.length, 1);
     assert.equal(calls.persona[0].context.personaTaskResultRender, true);
+    assert.equal(calls.persona[0].suppressCurrentUserMessage, true);
+    assert.deepEqual(calls.persona[0].messageHistory, history.slice(0, 2));
+    assert.match(calls.persona[0].ephemeralDeveloperMessage, /"current_user_message":"还没好吗"/);
     assert.match(calls.persona[0].ephemeralDeveloperMessage, /已完成木偶攻略/);
     assert.equal(result.executionRequired, true);
     assert.equal(result.displayText, '好啦，木偶攻略已经整理完了。');
@@ -139,5 +142,7 @@ test('a user steer during an active TaskAgent run is accepted immediately withou
     assert.equal(calls.handoff.length, 1);
     assert.equal(calls.handoff[0].context.returnAfterSteer, true);
     assert.equal(calls.persona[0].context.personaTaskResultRender, true);
+    assert.deepEqual(calls.persona[0].messageHistory, []);
+    assert.equal(calls.persona[0].suppressCurrentUserMessage, true);
     assert.equal(result.executionRequired, true);
 });

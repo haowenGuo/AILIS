@@ -106,6 +106,16 @@ function taskAgentOwnsPersonaExecution(request = {}, context = {}) {
     return ['persona', 'persona_orchestrator', 'orchestrator'].includes(role);
 }
 
+function buildPersonaRenderHistory(messageHistory = []) {
+    const history = Array.isArray(messageHistory) ? messageHistory : [];
+    for (let index = history.length - 1; index >= 0; index -= 1) {
+        if (history[index]?.role === 'assistant') {
+            return history.slice(0, index + 1);
+        }
+    }
+    return [];
+}
+
 const GATEWAY_BACKED_TOOL_IDS = new Set(['sessions_list', 'gateway', 'cron', 'nodes']);
 const SESSION_BOUND_TOOL_IDS = new Set([
     'session_status',
@@ -3025,10 +3035,16 @@ class AILISGateway extends EventEmitter {
             };
         }
 
-        const authoritativePacket = JSON.stringify(taskResult);
+        const authoritativePacket = JSON.stringify({
+            schema: 'ailis.persona_task_result_render.v1',
+            current_user_message: message,
+            task_result: taskResult
+        });
         const rendered = await this.ensureAgentRunner().runMessage({
             ...input,
             runId: outerRunId,
+            messageHistory: buildPersonaRenderHistory(messageHistory),
+            suppressCurrentUserMessage: true,
             ...(llmSettings ? { llmSettings } : {}),
             ephemeralDeveloperMessage: [
                 'The TaskAgent has returned the authoritative result packet below.',
@@ -3039,6 +3055,7 @@ class AILISGateway extends EventEmitter {
                 ...context,
                 taskAgentOwnsExecution: true,
                 personaTaskResultRender: true,
+                suppressCurrentUserMessage: true,
                 taskAgentIntakeStatus: normalizeString(intake?.status),
                 taskResult
             }
