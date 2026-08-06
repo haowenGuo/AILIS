@@ -1309,6 +1309,128 @@ test('AILIS Gateway supplies desktop LLM settings to local agent clients', async
     }
 });
 
+test('AILIS Gateway buffers Persona until the same persistent TaskAgent routes the Turn', async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-task-route-gate-'));
+    const gateway = new AILISGateway({
+        port: 0,
+        workspaceRoot,
+        projectRoot: path.resolve('.'),
+        auditDir: path.join(workspaceRoot, '.audit'),
+        emberHarnessEnabled: false,
+        getDefaultContext: () => ({ taskAgentRoutingOwned: true })
+    });
+    const runnerCalls = [];
+    const memoryCalls = [];
+    let dispatchedContext = null;
+    gateway.ensureAgentRunner = () => ({
+        runMessage: async (request) => {
+            runnerCalls.push(request);
+            return {
+                ok: true,
+                status: 'completed',
+                displayText: request.context?.personaDraft ? '自然聊天回复' : '渲染后的任务结果'
+            };
+        },
+        recordMemoryTurn: (payload) => memoryCalls.push(payload)
+    });
+    const personaOutputs = [];
+    gateway.taskAgentHarness = {
+        dispatchTurn: async (context) => {
+            dispatchedContext = context;
+            return {
+                schema: 'ailis.task_result.v1',
+                status: 'completed',
+                route: 'chat',
+                turn_id: 'turn-chat',
+                current_request: context.currentUserMessage
+            };
+        },
+        recordPersonaOutput: (...args) => personaOutputs.push(args)
+    };
+
+    try {
+        const result = await gateway.runAgent({
+            message: '陪我聊聊天',
+            sessionId: 'session-chat'
+        });
+        assert.equal(result.taskRoute, 'chat');
+        assert.equal(result.displayText, '自然聊天回复');
+        assert.equal(runnerCalls.length, 1);
+        assert.equal(runnerCalls[0].context.personaDraft, true);
+        assert.equal(runnerCalls[0].context.taskAgentRoutingOwned, true);
+        assert.equal(runnerCalls[0].context.turnEnvelope, dispatchedContext.turnEnvelope);
+        assert.equal(Object.isFrozen(dispatchedContext.turnEnvelope), true);
+        assert.equal(runnerCalls[0].memoryPolicy, 'read_only');
+        assert.equal(memoryCalls.length, 1);
+        assert.equal(personaOutputs.length, 1);
+    } finally {
+        await fs.rm(workspaceRoot, { recursive: true, force: true });
+    }
+});
+
+test('AILIS Gateway discards the Persona draft for execution and isolates TaskResult rendering', async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-task-result-gate-'));
+    const gateway = new AILISGateway({
+        port: 0,
+        workspaceRoot,
+        projectRoot: path.resolve('.'),
+        auditDir: path.join(workspaceRoot, '.audit'),
+        emberHarnessEnabled: false,
+        getDefaultContext: () => ({ taskAgentRoutingOwned: true })
+    });
+    const runnerCalls = [];
+    const memoryCalls = [];
+    gateway.ensureAgentRunner = () => ({
+        runMessage: async (request) => {
+            runnerCalls.push(request);
+            return {
+                ok: true,
+                status: 'completed',
+                displayText: request.context?.personaDraft ? '这条草稿不能出现' : '攻略已经整理完成。'
+            };
+        },
+        recordMemoryTurn: (payload) => memoryCalls.push(payload)
+    });
+    gateway.taskAgentHarness = {
+        dispatchTurn: async (context) => {
+            context.onTaskEvent({
+                type: 'task_agent.route.decided',
+                status: 'completed',
+                payload: { mode: 'execute' }
+            });
+            return {
+                schema: 'ailis.task_result.v1',
+                status: 'completed',
+                route: 'execute',
+                turn_id: 'turn-task',
+                current_request: context.currentUserMessage,
+                final_answer: '木偶攻略正文',
+                source_refs: [],
+                unresolved_fields: []
+            };
+        },
+        recordPersonaOutput: () => {}
+    };
+
+    try {
+        const result = await gateway.runAgent({
+            message: '写一份木偶攻略',
+            sessionId: 'session-task'
+        });
+        assert.equal(result.taskRoute, 'execute');
+        assert.equal(result.displayText, '攻略已经整理完成。');
+        assert.notEqual(result.displayText, '这条草稿不能出现');
+        assert.equal(memoryCalls.length, 0);
+        const renderCalls = runnerCalls.filter((request) => request.context?.personaRenderOnly === true);
+        assert.ok(renderCalls.length >= 1);
+        assert.ok(renderCalls.every((request) => request.memoryPolicy === 'disabled'));
+        assert.ok(renderCalls.every((request) => request.messageHistory.length === 0));
+        assert.match(renderCalls.at(-1).ephemeralDeveloperMessage, /木偶攻略正文/);
+    } finally {
+        await fs.rm(workspaceRoot, { recursive: true, force: true });
+    }
+});
+
 test('AILIS Gateway exposes health, tools, guarded tool calls, and audit', async () => {
     const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-gateway-test-'));
     const gateway = new AILISGateway({
