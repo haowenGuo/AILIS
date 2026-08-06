@@ -4602,48 +4602,12 @@ function toolProgressFingerprint(stepResult = {}) {
     });
 }
 
-function toolObservationFingerprint(stepResult = {}) {
-    const response = stepResult?.response || {};
-    const rawObservation = [
-        normalizeText(response.error),
-        extractToolResultText(response.result)
-    ].filter(Boolean).join('\n');
-    if (!rawObservation) {
-        return '';
-    }
-    const normalizedObservation = rawObservation
-        .replace(/\boutputId\s*[=:]\s*["']?[^\s,"'}]+/gi, 'outputId=<volatile>')
-        .replace(/\s+/g, ' ')
-        .trim()
-        .slice(0, 6000);
-    return JSON.stringify({
-        ok: response.ok === true,
-        status: normalizeText(response.status),
-        observation: normalizedObservation
-    });
-}
-
 function detectAgentNoProgress(stepResults = [], requestContext = {}) {
     if (requestContext.disableNoProgressFuse === true) {
         return '';
     }
-    const allStepResults = Array.isArray(stepResults) ? stepResults : [];
-    const observationWindowSize = Math.max(
-        3,
-        Math.min(Number(requestContext.noProgressObservationWindow || 3), 8)
-    );
-    const recentObservations = allStepResults
-        .slice(-observationWindowSize)
-        .map(toolObservationFingerprint);
-    if (
-        recentObservations.length === observationWindowSize &&
-        recentObservations.every(Boolean) &&
-        new Set(recentObservations).size === 1
-    ) {
-        return 'repeated_identical_observation';
-    }
     const windowSize = Math.max(3, Math.min(Number(requestContext.noProgressWindow || 4), 8));
-    const recent = allStepResults.slice(-windowSize);
+    const recent = (Array.isArray(stepResults) ? stepResults : []).slice(-windowSize);
     if (recent.length < windowSize) {
         return '';
     }
@@ -14195,7 +14159,6 @@ module.exports = {
     buildDirectModelImageAttachments,
     assessAgentCompletionEvidence,
     buildInvalidDecisionProgressRecord,
-    detectAgentNoProgress,
     detectInvalidDecisionNoProgress,
     resolveAgentDirectToolChoice,
     resolveMemoryPolicy,
