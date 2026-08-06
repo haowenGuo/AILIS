@@ -40,6 +40,7 @@ const { AILISMemoryCognitionCurator } = require('./ailis-memory-cognition-curato
 const { AILISPreferenceState } = require('./ailis-preference-state.cjs');
 const { AILISTaskResultCapsuleStore } = require('./ailis-task-result-capsules.cjs');
 const { AILISSystemTaskAgentHarness } = require('./ailis-task-agent-harness.cjs');
+const { decideTaskAgentIntake } = require('./ailis-task-intake.cjs');
 const { AilisSelfEvolutionRuntime } = require('./ailis-self-evolution-runtime.cjs');
 const { AILISEmberHarness } = require('./ailis-ember-harness.cjs');
 const { AILISSensitiveWordClassifier } = require('./ailis-sensitive-word-classifier.cjs');
@@ -88,7 +89,23 @@ const DEFAULT_HTTP_REQUEST_TIMEOUT_MS = Math.max(0, Number(process.env.AILIS_GAT
 const DEFAULT_PROFILE_CURATION_START_DELAY_MS = Number(process.env.AILIS_PROFILE_CURATION_START_DELAY_MS || 60 * 1000);
 const DEFAULT_PROFILE_CURATION_CHECK_INTERVAL_MS = Number(process.env.AILIS_PROFILE_CURATION_CHECK_INTERVAL_MS || 6 * 60 * 60 * 1000);
 const DEFAULT_PROFILE_CURATION_DEBOUNCE_MS = Number(process.env.AILIS_PROFILE_CURATION_DEBOUNCE_MS || 2 * 60 * 1000);
-const TASK_AGENT_MAX_MODEL_ROUNDS = 9;
+const TASK_AGENT_PUBLIC_EVENT_TYPES = new Set([
+    'agent.reasoning.delta',
+    'agent.progress.note',
+    'agent.message.delta',
+    'agent.step.finished'
+]);
+
+function taskAgentOwnsPersonaExecution(request = {}, context = {}) {
+    if (context.taskAgentOwnsExecution !== true && request.taskAgentOwnsExecution !== true) {
+        return false;
+    }
+    const role = normalizeString(
+        request.agentRole || request.agent_role || context.agentRole || context.agent_role,
+        'persona_orchestrator'
+    ).toLowerCase();
+    return ['persona', 'persona_orchestrator', 'orchestrator'].includes(role);
+}
 
 const GATEWAY_BACKED_TOOL_IDS = new Set(['sessions_list', 'gateway', 'cron', 'nodes']);
 const SESSION_BOUND_TOOL_IDS = new Set([
@@ -1487,6 +1504,9 @@ class AILISGateway extends EventEmitter {
         this.getLlmSettings = typeof options.getLlmSettings === 'function'
             ? options.getLlmSettings
             : null;
+        this.taskIntakeDecider = typeof options.taskIntakeDecider === 'function'
+            ? options.taskIntakeDecider
+            : decideTaskAgentIntake;
         this.voiceServices = options.voiceServices && typeof options.voiceServices === 'object'
             ? options.voiceServices
             : {};
@@ -1532,7 +1552,6 @@ class AILISGateway extends EventEmitter {
         this.taskAgentHarness = options.taskAgentHarness || new AILISSystemTaskAgentHarness({
             rootDir: path.join(this.auditDir, 'task-agent-harness'),
             taskResultCapsules: this.taskResultCapsules,
-            maxAgentSteps: TASK_AGENT_MAX_MODEL_ROUNDS,
             executeTaskAgent: (payload) => this.executeTaskAgent(payload),
             emitEvent: (type, payload) => this.emitGatewayEvent(type, payload)
         });
@@ -3280,6 +3299,160 @@ class AILISGateway extends EventEmitter {
         }
     }
 
+    async runTaskAgentOwnedPersonaTurn({
+        input = {},
+        context = {},
+        sessionId = 'main',
+        runId = '',
+        llmSettings = null
+    } = {}) {
+        const message = normalizeString(input.message || input.prompt || input.task);
+        const outerRunId = normalizeString(runId, randomUUID());
+        const messageHistory = Array.isArray(input.messageHistory) ? input.messageHistory : [];
+        const taskState = this.taskAgentHarness?.getSessionSnapshot?.(sessionId) || null;
+        const alreadyRunning = this.taskAgentHarness?.isRunning?.(sessionId) === true;
+        this.emitGatewayEvent('task_agent.intake.started', {
+            runId: outerRunId,
+            sessionId,
+            running: alreadyRunning
+        });
+        const intake = alreadyRunning
+            ? {
+                  ok: true,
+                  status: 'active_task_steer',
+                  action: 'execute',
+                  executionRequired: true,
+                  reason: 'The persistent TaskAgent already has an active Turn.'
+              }
+            : await this.taskIntakeDecider({
+                  message,
+                  messageHistory,
+                  taskState,
+                  llmSettings: llmSettings || {}
+              });
+        this.emitGatewayEvent('task_agent.intake.finished', {
+            runId: outerRunId,
+            sessionId,
+            ok: intake?.ok === true,
+            status: normalizeString(intake?.status),
+            action: normalizeString(intake?.action),
+            executionRequired: intake?.executionRequired === true,
+            running: alreadyRunning,
+            error: intake?.ok === false ? normalizeString(intake?.error) : ''
+        });
+
+        if (intake?.executionRequired !== true) {
+            return await this.ensureAgentRunner().runMessage({
+                ...input,
+                runId: outerRunId,
+                ...(llmSettings ? { llmSettings } : {}),
+                context: {
+                    ...context,
+                    taskAgentOwnsExecution: true,
+                    taskAgentIntakeStatus: normalizeString(intake?.status, 'unavailable'),
+                    taskAgentIntakeUnavailable: intake?.ok !== true
+                }
+            });
+        }
+
+        this.emitGatewayEvent('agent.run.started', {
+            runId: outerRunId,
+            sessionId,
+            mode: 'task-agent-owned-execution',
+            intent: alreadyRunning ? 'task_agent_steer' : 'task_agent_execute',
+            planner: 'task-agent-intake',
+            executionRequired: true
+        });
+        let taskResult;
+        try {
+            taskResult = await this.taskAgentHarness.handoff({}, {
+                ...context,
+                runId: outerRunId,
+                parentRunId: outerRunId,
+                sessionId,
+                sessionKey: sessionId,
+                currentUserMessage: message,
+                taskAgentVisibleHistory: messageHistory,
+                attachments: Array.isArray(input.attachments) ? input.attachments : [],
+                fileAttachments: Array.isArray(input.attachments) ? input.attachments : [],
+                llmSettings: llmSettings || context.llmSettings || null,
+                returnAfterSteer: alreadyRunning
+            });
+        } catch (error) {
+            const displayText = `任务执行没有成功启动：${error?.message || String(error)}`;
+            this.emitGatewayEvent('agent.run.finished', {
+                runId: outerRunId,
+                sessionId,
+                mode: 'task-agent-owned-execution',
+                status: 'failed',
+                ok: false,
+                displayText
+            });
+            return {
+                ok: false,
+                runId: outerRunId,
+                sessionId,
+                status: 'failed',
+                mode: 'task-agent-owned-execution',
+                intent: 'task_agent_execute',
+                executionRequired: true,
+                displayText,
+                speechText: displayText,
+                error: error?.message || String(error),
+                taskIntake: intake
+            };
+        }
+
+        const authoritativePacket = JSON.stringify(taskResult);
+        const rendered = await this.ensureAgentRunner().runMessage({
+            ...input,
+            runId: outerRunId,
+            ...(llmSettings ? { llmSettings } : {}),
+            ephemeralDeveloperMessage: [
+                'The TaskAgent has returned the authoritative result packet below.',
+                'Render it as the AILIS Persona for the user. Preserve all facts, uncertainty, failures, sources, and artifacts. Do not perform more work and do not mention internal orchestration.',
+                authoritativePacket
+            ].join('\n'),
+            context: {
+                ...context,
+                taskAgentOwnsExecution: true,
+                personaTaskResultRender: true,
+                taskAgentIntakeStatus: normalizeString(intake?.status),
+                taskResult
+            }
+        });
+        const renderedText = normalizeString(
+            rendered?.displayText || rendered?.finalAnswer || rendered?.speechText
+        );
+        if (renderedText) {
+            return {
+                ...rendered,
+                executionRequired: true,
+                taskIntake: intake,
+                taskResult
+            };
+        }
+        const fallbackText = normalizeString(
+            taskResult?.final_answer || taskResult?.partial_answer,
+            '任务已结束，但没有返回可展示的结果。'
+        );
+        return {
+            ok: ['completed', 'completed_with_warnings', 'success', 'succeeded', 'accepted'].includes(
+                normalizeString(taskResult?.status).toLowerCase()
+            ),
+            runId: outerRunId,
+            sessionId,
+            status: normalizeString(taskResult?.status, 'completed'),
+            mode: 'task-agent-owned-execution',
+            intent: alreadyRunning ? 'task_agent_steer' : 'task_agent_execute',
+            executionRequired: true,
+            displayText: fallbackText,
+            speechText: fallbackText,
+            taskIntake: intake,
+            taskResult
+        };
+    }
+
     async runAgent(request = {}) {
         const input = request && typeof request === 'object' ? request : {};
         const context = this.mergeDefaultContext(
@@ -3325,13 +3498,22 @@ class AILISGateway extends EventEmitter {
                 emberHarness: summarizeEmberHarnessRecord(inputGate)
             };
         }
-        const result = await this.ensureAgentRunner().runMessage({
-            ...input,
-            ...(defaultLlmSettings && typeof defaultLlmSettings === 'object'
-                ? { llmSettings: defaultLlmSettings }
-                : {}),
-            context
-        });
+        const effectiveLlmSettings = suppliedLlmSettings || defaultLlmSettings || null;
+        const result = taskAgentOwnsPersonaExecution(input, context)
+            ? await this.runTaskAgentOwnedPersonaTurn({
+                  input,
+                  context,
+                  sessionId,
+                  runId,
+                  llmSettings: effectiveLlmSettings
+              })
+            : await this.ensureAgentRunner().runMessage({
+                  ...input,
+                  ...(defaultLlmSettings && typeof defaultLlmSettings === 'object'
+                      ? { llmSettings: defaultLlmSettings }
+                      : {}),
+                  context
+              });
         const finalText = normalizeString(
             result?.displayText ||
             result?.speechText ||
@@ -3422,22 +3604,16 @@ class AILISGateway extends EventEmitter {
         const inheritedCheckpoint = inheritanceMode === 'checkpoint'
             ? args.contextManagerCheckpoint || context.initialContextManagerCheckpoint || null
             : null;
-        const recentMessages = inheritanceMode === 'recent'
-            ? (Array.isArray(args.recentMessages) ? args.recentMessages : context.recentMessages || [])
-            : [];
+        const recentMessages = Array.isArray(args.recentMessages)
+            ? args.recentMessages
+            : Array.isArray(context.recentMessages)
+                ? context.recentMessages
+                : [];
         const attachments = Array.isArray(context.attachments)
             ? context.attachments
             : Array.isArray(context.fileAttachments)
                 ? context.fileAttachments
                 : [];
-        const requestedMaxAgentSteps = Number(args.maxAgentSteps || context.maxAgentSteps || TASK_AGENT_MAX_MODEL_ROUNDS);
-        const taskAgentMaxSteps = Math.max(
-            1,
-            Math.min(
-                Number.isFinite(requestedMaxAgentSteps) ? requestedMaxAgentSteps : TASK_AGENT_MAX_MODEL_ROUNDS,
-                TASK_AGENT_MAX_MODEL_ROUNDS
-            )
-        );
         const childContext = this.mergeDefaultContext({
             ...context,
             ...(parentLlmSettings ? { llmSettings: parentLlmSettings } : {}),
@@ -3470,8 +3646,7 @@ class AILISGateway extends EventEmitter {
             taskAgentInheritanceMode: inheritanceMode,
             initialContextManagerCheckpoint: inheritedCheckpoint,
             attachments,
-            fileAttachments: attachments,
-            maxAgentSteps: taskAgentMaxSteps
+            fileAttachments: attachments
         });
         await onEvent?.({
             type: 'subagent.runner.started',
@@ -3483,6 +3658,24 @@ class AILISGateway extends EventEmitter {
             }
         });
         const agentRunner = this.ensureAgentRunner();
+        const childRunId = normalizeString(agent?.childRunId || context.runId);
+        const forwardChildEvent = (event = {}) => {
+            const eventType = normalizeString(event.type);
+            const eventPayload = event.payload && typeof event.payload === 'object' ? event.payload : {};
+            if (
+                !TASK_AGENT_PUBLIC_EVENT_TYPES.has(eventType) ||
+                normalizeString(eventPayload.runId) !== childRunId
+            ) {
+                return;
+            }
+            void onEvent?.({
+                type: eventType,
+                status: normalizeString(eventPayload.status, 'running'),
+                message: normalizeString(eventPayload.text || eventPayload.summary || eventPayload.progressNote),
+                payload: eventPayload
+            });
+        };
+        this.on('event', forwardChildEvent);
         const runPromise = agentRunner.runMessage({
             runId: agent?.childRunId,
             message: task,
@@ -3496,7 +3689,6 @@ class AILISGateway extends EventEmitter {
             taskAgentInheritanceMode: inheritanceMode,
             initialContextManagerCheckpoint: inheritedCheckpoint,
             initialStepResults: Array.isArray(args.initialStepResults) ? args.initialStepResults : [],
-            maxAgentSteps: taskAgentMaxSteps,
             context: childContext
         });
         const unregisterInputHandler = typeof registerInputHandler === 'function'
@@ -3535,6 +3727,7 @@ class AILISGateway extends EventEmitter {
                 : await runPromise;
         } finally {
             unregisterInputHandler?.();
+            this.off('event', forwardChildEvent);
         }
         await onEvent?.({
             type: 'subagent.runner.finished',

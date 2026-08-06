@@ -529,6 +529,72 @@ test('concurrent follow-up input joins the running system TaskAgent instead of s
     assert.equal(secondPacket.current_request, '补充检查测试覆盖率。');
 });
 
+test('TaskAgent receives visible conversation and emits Persona-compatible progress while executing', async () => {
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-task-harness-progress-'));
+    const events = [];
+    let releaseExecution;
+    const executionGate = new Promise((resolve) => {
+        releaseExecution = resolve;
+    });
+    const calls = [];
+    const harness = new AILISSystemTaskAgentHarness({
+        rootDir,
+        emitEvent: (type, payload) => events.push({ type, payload }),
+        executeTaskAgent: async (payload) => {
+            calls.push(payload);
+            payload.registerInputHandler(async () => {});
+            await payload.onEvent({
+                type: 'agent.progress.note',
+                status: 'running',
+                payload: { text: '已找到官方更新公告。' }
+            });
+            await executionGate;
+            return completedResult({
+                runId: payload.agent.childRunId,
+                answer: '攻略已完成',
+                checkpoint: { version: 1 }
+            });
+        }
+    });
+    const first = harness.handoff({}, {
+        currentUserMessage: '还没好吗',
+        sessionId: 'session-progress',
+        runId: 'parent-progress',
+        taskAgentVisibleHistory: [
+            { role: 'user', content: '写木偶攻略' },
+            { role: 'assistant', content: '我来处理。' },
+            { role: 'user', content: '还没好吗' }
+        ]
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    const steer = await harness.handoff({}, {
+        currentUserMessage: '只看官方资料',
+        sessionId: 'session-progress',
+        runId: 'parent-steer',
+        returnAfterSteer: true
+    });
+
+    assert.equal(steer.schema, 'ailis.task_steer.v1');
+    assert.equal(steer.status, 'accepted');
+    assert.deepEqual(calls[0].args.recentMessages.map((entry) => entry.content), [
+        '写木偶攻略',
+        '我来处理。',
+        '还没好吗'
+    ]);
+    const publicEvents = events.filter((event) => event.type === 'subagent.event');
+    assert.ok(publicEvents.some((event) => event.payload.type === 'subagent.started'));
+    assert.ok(publicEvents.some((event) => (
+        event.payload.type === 'agent.progress.note' &&
+        event.payload.payload.text === '已找到官方更新公告。'
+    )));
+    assert.ok(publicEvents.some((event) => event.payload.payload?.source === 'task_agent_steer_accepted'));
+    releaseExecution();
+    await first;
+    assert.ok(events.some((event) => (
+        event.type === 'subagent.event' && event.payload.type === 'subagent.completed'
+    )));
+});
+
 test('the TaskAgent model can replace and retain a dynamic Goal across ordinary Session Turns', async () => {
     const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-task-harness-dynamic-goal-'));
     const calls = [];

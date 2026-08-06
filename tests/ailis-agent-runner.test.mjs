@@ -942,6 +942,44 @@ test('AILIS Persona heartbeat reuses ordinary history and ends with an ephemeral
     assert.match(messages.at(-1).content[0].text, /not a user message/);
 });
 
+test('TaskAgent-owned execution removes Persona handoff and makes TaskResult rendering tool-free', () => {
+    const specs = buildAgentDirectToolSpecs({
+        gatewayToolRuntimeRegistry: {
+            definition: () => ({
+                spec: { name: 'handoff_task', parameters: { type: 'object' } }
+            })
+        }
+    }, {
+        requestContext: {
+            agentRole: 'persona_orchestrator',
+            taskAgentOwnsExecution: true
+        }
+    });
+    assert.deepEqual(specs, []);
+
+    const prompt = buildLlmAgentDirectToolPrompt({
+        message: '还没好吗',
+        messageHistory: [
+            { role: 'user', content: '写木偶攻略' },
+            { role: 'user', content: '还没好吗' }
+        ],
+        taskAgentOwnsExecution: true,
+        personaTaskResultRender: true,
+        ephemeralDeveloperMessage: 'TaskResult: {"final_answer":"攻略已完成"}',
+        contextMode: 'persona',
+        tools: []
+    });
+    assert.match(prompt.instructions, /dialogue output renderer/i);
+    assert.match(prompt.instructions, /render-only response/i);
+    assert.doesNotMatch(prompt.instructions, /call handoff_task exactly once/i);
+    const developerText = prompt.input
+        .filter((item) => item.type === 'message' && item.role === 'developer')
+        .flatMap((item) => item.content || [])
+        .map((part) => part.text || '')
+        .join('\n');
+    assert.match(developerText, /攻略已完成/);
+});
+
 test('AILIS refreshes ephemeral developer guidance on every reused context turn', () => {
     const first = buildLlmAgentDirectToolPrompt({
         message: 'Continue the task.',

@@ -1805,8 +1805,8 @@ test('Agentic Executor can execute real native direct tool calls before JSON pla
             false
         );
         assert.equal(llmServer.calls[0].payload.tool_choice, 'auto');
-        assert.equal(llmServer.calls[1].payload.tool_choice, 'none');
-        assert.deepEqual(llmServer.calls[1].payload.tools || [], []);
+        assert.equal(llmServer.calls[1].payload.tool_choice, 'auto');
+        assert.ok(llmServer.calls[1].payload.tools.some((tool) => tool.function?.name === 'write'));
         assert.match(llmServer.calls[0].payload.messages[0].content, /Responses-Compatible Tool Runtime/);
         assert.equal(result.body.steps[0].tool, 'write');
     } finally {
@@ -2603,7 +2603,7 @@ test('Agentic Executor skips vision confirmation when full computer control is e
     }
 });
 
-test('Agentic Executor max-step fallback does not expose raw tool logs to the user', async () => {
+test('TaskAgent repeated discovery fuse does not expose raw tool logs to the user', async () => {
     const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-max-step-'));
     await fs.writeFile(path.join(workspaceRoot, 'note.txt'), 'secret-ish line\n'.repeat(80), 'utf8');
     const llmServer = await createScriptedChatCompletionsServer(() => ({
@@ -2638,15 +2638,23 @@ test('Agentic Executor max-step fallback does not expose raw tool logs to the us
             sessionId: 'max-step-test',
             message: '检查 note.txt',
             agentLoop: 'llm',
+            agentRole: 'task_agent',
             maxAgentSteps: 1,
             llmSettings,
             context: { workspace: workspaceRoot, agentRole: 'task_agent' }
         });
         assert.equal(result.body.ok, false);
-        assert.equal(result.body.status, 'max_steps_reached');
-        assert.match(result.body.displayText, /先停住|还没有形成足够稳的结论/);
+        assert.equal(result.body.status, 'stalled', JSON.stringify({
+            status: result.body.status,
+            intent: result.body.intent,
+            steps: result.body.steps?.length,
+            events: result.body.events?.slice(-8),
+            surface: result.body.surface,
+            taskRunHandoff: result.body.taskRunHandoff
+        }));
+        assert.match(result.body.displayText, /停止空转|没有完成这次任务/);
         assert.doesNotMatch(result.body.displayText, /```|secret-ish line|Agentic Executor|我已经做过这些步骤|读取 note\.txt：完成/);
-        assert.equal(result.body.surface.source, 'agent_max_steps_handoff');
+        assert.equal(result.body.surface.source, 'agent_safety_fuse_handoff');
         assert.equal(result.body.surface.bubbleText, '我整理好执行现场了。');
         assert.equal(result.body.steps.length, 1);
     } finally {
@@ -2655,20 +2663,32 @@ test('Agentic Executor max-step fallback does not expose raw tool logs to the us
     }
 });
 
-test('TaskAgent clamps caller-requested execution to eight work rounds plus one finalization round', async () => {
+test('TaskAgent can continue beyond the old nine-round cap and stops when the model finishes', async () => {
     const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-task-agent-seven-rounds-'));
     await fs.writeFile(path.join(workspaceRoot, 'note.txt'), 'evidence\n', 'utf8');
-    const llmServer = await createScriptedChatCompletionsServer(() => ({
-        mode: 'task',
-        intent: 'bounded_task',
-        summary: '继续读取证据',
-        action: 'tool',
-        tool_call: {
-            tool: 'exec',
-            title: '读取证据',
-            args: { command: 'powershell -NoProfile -Command "Get-Content -LiteralPath note.txt"' }
-        }
-    }));
+    const llmServer = await createScriptedChatCompletionsServer(({ decisionCount }) => (
+        decisionCount <= 10
+            ? {
+                  mode: 'task',
+                  intent: 'long_running_task',
+                  summary: `执行第 ${decisionCount} 个有效步骤`,
+                  action: 'tool',
+                  tool_call: {
+                      tool: 'exec',
+                      title: `执行步骤 ${decisionCount}`,
+                      args: {
+                          command: `powershell -NoProfile -Command "Write-Output step-${decisionCount}"`
+                      }
+                  }
+              }
+            : {
+                  mode: 'task',
+                  intent: 'long_running_task',
+                  summary: '长任务已完成',
+                  action: 'final',
+                  final_answer: '10 个步骤已全部完成。'
+              }
+    ));
     const gateway = new AILISGateway({
         port: 0,
         workspaceRoot,
@@ -2699,21 +2719,13 @@ test('TaskAgent clamps caller-requested execution to eight work rounds plus one 
             }
         });
 
-        assert.equal(result.body.status, 'max_steps_reached');
-        assert.equal(result.body.steps.length, 8);
-        assert.equal(llmServer.calls.length, 9);
-        assert.match(llmServer.calls[0].system, /at most 8 work-tool rounds/);
-        assert.match(llmServer.calls[0].system, /9-round total budget/);
+        assert.equal(result.body.status, 'completed');
+        assert.equal(result.body.steps.length, 10);
+        assert.equal(llmServer.calls.length, 11);
         assert.match(llmServer.calls[0].system, /tool_search acquires a capability/);
         assert.match(llmServer.calls[0].system, /web_run archive operation/);
-        assert.equal(llmServer.calls[8].payload.tool_choice, 'none');
-        assert.deepEqual(llmServer.calls[8].payload.tools || [], []);
-        const finalizationMessages = JSON.stringify(llmServer.calls[8].payload.messages);
-        assert.match(finalizationMessages, /TaskAgent finalization package/);
-        assert.match(finalizationMessages, /读取 note\.txt 并整理结果/);
-        assert.match(finalizationMessages, /evidence/);
-        assert.doesNotMatch(llmServer.calls[8].system, /Native direct tools exposed/);
-        assert.doesNotMatch(llmServer.calls[8].system, /Emit function calls/);
+        assert.doesNotMatch(llmServer.calls[0].system, /at most 8 work-tool rounds|9-round total budget/);
+        assert.match(result.body.displayText, /10 个步骤已全部完成/);
     } finally {
         await gateway.stop();
         await llmServer.close();
