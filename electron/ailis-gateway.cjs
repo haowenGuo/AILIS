@@ -3310,7 +3310,9 @@ class AILISGateway extends EventEmitter {
         sessionId = 'main',
         runId = '',
         purpose = 'draft',
-        developerPacket = ''
+        developerPacket = '',
+        onTextDelta = null,
+        onTextStreamEvent = null
     } = {}) {
         const privateRunId = normalizeString(runId, `persona_${purpose}_${randomUUID()}`);
         this.privateRunIds.add(privateRunId);
@@ -3324,8 +3326,10 @@ class AILISGateway extends EventEmitter {
                     ? input.messageHistory
                     : [],
                 ephemeralDeveloperMessage: normalizeString(developerPacket),
-                onTextDelta: undefined,
-                onTextStreamEvent: undefined,
+                onTextDelta: typeof onTextDelta === 'function' ? onTextDelta : undefined,
+                onTextStreamEvent: typeof onTextStreamEvent === 'function'
+                    ? onTextStreamEvent
+                    : undefined,
                 context: {
                     ...context,
                     runId: privateRunId,
@@ -3401,6 +3405,96 @@ class AILISGateway extends EventEmitter {
                 .slice(-120)),
             createdAt: new Date().toISOString()
         });
+        this.emitGatewayEvent('agent.run.started', {
+            runId: outerRunId,
+            sessionId,
+            status: 'running',
+            mode: 'task-agent-controlled',
+            source: 'persona_task_dual_lane'
+        });
+        const fastLaneStreamId = `persona_fast_lane_${outerRunId}`;
+        let fastLaneText = '';
+        let fastLaneStreamStarted = false;
+        let fastLaneStreamSettled = false;
+        let finalOutputCommitted = false;
+        const publishPersonaDelta = async (delta, metadata = {}) => {
+            const textDelta = typeof delta === 'string' ? delta : '';
+            if (!textDelta || finalOutputCommitted) {
+                return;
+            }
+            fastLaneText += textDelta;
+            this.emitGatewayEvent('agent.message.delta', {
+                runId: outerRunId,
+                sessionId,
+                status: 'streaming',
+                text: fastLaneText,
+                delta: textDelta,
+                streamId: fastLaneStreamId,
+                phase: 'persona_fast_lane',
+                source: 'persona_fast_lane'
+            });
+            if (typeof input.onTextDelta === 'function') {
+                try {
+                    await input.onTextDelta(textDelta, {
+                        ...metadata,
+                        runId: outerRunId,
+                        sessionId,
+                        streamId: fastLaneStreamId,
+                        phase: 'persona_fast_lane'
+                    });
+                } catch {}
+            }
+        };
+        const publishPersonaStreamEvent = async (streamEvent = {}) => {
+            const eventType = normalizeString(streamEvent.type);
+            if (!eventType || finalOutputCommitted) {
+                return;
+            }
+            if (eventType === 'response.output_text.started') {
+                fastLaneStreamStarted = true;
+            }
+            if (eventType === 'response.output_text.committed' || eventType === 'response.output_text.discarded') {
+                fastLaneStreamSettled = true;
+            }
+            if (typeof input.onTextStreamEvent === 'function') {
+                try {
+                    await input.onTextStreamEvent({
+                        ...streamEvent,
+                        type: eventType,
+                        runId: outerRunId,
+                        sessionId,
+                        streamId: fastLaneStreamId,
+                        phase: 'persona_fast_lane'
+                    });
+                } catch {}
+            }
+        };
+        const commitFinalOutput = async ({ discardUnsettledStream = true } = {}) => {
+            finalOutputCommitted = true;
+            if (
+                discardUnsettledStream &&
+                fastLaneStreamStarted &&
+                !fastLaneStreamSettled &&
+                typeof input.onTextStreamEvent === 'function'
+            ) {
+                try {
+                    await input.onTextStreamEvent({
+                        type: 'response.output_text.discarded',
+                        runId: outerRunId,
+                        sessionId,
+                        streamId: fastLaneStreamId,
+                        phase: 'persona_fast_lane',
+                        reason: 'authoritative_task_result_ready'
+                    });
+                } catch {}
+            }
+        };
+        const fastLaneDeveloperPacket = [
+            'This is the public Persona fast lane running concurrently with the persistent TaskAgent on the same immutable Turn.',
+            'Respond immediately and naturally. Keep the first response concise.',
+            'For ordinary conversation, answer directly. For requests that may require tools, current information, files, code execution, or multi-step work, acknowledge what the user wants and briefly state what you are starting, but do not invent results, claim completion, or perform task routing.',
+            'TaskAgent independently owns chat-versus-execute routing, Goal state, tools, and task completion. Never mention that internal routing or orchestration.'
+        ].join('\n');
         const draftPromise = this.runPrivatePersonaTurn({
             input: {
                 ...input,
@@ -3410,30 +3504,48 @@ class AILISGateway extends EventEmitter {
             context: { ...context, turnEnvelope },
             sessionId,
             runId: `persona_draft_${outerRunId}`,
-            purpose: 'draft'
+            purpose: 'draft',
+            developerPacket: fastLaneDeveloperPacket,
+            onTextDelta: typeof input.onTextDelta === 'function' ? publishPersonaDelta : null,
+            onTextStreamEvent: typeof input.onTextDelta === 'function'
+                ? publishPersonaStreamEvent
+                : null
         });
-        draftPromise.catch(() => {});
+        draftPromise.then((draft) => {
+            if (finalOutputCommitted) {
+                return;
+            }
+            const text = normalizeString(draft?.displayText || draft?.finalAnswer || draft?.speechText);
+            if (!text) {
+                return;
+            }
+            this.emitGatewayEvent('agent.message.completed', {
+                runId: outerRunId,
+                sessionId,
+                status: 'in_progress',
+                ok: true,
+                text,
+                speechText: normalizeString(draft?.speechText, text),
+                bubbleText: normalizeString(draft?.bubbleText),
+                streamId: fastLaneStreamId,
+                phase: 'persona_fast_lane',
+                source: 'persona_fast_lane'
+            });
+        }).catch(() => {});
 
         let progressRenderChain = Promise.resolve();
         const onTaskEvent = (event = {}) => {
             const type = normalizeString(event.type);
             const messageText = normalizeString(event.message || event.payload?.text || event.payload?.summary);
-            const isAccepted = type === 'task_agent.route.decided' && event.payload?.mode === 'execute';
             const isProgress = type === 'agent.progress.note' && messageText;
-            if (!isAccepted && !isProgress) {
+            if (!isProgress) {
                 return;
             }
-            const packet = isAccepted
-                ? {
-                      type: 'task.accepted',
-                      status: 'running',
-                      current_request: message
-                  }
-                : {
-                      type: 'task.progress',
-                      status: normalizeString(event.status, 'running'),
-                      summary: messageText
-                  };
+            const packet = {
+                type: 'task.progress',
+                status: normalizeString(event.status, 'running'),
+                summary: messageText
+            };
             progressRenderChain = progressRenderChain.then(async () => {
                 const text = await this.renderTaskPacket({
                     input,
@@ -3489,6 +3601,7 @@ class AILISGateway extends EventEmitter {
                 packet: failurePacket,
                 purpose: 'failure'
             });
+            await commitFinalOutput();
             return {
                 ok: false,
                 runId: outerRunId,
@@ -3525,6 +3638,7 @@ class AILISGateway extends EventEmitter {
                 displayText,
                 'chat'
             );
+            await commitFinalOutput({ discardUnsettledStream: false });
             return {
                 ...draft,
                 runId: outerRunId,
@@ -3547,6 +3661,7 @@ class AILISGateway extends EventEmitter {
             packet: taskResult,
             purpose
         });
+        await commitFinalOutput();
         this.taskAgentHarness.recordPersonaOutput(
             sessionId,
             taskResult?.turn_id,
@@ -3639,6 +3754,20 @@ class AILISGateway extends EventEmitter {
                       : {}),
                   context
               });
+        const emitControlledRunFinished = (payload = {}) => {
+            if (!taskAgentOwnsTurn) {
+                return;
+            }
+            this.emitGatewayEvent('agent.run.finished', {
+                runId: normalizeString(payload.runId || result?.runId || runId),
+                sessionId: normalizeString(payload.sessionId || result?.sessionId || sessionId, sessionId),
+                status: normalizeString(payload.status || result?.status, 'completed'),
+                ok: payload.ok === true,
+                displayText: normalizeString(payload.displayText || payload.text),
+                speechText: normalizeString(payload.speechText),
+                source: 'persona_task_dual_lane'
+            });
+        };
         const finalText = normalizeString(
             result?.displayText ||
             result?.speechText ||
@@ -3647,6 +3776,7 @@ class AILISGateway extends EventEmitter {
             result?.message
         );
         if (!finalText) {
+            emitControlledRunFinished(result || {});
             return {
                 ...result,
                 emberHarness: {
@@ -3668,22 +3798,31 @@ class AILISGateway extends EventEmitter {
             }
         });
         if (finalGate.blocked) {
-            return {
+            const blockedResult = {
                 ok: false,
                 status: 'blocked',
-                mode: result?.mode || 'agent',
-                intent: 'blocked_by_ember_harness',
                 runId: result?.runId,
                 sessionId: result?.sessionId || sessionId,
-                durationMs: result?.durationMs,
                 displayText: '最终回答已被 EMBER-Harness 阶段门控阻断，系统已回退到最近稳定阶段快照。',
-                speechText: '最终回答已被安全门控阻断。',
+                speechText: '最终回答已被安全门控阻断。'
+            };
+            emitControlledRunFinished(blockedResult);
+            return {
+                ...blockedResult,
+                mode: result?.mode || 'agent',
+                intent: 'blocked_by_ember_harness',
+                durationMs: result?.durationMs,
                 emberHarness: {
                     input: summarizeEmberHarnessRecord(inputGate),
                     final: summarizeEmberHarnessRecord(finalGate)
                 }
             };
         }
+        emitControlledRunFinished({
+            ...result,
+            displayText: finalText,
+            speechText: result?.speechText || finalText
+        });
         return {
             ...result,
             emberHarness: {

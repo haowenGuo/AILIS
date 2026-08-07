@@ -1309,7 +1309,7 @@ test('AILIS Gateway supplies desktop LLM settings to local agent clients', async
     }
 });
 
-test('AILIS Gateway buffers Persona until the same persistent TaskAgent routes the Turn', async () => {
+test('AILIS Gateway streams the Persona fast lane while the same persistent TaskAgent routes the Turn', async () => {
     const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-task-route-gate-'));
     const gateway = new AILISGateway({
         port: 0,
@@ -1321,10 +1321,23 @@ test('AILIS Gateway buffers Persona until the same persistent TaskAgent routes t
     });
     const runnerCalls = [];
     const memoryCalls = [];
+    const textDeltas = [];
+    const streamEvents = [];
+    const publicEvents = [];
+    gateway.on('event', (event) => publicEvents.push(event));
     let dispatchedContext = null;
+    let releaseTaskRoute;
+    const taskRouteGate = new Promise((resolve) => {
+        releaseTaskRoute = resolve;
+    });
     gateway.ensureAgentRunner = () => ({
         runMessage: async (request) => {
             runnerCalls.push(request);
+            if (request.context?.personaDraft) {
+                await request.onTextStreamEvent?.({ type: 'response.output_text.started' });
+                await request.onTextDelta?.('自然聊天回复');
+                await request.onTextStreamEvent?.({ type: 'response.output_text.committed' });
+            }
             return {
                 ok: true,
                 status: 'completed',
@@ -1337,6 +1350,7 @@ test('AILIS Gateway buffers Persona until the same persistent TaskAgent routes t
     gateway.taskAgentHarness = {
         dispatchTurn: async (context) => {
             dispatchedContext = context;
+            await taskRouteGate;
             return {
                 schema: 'ailis.task_result.v1',
                 status: 'completed',
@@ -1349,10 +1363,16 @@ test('AILIS Gateway buffers Persona until the same persistent TaskAgent routes t
     };
 
     try {
-        const result = await gateway.runAgent({
+        const resultPromise = gateway.runAgent({
             message: '陪我聊聊天',
-            sessionId: 'session-chat'
+            sessionId: 'session-chat',
+            onTextDelta: (delta, metadata) => textDeltas.push({ delta, metadata }),
+            onTextStreamEvent: (event) => streamEvents.push(event)
         });
+        await new Promise((resolve) => setImmediate(resolve));
+        assert.equal(textDeltas.map((entry) => entry.delta).join(''), '自然聊天回复');
+        releaseTaskRoute();
+        const result = await resultPromise;
         assert.equal(result.taskRoute, 'chat');
         assert.equal(result.displayText, '自然聊天回复');
         assert.equal(runnerCalls.length, 1);
@@ -1363,12 +1383,24 @@ test('AILIS Gateway buffers Persona until the same persistent TaskAgent routes t
         assert.equal(runnerCalls[0].memoryPolicy, 'read_only');
         assert.equal(memoryCalls.length, 1);
         assert.equal(personaOutputs.length, 1);
+        assert.equal(textDeltas.map((entry) => entry.delta).join(''), '自然聊天回复');
+        assert.ok(textDeltas.every((entry) => entry.metadata.phase === 'persona_fast_lane'));
+        assert.deepEqual(
+            streamEvents.map((entry) => entry.type),
+            ['response.output_text.started', 'response.output_text.committed']
+        );
+        assert.ok(streamEvents.every((entry) => entry.phase === 'persona_fast_lane'));
+        assert.match(runnerCalls[0].ephemeralDeveloperMessage, /public Persona fast lane/);
+        assert.ok(publicEvents.some((event) => event.type === 'agent.run.started'));
+        assert.ok(publicEvents.some((event) => event.type === 'agent.message.completed' && event.payload?.source === 'persona_fast_lane'));
+        assert.ok(publicEvents.some((event) => event.type === 'agent.run.finished'));
     } finally {
+        releaseTaskRoute?.();
         await fs.rm(workspaceRoot, { recursive: true, force: true });
     }
 });
 
-test('AILIS Gateway discards the Persona draft for execution and isolates TaskResult rendering', async () => {
+test('AILIS Gateway shows a safe Persona fast response during execution and keeps TaskResult authoritative', async () => {
     const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-task-result-gate-'));
     const gateway = new AILISGateway({
         port: 0,
@@ -1380,13 +1412,19 @@ test('AILIS Gateway discards the Persona draft for execution and isolates TaskRe
     });
     const runnerCalls = [];
     const memoryCalls = [];
+    const textDeltas = [];
     gateway.ensureAgentRunner = () => ({
         runMessage: async (request) => {
             runnerCalls.push(request);
+            if (request.context?.personaDraft) {
+                await request.onTextStreamEvent?.({ type: 'response.output_text.started' });
+                await request.onTextDelta?.('好，我先整理一下。');
+                await request.onTextStreamEvent?.({ type: 'response.output_text.committed' });
+            }
             return {
                 ok: true,
                 status: 'completed',
-                displayText: request.context?.personaDraft ? '这条草稿不能出现' : '攻略已经整理完成。'
+                displayText: request.context?.personaDraft ? '好，我先整理一下。' : '攻略已经整理完成。'
             };
         },
         recordMemoryTurn: (payload) => memoryCalls.push(payload)
@@ -1415,18 +1453,84 @@ test('AILIS Gateway discards the Persona draft for execution and isolates TaskRe
     try {
         const result = await gateway.runAgent({
             message: '写一份木偶攻略',
-            sessionId: 'session-task'
+            sessionId: 'session-task',
+            onTextDelta: (delta, metadata) => textDeltas.push({ delta, metadata })
         });
         assert.equal(result.taskRoute, 'execute');
         assert.equal(result.displayText, '攻略已经整理完成。');
-        assert.notEqual(result.displayText, '这条草稿不能出现');
+        assert.notEqual(result.displayText, '好，我先整理一下。');
+        assert.equal(textDeltas.map((entry) => entry.delta).join(''), '好，我先整理一下。');
+        assert.ok(textDeltas.every((entry) => entry.metadata.phase === 'persona_fast_lane'));
         assert.equal(memoryCalls.length, 0);
         const renderCalls = runnerCalls.filter((request) => request.context?.personaRenderOnly === true);
-        assert.ok(renderCalls.length >= 1);
+        assert.equal(renderCalls.length, 1);
         assert.ok(renderCalls.every((request) => request.memoryPolicy === 'disabled'));
         assert.ok(renderCalls.every((request) => request.messageHistory.length === 0));
         assert.match(renderCalls.at(-1).ephemeralDeveloperMessage, /木偶攻略正文/);
     } finally {
+        await fs.rm(workspaceRoot, { recursive: true, force: true });
+    }
+});
+
+test('AILIS Gateway never lets a late Persona fast-lane draft overwrite an authoritative task result', async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-task-late-draft-'));
+    const gateway = new AILISGateway({
+        port: 0,
+        workspaceRoot,
+        projectRoot: path.resolve('.'),
+        auditDir: path.join(workspaceRoot, '.audit'),
+        emberHarnessEnabled: false,
+        getDefaultContext: () => ({ taskAgentRoutingOwned: true })
+    });
+    let releaseDraft;
+    const textDeltas = [];
+    const publicEvents = [];
+    gateway.on('event', (event) => publicEvents.push(event));
+    gateway.ensureAgentRunner = () => ({
+        runMessage: async (request) => {
+            if (request.context?.personaDraft) {
+                await new Promise((resolve) => {
+                    releaseDraft = resolve;
+                });
+                await request.onTextStreamEvent?.({ type: 'response.output_text.started' });
+                await request.onTextDelta?.('迟到的草稿');
+                await request.onTextStreamEvent?.({ type: 'response.output_text.committed' });
+                return { ok: true, status: 'completed', displayText: '迟到的草稿' };
+            }
+            return { ok: true, status: 'completed', displayText: '权威任务结果' };
+        },
+        recordMemoryTurn: () => {}
+    });
+    gateway.taskAgentHarness = {
+        dispatchTurn: async (context) => ({
+            schema: 'ailis.task_result.v1',
+            status: 'completed',
+            route: 'execute',
+            turn_id: 'turn-fast-task',
+            current_request: context.currentUserMessage,
+            final_answer: '权威任务结果',
+            source_refs: [],
+            unresolved_fields: []
+        }),
+        recordPersonaOutput: () => {}
+    };
+
+    try {
+        const result = await gateway.runAgent({
+            message: '立刻完成任务',
+            sessionId: 'session-late-draft',
+            onTextDelta: (delta) => textDeltas.push(delta)
+        });
+        assert.equal(result.displayText, '权威任务结果');
+        releaseDraft();
+        await new Promise((resolve) => setImmediate(resolve));
+        assert.deepEqual(textDeltas, []);
+        assert.equal(
+            publicEvents.some((event) => event.type === 'agent.message.completed' && event.payload?.source === 'persona_fast_lane'),
+            false
+        );
+    } finally {
+        releaseDraft?.();
         await fs.rm(workspaceRoot, { recursive: true, force: true });
     }
 });

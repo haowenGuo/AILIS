@@ -11586,7 +11586,7 @@ class AILISAgentRunner {
                     requestContext.suppressCurrentUserMessage === true,
                 toolSummary: isPersonaOrchestratorRole(agentRuntimeRole)
                     ? requestContext.taskAgentRoutingOwned === true
-                        ? 'Persona has no task-control tools. TaskAgent owns routing and execution; Persona only produces buffered chat or renders an authoritative TaskEvent/TaskResult packet.'
+                        ? 'Persona has no task-control tools. TaskAgent owns routing and execution; Persona produces the concurrent fast conversational lane or renders an authoritative TaskEvent/TaskResult packet.'
                         : 'Persona tool surface: handoff_task transfers the immutable current user request to the system TaskAgent and returns one compact TaskResult packet. The Harness owns lifecycle and internal orchestration remains invisible to the user.'
                     : directToolSpecs.length
                         ? `Native direct tools exposed: ${directToolSpecs.map((tool) => tool.name).slice(0, 16).join(', ')}${directToolSpecs.length > 16 ? ', ...' : ''}.`
