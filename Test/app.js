@@ -68,7 +68,9 @@ const state = {
     followLatestMessage: true,
     scrollFrame: 0,
     messagesById: new Map(),
-    messageOrder: []
+    messageOrder: [],
+    systemNoticeTimer: 0,
+    systemNoticeHideTimer: 0
 };
 
 const MESSAGE_BOTTOM_THRESHOLD = 72;
@@ -298,6 +300,76 @@ function updateComposer() {
     }
 }
 
+function ensureSystemNoticeElement() {
+    let notice = document.getElementById('system-notice');
+    if (notice) {
+        return notice;
+    }
+    notice = document.createElement('div');
+    notice.id = 'system-notice';
+    notice.className = 'system-notice';
+    notice.dataset.visible = 'false';
+    notice.dataset.level = 'info';
+    notice.setAttribute('role', 'status');
+    notice.setAttribute('aria-live', 'polite');
+
+    const indicator = document.createElement('span');
+    indicator.className = 'system-notice-indicator';
+    indicator.setAttribute('aria-hidden', 'true');
+
+    const text = document.createElement('span');
+    text.className = 'system-notice-text';
+
+    const close = document.createElement('button');
+    close.className = 'system-notice-close';
+    close.type = 'button';
+    close.textContent = '×';
+    close.setAttribute('aria-label', '关闭系统提醒');
+    close.addEventListener('click', () => hideSystemNotice());
+
+    notice.append(indicator, text, close);
+    document.body.appendChild(notice);
+    return notice;
+}
+
+function hideSystemNotice() {
+    const notice = document.getElementById('system-notice');
+    if (!notice) {
+        return;
+    }
+    window.clearTimeout(state.systemNoticeTimer);
+    window.clearTimeout(state.systemNoticeHideTimer);
+    state.systemNoticeTimer = 0;
+    notice.dataset.visible = 'false';
+    state.systemNoticeHideTimer = window.setTimeout(() => {
+        notice.hidden = true;
+        state.systemNoticeHideTimer = 0;
+    }, 180);
+}
+
+function showSystemNotice(payload = {}) {
+    const message = String(payload.message || '').trim();
+    if (!message) {
+        return;
+    }
+    const notice = ensureSystemNoticeElement();
+    const level = ['info', 'success', 'warning', 'error'].includes(payload.level)
+        ? payload.level
+        : 'info';
+    const durationMs = Math.max(2500, Number(payload.durationMs) || 8000);
+    window.clearTimeout(state.systemNoticeTimer);
+    window.clearTimeout(state.systemNoticeHideTimer);
+    state.systemNoticeHideTimer = 0;
+    notice.hidden = false;
+    notice.dataset.level = level;
+    notice.querySelector('.system-notice-text').textContent = message;
+    notice.title = message;
+    window.requestAnimationFrame(() => {
+        notice.dataset.visible = 'true';
+    });
+    state.systemNoticeTimer = window.setTimeout(() => hideSystemNotice(), durationMs);
+}
+
 function setHistoryOpen(open) {
     state.historyOpen = Boolean(open);
     elements.experience.dataset.historyOpen = String(state.historyOpen);
@@ -498,6 +570,11 @@ function renderSnapshot(messages) {
 }
 
 function handlePetEvent(payload = {}) {
+    if (payload.type === 'system-notice') {
+        showSystemNotice(payload.notice || {});
+        return;
+    }
+
     if (payload.type === 'snapshot') {
         renderSnapshot(payload.messages);
         if (typeof payload.isBusy === 'boolean') {

@@ -61,6 +61,8 @@ window.addEventListener('DOMContentLoaded', () => {
     let fileDragDepth = 0;
     let currentMessages = [];
     let speechStatusText = '';
+    let systemNoticeText = '';
+    let systemNoticeTimer = 0;
     let currentRecognitionMode = window.ailisDesktop?.preferences?.recognitionMode || 'auto-vad';
     let currentPreferredMicDeviceId = window.ailisDesktop?.preferences?.preferredMicDeviceId || '';
     let recorderController = null;
@@ -86,6 +88,9 @@ window.addEventListener('DOMContentLoaded', () => {
         }
         if (isTranscribing) {
             return speechStatusText || t('正在本地识别语音...');
+        }
+        if (systemNoticeText) {
+            return systemNoticeText;
         }
         if (speechStatusText) {
             return speechStatusText;
@@ -165,6 +170,22 @@ window.addEventListener('DOMContentLoaded', () => {
         if (copyChatBtnEl) {
             copyChatBtnEl.disabled = currentMessages.filter((message) => !message.pending).length === 0;
         }
+    }
+
+    function showSystemNotice(notice = {}) {
+        const message = String(notice.message || '').trim();
+        if (!message) {
+            return;
+        }
+        window.clearTimeout(systemNoticeTimer);
+        systemNoticeText = message;
+        statusEl.dataset.noticeLevel = notice.level || 'info';
+        updateComposerState();
+        systemNoticeTimer = window.setTimeout(() => {
+            systemNoticeText = '';
+            delete statusEl.dataset.noticeLevel;
+            updateComposerState();
+        }, Math.max(2500, Number(notice.durationMs) || 8000));
     }
 
     function normalizeVisionAttachment(attachment) {
@@ -1131,6 +1152,11 @@ window.addEventListener('DOMContentLoaded', () => {
     });
 
     window.ailisDesktop?.onChatEvent?.((payload = {}) => {
+        if (payload.type === 'system-notice') {
+            showSystemNotice(payload.notice || {});
+            return;
+        }
+
         if (payload.type === 'snapshot') {
             renderSnapshot(payload.messages || []);
             if (typeof payload.isBusy === 'boolean') {
@@ -1184,6 +1210,7 @@ window.addEventListener('DOMContentLoaded', () => {
     });
 
     window.addEventListener('beforeunload', () => {
+        window.clearTimeout(systemNoticeTimer);
         clearLevelPolling();
         clearContinuousRestart();
         if (recorderController) {

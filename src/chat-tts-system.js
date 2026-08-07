@@ -423,6 +423,24 @@ export class ChatTTSSystem {
         window.dispatchEvent(new CustomEvent(CHAT_UI_EVENT_NAME, { detail: payload }));
     }
 
+    showSystemNotice(content, options = {}) {
+        const message = String(content || '').trim();
+        if (!message) {
+            return;
+        }
+        this.emitChatUiEvent({
+            type: 'system-notice',
+            notice: {
+                id: `system-notice-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+                message,
+                level: options.level || 'warning',
+                source: options.source || 'runtime',
+                code: options.code || '',
+                durationMs: Math.max(2500, Number(options.durationMs) || 8000)
+            }
+        });
+    }
+
     emitAvatarSpeechEvent(payload) {
         window.dispatchEvent(new CustomEvent(AVATAR_SPEECH_EVENT_NAME, { detail: payload }));
     }
@@ -681,7 +699,10 @@ export class ChatTTSSystem {
 
     clearConversation() {
         if (this.isBusy) {
-            this.addSystemMessage(t('AILIS 正在执行当前请求，完成后再清空会话。'));
+            this.showSystemNotice(t('AILIS 正在执行当前请求，完成后再清空会话。'), {
+                level: 'info',
+                code: 'conversation_busy'
+            });
             return false;
         }
         this.messageHistory = [];
@@ -691,7 +712,11 @@ export class ChatTTSSystem {
         } else {
             window.localStorage?.removeItem(this.getBrowserHistoryStorageKey());
         }
-        this.addSystemMessage('当前会话已清空。');
+        this.showSystemNotice('当前会话已清空。', {
+            level: 'success',
+            code: 'conversation_cleared',
+            durationMs: 4000
+        });
         this.emitChatUiEvent({
             type: 'snapshot',
             messages: this.getTranscriptSnapshot(),
@@ -907,7 +932,10 @@ export class ChatTTSSystem {
             this.removeMessageElement(aiMessageDiv);
             this.vrmSystem.stopSpeaking();
             if (!this.isTurnCancelled(turn)) {
-                this.addSystemMessage(`请求失败：${error.message}`);
+                this.showSystemNotice(`请求失败：${error.message}`, {
+                    level: 'error',
+                    code: 'chat_request_failed'
+                });
                 console.error('后端请求失败：', error);
             }
         } finally {
@@ -956,7 +984,11 @@ export class ChatTTSSystem {
         } catch {}
         this.removeMessageElement(interruptedTurn?.loadingEl);
         this.removeMessageElement(interruptedTurn?.aiMessageDiv);
-        this.addSystemMessage('已停止当前回复，后台会继续保存上下文和工具记录。你可以继续发送新消息。');
+        this.showSystemNotice('已停止当前回复，后台会继续保存上下文和工具记录。你可以继续发送新消息。', {
+            level: 'info',
+            code: 'chat_interrupted',
+            durationMs: 5500
+        });
         this.interruptRequested = false;
         this.interruptInFlight = false;
         this.setBusy(false);
@@ -1128,7 +1160,11 @@ export class ChatTTSSystem {
         if (this.speechProvider?.supportsTTS && !speechResult?.played) {
             const failureMessage = this.speechProvider.getLastTTSFailureMessage();
             if (failureMessage && !this.hasShownSpeechProviderHint) {
-                this.addSystemMessage(t('语音播放暂时不可用：{reason}', { reason: failureMessage }));
+                this.showSystemNotice(t('语音播放暂时不可用：{reason}', { reason: failureMessage }), {
+                    level: 'warning',
+                    source: 'speech',
+                    code: 'tts_provider_failed'
+                });
                 this.hasShownSpeechProviderHint = true;
             }
         }
@@ -1140,7 +1176,12 @@ export class ChatTTSSystem {
                 preserveMessageContent
             });
             if (!this.hasShownTextFallbackHint) {
-                this.addSystemMessage(t('当前语音服务不可用，已自动切换为纯文本回复。'));
+                this.showSystemNotice(t('当前语音服务不可用，已自动切换为纯文本回复。'), {
+                    level: 'info',
+                    source: 'speech',
+                    code: 'tts_text_fallback',
+                    durationMs: 5500
+                });
                 this.hasShownTextFallbackHint = true;
             }
             return;
@@ -1266,7 +1307,11 @@ export class ChatTTSSystem {
             errorMessage.includes('interact') ||
             errorMessage.includes('play')
         ) {
-            this.addSystemMessage('浏览器还没解锁音频，请先点击页面任意位置，再试一次语音播放。');
+            this.showSystemNotice('浏览器还没解锁音频，请先点击页面任意位置，再试一次语音播放。', {
+                level: 'warning',
+                source: 'speech',
+                code: 'audio_autoplay_blocked'
+            });
             this.hasShownAutoplayHint = true;
         }
     }

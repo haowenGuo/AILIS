@@ -41,6 +41,59 @@ test('failed TTS text fallback can explicitly keep the mouth closed', async () =
     assert.deepEqual(calls, ['mouth-stop', 'cue', 'text', 'scroll']);
 });
 
+test('TTS failures use the system notice channel instead of adding chat messages', async () => {
+    const notices = [];
+    const system = Object.create(ChatTTSSystem.prototype);
+    system.hasShownSpeechProviderHint = false;
+    system.hasShownTextFallbackHint = false;
+    system.speechProvider = {
+        isSpeechDisabled: false,
+        supportsTTS: true,
+        async playSpeech() {
+            return { played: false };
+        },
+        getLastTTSFailureMessage() {
+            return "ElevenLabs 语音生成失败：HTTP 400: API key must start with 'sk_'.";
+        }
+    };
+    system.showSystemNotice = (message, options) => notices.push({ message, options });
+    system.addSystemMessage = () => {
+        throw new Error('TTS failures must not enter the chat transcript');
+    };
+    system.endAvatarSpeech = () => {};
+    system.playFallbackSpeech = async () => {};
+
+    await system.playPreferredSpeech({
+        payload: { display_text: '正常回答', fallbackMode: true },
+        displayText: '正常回答',
+        alignment: null,
+        aiMessageDiv: {},
+        preserveMessageContent: true
+    });
+
+    assert.equal(notices.length, 2);
+    assert.match(notices[0].message, /API key must start/);
+    assert.equal(notices[0].options.code, 'tts_provider_failed');
+    assert.equal(notices[1].options.code, 'tts_text_fallback');
+});
+
+test('system notices emit outside transcript synchronization', () => {
+    const events = [];
+    const system = Object.create(ChatTTSSystem.prototype);
+    system.emitChatUiEvent = (payload) => events.push(payload);
+    system.showSystemNotice('语音服务配置异常', {
+        level: 'warning',
+        source: 'speech',
+        code: 'tts_provider_failed'
+    });
+
+    assert.equal(events.length, 1);
+    assert.equal(events[0].type, 'system-notice');
+    assert.equal(events[0].notice.message, '语音服务配置异常');
+    assert.equal(events[0].notice.code, 'tts_provider_failed');
+    assert.equal('message' in events[0], false);
+});
+
 test('committed bubble speech never rewrites the visible message during playback', async () => {
     const calls = [];
     const system = Object.create(ChatTTSSystem.prototype);
@@ -237,6 +290,8 @@ test('web experience enables server TTS and unlocks audio from the send gesture'
     assert.match(source, /petUrl\.searchParams\.set\('ttsVoice', state\.ttsVoiceId\)/);
     assert.match(source, /__AILIS_BUILD_REVISION__/);
     assert.match(source, /petUrl\.searchParams\.set\('assetVersion', WEB_ASSET_VERSION\)/);
+    assert.match(source, /payload\.type === 'system-notice'/);
+    assert.match(source, /showSystemNotice\(payload\.notice \|\| \{\}\)/);
     assert.match(
         source,
         /await petWindow\.audioPlayer\?\.unlock\?\.\(\);\s+await petWindow\.chatSystem\.sendExternalMessage\(text\)/

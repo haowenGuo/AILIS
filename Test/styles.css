@@ -218,6 +218,87 @@ svg {
     overflow: hidden;
 }
 
+.system-notice {
+    position: fixed;
+    z-index: 80;
+    top: 70px;
+    right: 18px;
+    display: grid;
+    grid-template-columns: 9px minmax(0, 1fr) 26px;
+    align-items: start;
+    gap: 10px;
+    width: min(420px, calc(100vw - 28px));
+    padding: 12px 10px 12px 13px;
+    border: 1px solid rgba(173, 129, 39, 0.3);
+    border-radius: 10px;
+    background: rgba(255, 252, 242, 0.96);
+    color: #574620;
+    box-shadow: 0 14px 36px rgba(20, 38, 44, 0.2);
+    opacity: 0;
+    transform: translateY(-8px);
+    pointer-events: none;
+    transition: opacity 160ms ease, transform 160ms ease;
+    backdrop-filter: blur(14px);
+}
+
+.system-notice[data-visible="true"] {
+    opacity: 1;
+    transform: translateY(0);
+    pointer-events: auto;
+}
+
+.system-notice[data-level="error"] {
+    border-color: rgba(176, 54, 83, 0.32);
+    background: rgba(255, 244, 247, 0.97);
+    color: #7d2942;
+}
+
+.system-notice[data-level="success"] {
+    border-color: rgba(46, 133, 99, 0.3);
+    background: rgba(241, 251, 246, 0.97);
+    color: #23694f;
+}
+
+.system-notice[data-level="info"] {
+    border-color: rgba(57, 119, 132, 0.28);
+    background: rgba(242, 250, 252, 0.97);
+    color: #2d6570;
+}
+
+.system-notice-indicator {
+    width: 9px;
+    height: 9px;
+    margin-top: 5px;
+    border-radius: 50%;
+    background: currentColor;
+    box-shadow: 0 0 0 4px color-mix(in srgb, currentColor 13%, transparent);
+}
+
+.system-notice-text {
+    min-width: 0;
+    font-size: 13px;
+    font-weight: 700;
+    line-height: 1.55;
+    overflow-wrap: anywhere;
+}
+
+.system-notice-close {
+    width: 26px;
+    height: 26px;
+    padding: 0;
+    border: 0;
+    border-radius: 6px;
+    color: currentColor;
+    background: transparent;
+    font-size: 20px;
+    line-height: 1;
+    cursor: pointer;
+}
+
+.system-notice-close:hover {
+    background: color-mix(in srgb, currentColor 10%, transparent);
+}
+
 .character-pane {
     position: relative;
     width: 100%;
@@ -1074,6 +1155,12 @@ svg {
 
     .dialogue-status {
         max-width: 46%;
+    }
+
+    .system-notice {
+        top: 58px;
+        right: 10px;
+        width: calc(100vw - 20px);
     }
 
     .quick-actions button:nth-child(n+3) {
