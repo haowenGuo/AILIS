@@ -1118,15 +1118,16 @@ test('AILIS Gateway streams the Persona fast lane while the same persistent Task
     gateway.ensureAgentRunner = () => ({
         runMessage: async (request) => {
             runnerCalls.push(request);
-            if (request.context?.personaDraft) {
+            const isFastLane = /provisional fast lane/.test(request.ephemeralDeveloperMessage || '');
+            if (isFastLane) {
                 await request.onTextStreamEvent?.({ type: 'response.output_text.started' });
-                await request.onTextDelta?.('自然聊天回复');
+                await request.onTextDelta?.('我在呢，马上回应你。');
                 await request.onTextStreamEvent?.({ type: 'response.output_text.committed' });
             }
             return {
                 ok: true,
                 status: 'completed',
-                displayText: request.context?.personaDraft ? '自然聊天回复' : '渲染后的任务结果'
+                displayText: isFastLane ? '我在呢，马上回应你。' : '自然聊天回复'
             };
         },
         recordMemoryTurn: (payload) => memoryCalls.push(payload)
@@ -1155,12 +1156,12 @@ test('AILIS Gateway streams the Persona fast lane while the same persistent Task
             onTextStreamEvent: (event) => streamEvents.push(event)
         });
         await new Promise((resolve) => setImmediate(resolve));
-        assert.equal(textDeltas.map((entry) => entry.delta).join(''), '自然聊天回复');
+        assert.equal(textDeltas.map((entry) => entry.delta).join(''), '我在呢，马上回应你。');
         releaseTaskRoute();
         const result = await resultPromise;
         assert.equal(result.taskRoute, 'chat');
         assert.equal(result.displayText, '自然聊天回复');
-        assert.equal(runnerCalls.length, 1);
+        assert.equal(runnerCalls.length, 2);
         assert.equal(runnerCalls[0].context.personaDraft, true);
         assert.equal(runnerCalls[0].context.taskAgentRoutingOwned, true);
         assert.equal(runnerCalls[0].context.turnEnvelope, dispatchedContext.turnEnvelope);
@@ -1168,14 +1169,16 @@ test('AILIS Gateway streams the Persona fast lane while the same persistent Task
         assert.equal(runnerCalls[0].memoryPolicy, 'read_only');
         assert.equal(memoryCalls.length, 1);
         assert.equal(personaOutputs.length, 1);
-        assert.equal(textDeltas.map((entry) => entry.delta).join(''), '自然聊天回复');
+        assert.equal(textDeltas.map((entry) => entry.delta).join(''), '我在呢，马上回应你。');
         assert.ok(textDeltas.every((entry) => entry.metadata.phase === 'persona_fast_lane'));
         assert.deepEqual(
             streamEvents.map((entry) => entry.type),
             ['response.output_text.started', 'response.output_text.committed']
         );
         assert.ok(streamEvents.every((entry) => entry.phase === 'persona_fast_lane'));
-        assert.match(runnerCalls[0].ephemeralDeveloperMessage, /public Persona fast lane/);
+        assert.match(runnerCalls[0].ephemeralDeveloperMessage, /provisional fast lane/);
+        assert.match(runnerCalls[0].ephemeralDeveloperMessage, /Never provide a requested result/);
+        assert.match(runnerCalls[1].ephemeralDeveloperMessage, /complete natural Persona reply/);
         assert.ok(publicEvents.some((event) => event.type === 'agent.run.started'));
         assert.ok(publicEvents.some((event) => event.type === 'agent.message.completed' && event.payload?.source === 'persona_fast_lane'));
         assert.ok(publicEvents.some((event) => event.type === 'agent.run.finished'));

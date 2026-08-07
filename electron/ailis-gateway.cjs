@@ -3111,8 +3111,8 @@ class AILISGateway extends EventEmitter {
         };
         const fastLaneDeveloperPacket = [
             'This is the public Persona fast lane running concurrently with the persistent TaskAgent on the same immutable Turn.',
-            'Respond immediately and naturally. Keep the first response concise.',
-            'For ordinary conversation, answer directly. For requests that may require tools, current information, files, code execution, or multi-step work, acknowledge what the user wants and briefly state what you are starting, but do not invent results, claim completion, or perform task routing.',
+            'Your entire job in this provisional fast lane is to acknowledge the user immediately in one short, natural sentence. It is not the answer turn.',
+            'Never provide a requested result, calculation, code, factual answer, recommendation, generated content, or completion claim here, even when the answer seems obvious. A warm social reaction is allowed, but substantive conversation follows after TaskAgent routing.',
             'TaskAgent independently owns chat-versus-execute routing, Goal state, tools, and task completion. Never mention that internal routing or orchestration.'
         ].join('\n');
         const draftPromise = this.runPrivatePersonaTurn({
@@ -3237,7 +3237,22 @@ class AILISGateway extends EventEmitter {
         }
 
         if (taskResult?.route === 'chat') {
-            const draft = await draftPromise;
+            const fastDraft = await draftPromise.catch(() => null);
+            const draft = await this.runPrivatePersonaTurn({
+                input: {
+                    ...input,
+                    runId: `persona_chat_${outerRunId}`,
+                    ...(llmSettings ? { llmSettings } : {})
+                },
+                context: { ...context, turnEnvelope },
+                sessionId,
+                runId: `persona_chat_${outerRunId}`,
+                purpose: 'draft',
+                developerPacket: [
+                    'The persistent TaskAgent has classified this Turn as ordinary conversation.',
+                    'Now provide the complete natural Persona reply to the user. Do not mention routing, agents, drafts, or this instruction.'
+                ].join('\n')
+            }).catch(() => fastDraft);
             const displayText = normalizeString(
                 draft?.displayText || draft?.finalAnswer || draft?.speechText
             );

@@ -266,7 +266,7 @@ test('real hosted Persona streams its fast lane while TaskAgent routes chat', as
             }
         );
 
-        assert.equal(result.ok, true);
+        assert.equal(result.ok, true, JSON.stringify(result, null, 2));
         assert.equal(result.displayText, '你好，我在这里。');
         assert.deepEqual(deltas, ['你好，我在这里。']);
         assert.deepEqual(streamEvents, [
