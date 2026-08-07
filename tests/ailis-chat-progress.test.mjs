@@ -92,6 +92,70 @@ test('assistant embodied command parser does not steal task-like dance requests'
     assert.equal(createEmbodiedCommandPayload('帮我写一个跳舞脚本'), null);
 });
 
+test('chat service returns Persona first and emits an early TaskResult as a separate background message', async () => {
+    const listeners = new Set();
+    const gateway = {
+        isSupported: true,
+        onEvent(listener) {
+            listeners.add(listener);
+            return () => listeners.delete(listener);
+        },
+        async getStatus() {
+            return { running: true, workspaceRoot: 'F:/AILIS_vps_deploy' };
+        },
+        async runAgent() {
+            const emit = (event) => {
+                for (const listener of [...listeners]) listener(event);
+            };
+            emit({
+                id: 'event-task-result',
+                type: 'persona.background.message',
+                payload: {
+                    runId: 'background-run-1',
+                    sessionId: 'main',
+                    status: 'completed',
+                    kind: 'result',
+                    text: '后台任务已经完成。',
+                    source: 'task_result_persona_actor'
+                }
+            });
+            emit({
+                type: 'task.background.finished',
+                payload: {
+                    runId: 'background-run-1',
+                    sessionId: 'main',
+                    status: 'completed'
+                }
+            });
+            return {
+                ok: true,
+                displayText: '好，我先看看。',
+                speechText: '好，我先看看。',
+                backgroundTask: {
+                    runId: 'background-run-1',
+                    sessionId: 'main',
+                    status: 'running'
+                }
+            };
+        }
+    };
+    const service = new AILISDesktopChatService({ gateway, runtimeKind: 'hosted' });
+    const backgroundMessages = [];
+    service.onBackgroundAssistantMessage((message) => backgroundMessages.push(message));
+
+    const persona = await service.fetchAssistantTurn({
+        sessionId: 'main',
+        messageHistory: [{ role: 'user', content: '查资料' }],
+        replyMode: 'text_only'
+    });
+
+    assert.equal(persona.display_text, '好，我先看看。');
+    assert.equal(backgroundMessages.length, 1);
+    assert.equal(backgroundMessages[0].display_text, '后台任务已经完成。');
+    assert.equal(backgroundMessages[0].backgroundTaskKind, 'result');
+    assert.equal(backgroundMessages[0].backgroundEventId, 'event-task-result');
+});
+
 test('chat progress bridge stays silent until reasoning arrives for a task run', () => {
     const fake = createFakeGateway();
     const outputs = [];

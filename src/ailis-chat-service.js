@@ -692,6 +692,102 @@ export class AILISDesktopChatService {
         this.prefersThinkingState = true;
         this.activeRunId = '';
         this.activeSessionId = '';
+        this.backgroundMessageListeners = new Set();
+        this.backgroundRunSessions = new Map();
+        this.pendingBackgroundMessages = new Map();
+        this.completedBackgroundRuns = new Set();
+        this.backgroundGatewayUnsubscribe = typeof this.gateway?.onEvent === 'function'
+            ? this.gateway.onEvent((event) => this.handleBackgroundGatewayEvent(event))
+            : null;
+    }
+
+    handleBackgroundGatewayEvent(event = {}) {
+        const type = normalizeText(event.type);
+        const eventPayload = event.payload && typeof event.payload === 'object' ? event.payload : {};
+        const runId = normalizeText(eventPayload.runId || eventPayload.parentRunId);
+        if (!runId) {
+            return;
+        }
+        if (type === 'task.background.finished') {
+            this.completedBackgroundRuns.add(runId);
+            this.backgroundRunSessions.delete(runId);
+            if (this.completedBackgroundRuns.size > 160) {
+                this.completedBackgroundRuns.delete(this.completedBackgroundRuns.values().next().value);
+            }
+            return;
+        }
+        if (type !== 'persona.background.message') {
+            return;
+        }
+        const message = toAssistantPayload(
+            normalizeMarkdownSource(eventPayload.text || eventPayload.displayText || ''),
+            {
+                speechText: eventPayload.speechText || eventPayload.speech_text || '',
+                bubbleText: eventPayload.bubbleText || eventPayload.bubble_text || '',
+                surface: eventPayload.surface || null,
+                backgroundTaskMessage: true,
+                backgroundTaskKind: normalizeText(eventPayload.kind, 'progress'),
+                backgroundRunId: runId,
+                backgroundEventId: normalizeText(event.id || eventPayload.eventId),
+                backgroundStatus: normalizeText(eventPayload.status),
+                source: normalizeText(eventPayload.source, 'task_result_persona_actor'),
+                taskResult: eventPayload.taskResult || null
+            }
+        );
+        const expectedSessionId = this.backgroundRunSessions.get(runId);
+        if (!expectedSessionId) {
+            const pending = this.pendingBackgroundMessages.get(runId) || [];
+            pending.push({ message, sessionId: normalizeText(eventPayload.sessionId) });
+            this.pendingBackgroundMessages.set(runId, pending.slice(-6));
+            if (this.pendingBackgroundMessages.size > 160) {
+                this.pendingBackgroundMessages.delete(this.pendingBackgroundMessages.keys().next().value);
+            }
+            return;
+        }
+        if (normalizeText(eventPayload.sessionId) !== normalizeText(expectedSessionId)) {
+            return;
+        }
+        this.emitBackgroundAssistantMessage(message);
+        if (message.backgroundTaskKind === 'result') {
+            this.backgroundRunSessions.delete(runId);
+        }
+    }
+
+    emitBackgroundAssistantMessage(message) {
+        for (const listener of [...this.backgroundMessageListeners]) {
+            try {
+                listener(message);
+            } catch {}
+        }
+    }
+
+    registerBackgroundTask(backgroundTask = {}, sessionId = '') {
+        const runId = normalizeText(backgroundTask.runId);
+        if (!runId) {
+            return;
+        }
+        const normalizedSessionId = normalizeText(backgroundTask.sessionId || sessionId);
+        if (!this.completedBackgroundRuns.has(runId)) {
+            this.backgroundRunSessions.set(runId, normalizedSessionId);
+        }
+        const pending = this.pendingBackgroundMessages.get(runId) || [];
+        this.pendingBackgroundMessages.delete(runId);
+        for (const item of pending) {
+            if (!item.sessionId || item.sessionId === normalizedSessionId) {
+                this.emitBackgroundAssistantMessage(item.message);
+            }
+            if (item.message?.backgroundTaskKind === 'result') {
+                this.backgroundRunSessions.delete(runId);
+            }
+        }
+    }
+
+    onBackgroundAssistantMessage(listener) {
+        if (typeof listener !== 'function') {
+            return () => {};
+        }
+        this.backgroundMessageListeners.add(listener);
+        return () => this.backgroundMessageListeners.delete(listener);
     }
 
     getWelcomeMessage() {
@@ -881,6 +977,7 @@ export class AILISDesktopChatService {
                     }
                 }
             );
+            this.registerBackgroundTask(result?.backgroundTask, sessionId);
         } finally {
             unsubscribeProgress();
             if (bridgedRunId && this.activeRunId === bridgedRunId) {

@@ -178,7 +178,7 @@ test('hosted runtime forwards provider text deltas outside the serialized reques
     }
 });
 
-test('real hosted Persona streams its fast lane while TaskAgent routes chat', async () => {
+test('real hosted Persona streams independently while TaskAgent routes chat in background', async () => {
     const modelRequests = [];
     const modelServer = http.createServer(async (req, res) => {
         const chunks = [];
@@ -398,6 +398,7 @@ test('hosted TaskAgent owns web task routing and Persona renders its result', as
         const toolNames = (request.tools || []).map((tool) =>
             tool?.function?.name || tool?.name || ''
         );
+        const isTaskResultRenderer = JSON.stringify(request).includes('Render the following authoritative TaskEvent/TaskResult');
         const message = toolNames.includes('task_route')
             ? {
                   role: 'assistant',
@@ -410,7 +411,7 @@ test('hosted TaskAgent owns web task routing and Persona renders its result', as
               }
             : {
                   role: 'assistant',
-                  content: '网页任务已经完成。'
+                  content: isTaskResultRenderer ? '网页任务已经完成。' : '好，我先看看。'
               };
         const response = Buffer.from(JSON.stringify({
             id: 'chatcmpl-hosted-handoff',
@@ -447,13 +448,19 @@ test('hosted TaskAgent owns web task routing and Persona renders its result', as
             requireTaskExecution: true
         });
         assert.equal(result.ok, true);
-        assert.match(result.displayText || result.finalAnswer, /网页任务已经完成/);
+        assert.match(result.displayText || result.finalAnswer, /好，我先看看/);
+        await manager.waitForBackgroundTasks('web:task-agent');
         const allToolSurfaces = requests.map((request) =>
             (request.tools || []).map((tool) => tool?.function?.name || tool?.name || '')
         );
         assert.ok(allToolSurfaces.some((tools) => tools.includes('task_route')));
         assert.equal(allToolSurfaces.some((tools) => tools.includes('handoff_task')), false);
         assert.ok(allToolSurfaces.some((tools) => tools.includes('tool_search')));
+        const backgroundEvents = manager.getEvents('web:task-agent', { cursor: 0, limit: 500 }).events;
+        assert.ok(backgroundEvents.some((event) => (
+            event.type === 'persona.background.message' &&
+            /网页任务已经完成/.test(event.payload?.text || '')
+        )));
 
         const key = tenantKey('web:task-agent');
         const harnessRoot = path.join(

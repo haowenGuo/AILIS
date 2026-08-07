@@ -200,7 +200,10 @@ class AILISHostedRuntimeManager {
             })
         });
         record.gateway = gateway;
-        const onEvent = (event) => this.recordEvent(key, event);
+        const onEvent = (event) => {
+            record.lastUsedAt = Date.now();
+            this.recordEvent(key, event);
+        };
         gateway.on?.('event', onEvent);
         record.unsubscribe = () => gateway.off?.('event', onEvent);
         gateway.startProfileCurationScheduler?.();
@@ -287,6 +290,11 @@ class AILISHostedRuntimeManager {
         };
     }
 
+    async waitForBackgroundTasks(tenantId) {
+        const record = await this.getRuntime(tenantId);
+        await record.gateway?.waitForBackgroundTaskRuns?.();
+    }
+
     async closeRecord(record) {
         if (!record) {
             return;
@@ -298,7 +306,10 @@ class AILISHostedRuntimeManager {
 
     async evictIdleRuntimes({ reserveSlots = 0, now = Date.now() } = {}) {
         const candidates = [...this.runtimes.values()]
-            .filter((record) => record.activeRuns === 0)
+            .filter((record) => (
+                record.activeRuns === 0 &&
+                record.gateway?.hasBackgroundTaskRuns?.() !== true
+            ))
             .sort((left, right) => left.lastUsedAt - right.lastUsedAt);
         for (const record of candidates) {
             const overCapacity = this.runtimes.size + reserveSlots > this.maxActiveTenants;

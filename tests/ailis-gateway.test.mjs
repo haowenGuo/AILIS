@@ -1094,7 +1094,7 @@ test('AILIS Gateway TaskAgent thread reuses parent LLM settings', async () => {
     assert.equal(calls[0].context.allowSystemMutation, true);
 });
 
-test('AILIS Gateway streams the Persona fast lane while the same persistent TaskAgent routes the Turn', async () => {
+test('AILIS Gateway returns the Persona actor without waiting for the persistent TaskAgent actor', async () => {
     const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-task-route-gate-'));
     const gateway = new AILISGateway({
         port: 0,
@@ -1118,8 +1118,8 @@ test('AILIS Gateway streams the Persona fast lane while the same persistent Task
     gateway.ensureAgentRunner = () => ({
         runMessage: async (request) => {
             runnerCalls.push(request);
-            const isFastLane = /provisional fast lane/.test(request.ephemeralDeveloperMessage || '');
-            if (isFastLane) {
+            const isPersonaActor = request.context?.personaDraft === true;
+            if (isPersonaActor) {
                 await request.onTextStreamEvent?.({ type: 'response.output_text.started' });
                 await request.onTextDelta?.('我在呢，马上回应你。');
                 await request.onTextStreamEvent?.({ type: 'response.output_text.committed' });
@@ -1127,7 +1127,7 @@ test('AILIS Gateway streams the Persona fast lane while the same persistent Task
             return {
                 ok: true,
                 status: 'completed',
-                displayText: isFastLane ? '我在呢，马上回应你。' : '自然聊天回复'
+                displayText: isPersonaActor ? '我在呢，马上回应你。' : '自然聊天回复'
             };
         },
         recordMemoryTurn: (payload) => memoryCalls.push(payload)
@@ -1157,38 +1157,42 @@ test('AILIS Gateway streams the Persona fast lane while the same persistent Task
         });
         await new Promise((resolve) => setImmediate(resolve));
         assert.equal(textDeltas.map((entry) => entry.delta).join(''), '我在呢，马上回应你。');
-        releaseTaskRoute();
         const result = await resultPromise;
-        assert.equal(result.taskRoute, 'chat');
-        assert.equal(result.displayText, '自然聊天回复');
-        assert.equal(runnerCalls.length, 2);
+        assert.equal(result.taskRoute, 'pending');
+        assert.equal(result.displayText, '我在呢，马上回应你。');
+        assert.equal(result.backgroundTask.status, 'running');
+        assert.equal(runnerCalls.length, 1);
         assert.equal(runnerCalls[0].context.personaDraft, true);
         assert.equal(runnerCalls[0].context.taskAgentRoutingOwned, true);
         assert.equal(runnerCalls[0].context.turnEnvelope, dispatchedContext.turnEnvelope);
         assert.equal(Object.isFrozen(dispatchedContext.turnEnvelope), true);
         assert.equal(runnerCalls[0].memoryPolicy, 'read_only');
         assert.equal(memoryCalls.length, 1);
-        assert.equal(personaOutputs.length, 1);
+        assert.equal(personaOutputs.length, 0);
         assert.equal(textDeltas.map((entry) => entry.delta).join(''), '我在呢，马上回应你。');
-        assert.ok(textDeltas.every((entry) => entry.metadata.phase === 'persona_fast_lane'));
+        assert.ok(textDeltas.every((entry) => entry.metadata.phase === 'persona_actor'));
         assert.deepEqual(
             streamEvents.map((entry) => entry.type),
             ['response.output_text.started', 'response.output_text.committed']
         );
-        assert.ok(streamEvents.every((entry) => entry.phase === 'persona_fast_lane'));
-        assert.match(runnerCalls[0].ephemeralDeveloperMessage, /provisional fast lane/);
-        assert.match(runnerCalls[0].ephemeralDeveloperMessage, /Never provide a requested result/);
-        assert.match(runnerCalls[1].ephemeralDeveloperMessage, /complete natural Persona reply/);
+        assert.ok(streamEvents.every((entry) => entry.phase === 'persona_actor'));
+        assert.match(runnerCalls[0].ephemeralDeveloperMessage, /persistent user-facing Persona actor/);
+        assert.match(runnerCalls[0].ephemeralDeveloperMessage, /do not wait for TaskAgent/);
         assert.ok(publicEvents.some((event) => event.type === 'agent.run.started'));
-        assert.ok(publicEvents.some((event) => event.type === 'agent.message.completed' && event.payload?.source === 'persona_fast_lane'));
+        assert.ok(publicEvents.some((event) => event.type === 'agent.message.completed' && event.payload?.source === 'persona_actor'));
         assert.ok(publicEvents.some((event) => event.type === 'agent.run.finished'));
+        assert.equal(gateway.hasBackgroundTaskRuns(), true);
+        releaseTaskRoute();
+        await gateway.waitForBackgroundTaskRuns();
+        assert.equal(personaOutputs.length, 1);
+        assert.equal(gateway.hasBackgroundTaskRuns(), false);
     } finally {
         releaseTaskRoute?.();
         await fs.rm(workspaceRoot, { recursive: true, force: true });
     }
 });
 
-test('AILIS Gateway shows a safe Persona fast response during execution and keeps TaskResult authoritative', async () => {
+test('AILIS Gateway publishes TaskResult through Persona as a later background message', async () => {
     const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-task-result-gate-'));
     const gateway = new AILISGateway({
         port: 0,
@@ -1244,23 +1248,27 @@ test('AILIS Gateway shows a safe Persona fast response during execution and keep
             sessionId: 'session-task',
             onTextDelta: (delta, metadata) => textDeltas.push({ delta, metadata })
         });
-        assert.equal(result.taskRoute, 'execute');
-        assert.equal(result.displayText, '攻略已经整理完成。');
-        assert.notEqual(result.displayText, '好，我先整理一下。');
+        assert.equal(result.taskRoute, 'pending');
+        assert.equal(result.displayText, '好，我先整理一下。');
         assert.equal(textDeltas.map((entry) => entry.delta).join(''), '好，我先整理一下。');
-        assert.ok(textDeltas.every((entry) => entry.metadata.phase === 'persona_fast_lane'));
-        assert.equal(memoryCalls.length, 0);
+        assert.ok(textDeltas.every((entry) => entry.metadata.phase === 'persona_actor'));
+        assert.equal(memoryCalls.length, 1);
+        await gateway.waitForBackgroundTaskRuns();
         const renderCalls = runnerCalls.filter((request) => request.context?.personaRenderOnly === true);
         assert.equal(renderCalls.length, 1);
-        assert.ok(renderCalls.every((request) => request.memoryPolicy === 'disabled'));
+        assert.ok(renderCalls.every((request) => request.memoryPolicy === 'read_only'));
         assert.ok(renderCalls.every((request) => request.messageHistory.length === 0));
         assert.match(renderCalls.at(-1).ephemeralDeveloperMessage, /木偶攻略正文/);
+        const taskMessage = gateway.eventLog.find((event) => (
+            event.type === 'persona.background.message' && event.payload?.kind === 'result'
+        ));
+        assert.equal(taskMessage?.payload?.text, '攻略已经整理完成。');
     } finally {
         await fs.rm(workspaceRoot, { recursive: true, force: true });
     }
 });
 
-test('AILIS Gateway never lets a late Persona fast-lane draft overwrite an authoritative task result', async () => {
+test('AILIS Gateway keeps a late Persona reply and an earlier TaskResult as separate messages', async () => {
     const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-task-late-draft-'));
     const gateway = new AILISGateway({
         port: 0,
@@ -1304,19 +1312,26 @@ test('AILIS Gateway never lets a late Persona fast-lane draft overwrite an autho
     };
 
     try {
-        const result = await gateway.runAgent({
+        const resultPromise = gateway.runAgent({
             message: '立刻完成任务',
             sessionId: 'session-late-draft',
             onTextDelta: (delta) => textDeltas.push(delta)
         });
-        assert.equal(result.displayText, '权威任务结果');
+        while (!releaseDraft) {
+            await new Promise((resolve) => setImmediate(resolve));
+        }
+        await gateway.waitForBackgroundTaskRuns();
+        const taskMessage = publicEvents.find((event) => (
+            event.type === 'persona.background.message' && event.payload?.kind === 'result'
+        ));
+        assert.equal(taskMessage?.payload?.text, '权威任务结果');
         releaseDraft();
-        await new Promise((resolve) => setImmediate(resolve));
-        assert.deepEqual(textDeltas, []);
-        assert.equal(
-            publicEvents.some((event) => event.type === 'agent.message.completed' && event.payload?.source === 'persona_fast_lane'),
-            false
-        );
+        const result = await resultPromise;
+        assert.equal(result.displayText, '迟到的草稿');
+        assert.deepEqual(textDeltas, ['迟到的草稿']);
+        assert.ok(publicEvents.some((event) => (
+            event.type === 'agent.message.completed' && event.payload?.source === 'persona_actor'
+        )));
     } finally {
         releaseDraft?.();
         await fs.rm(workspaceRoot, { recursive: true, force: true });

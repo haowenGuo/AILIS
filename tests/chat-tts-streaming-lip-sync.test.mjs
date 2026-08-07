@@ -191,6 +191,43 @@ test('streaming draft text is not queued for speech before the bubble is committ
     ]);
 });
 
+test('background TaskResult appends a new Persona bubble without locking the active composer', async () => {
+    const calls = [];
+    const system = Object.create(ChatTTSSystem.prototype);
+    system.historyReady = Promise.resolve();
+    system.isBusy = false;
+    system.backgroundMessageIds = new Set();
+    system.messageHistory = [];
+    system.proactiveCompanion = { noteAssistantTurn() {} };
+    system.createAIMessage = () => ({ dataset: {} });
+    system.executeAvatarCue = () => calls.push('cue');
+    system.updateMessageContent = (_element, text) => calls.push(`text:${text}`);
+    system.scrollToBottom = () => {};
+    system.persistConversation = async () => calls.push('persist');
+    system.stopLingeringSpeech = () => calls.push('speech-stop');
+    system.startCommittedBubbleSpeech = (payload) => calls.push(`speech:${payload.display_text}`);
+    system.startAutoChatTimer = () => {};
+
+    await system.commitBackgroundAssistantMessage({
+        display_text: '任务结果作为新消息到达。',
+        speech_text: '任务结果作为新消息到达。',
+        backgroundTaskKind: 'result',
+        backgroundEventId: 'result-event-1',
+        source: 'task_result_persona_actor'
+    });
+
+    assert.equal(system.isBusy, false);
+    assert.equal(system.messageHistory.length, 1);
+    assert.equal(system.messageHistory[0].content, '任务结果作为新消息到达。');
+    assert.deepEqual(calls, [
+        'cue',
+        'text:任务结果作为新消息到达。',
+        'persist',
+        'speech-stop',
+        'speech:任务结果作为新消息到达。'
+    ]);
+});
+
 test('web experience enables server TTS and unlocks audio from the send gesture', async () => {
     const source = await readFile(new URL('../Test/app.js', import.meta.url), 'utf8');
     const html = await readFile(new URL('../Test/index.html', import.meta.url), 'utf8');

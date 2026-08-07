@@ -88,6 +88,10 @@ const DEFAULT_HTTP_REQUEST_TIMEOUT_MS = Math.max(0, Number(process.env.AILIS_GAT
 const DEFAULT_PROFILE_CURATION_START_DELAY_MS = Number(process.env.AILIS_PROFILE_CURATION_START_DELAY_MS || 60 * 1000);
 const DEFAULT_PROFILE_CURATION_CHECK_INTERVAL_MS = Number(process.env.AILIS_PROFILE_CURATION_CHECK_INTERVAL_MS || 6 * 60 * 60 * 1000);
 const DEFAULT_PROFILE_CURATION_DEBOUNCE_MS = Number(process.env.AILIS_PROFILE_CURATION_DEBOUNCE_MS || 2 * 60 * 1000);
+const PERSONA_TASK_PROGRESS_MIN_INTERVAL_MS = Math.max(
+    15000,
+    Number(process.env.AILIS_PERSONA_TASK_PROGRESS_MIN_INTERVAL_MS || 45000) || 45000
+);
 const TASK_AGENT_PUBLIC_EVENT_TYPES = new Set([
     'task_agent.route.decided',
     'agent.progress.note'
@@ -128,6 +132,9 @@ const LOSSLESS_EVENT_TYPES = new Set([
     'agent.step.started',
     'agent.step.finished',
     'agent.progress.note',
+    'persona.background.message',
+    'task.background.started',
+    'task.background.finished',
     'agent.plan.updated',
     'context_artifact.created',
     'subagent.event',
@@ -1207,6 +1214,7 @@ class AILISGateway extends EventEmitter {
         this.eventSeq = 0;
         this.eventLog = [];
         this.privateRunIds = new Set();
+        this.backgroundTaskRuns = new Set();
         this.eventLogLimit = Math.max(
             100,
             Math.min(Number(options.eventLogLimit || DEFAULT_EVENT_REPLAY_LIMIT), MAX_EVENT_REPLAY_LIMIT)
@@ -1974,6 +1982,16 @@ class AILISGateway extends EventEmitter {
     getEventsAfter(cursor = 0, limit = this.eventLogLimit) {
         const boundedLimit = Math.max(1, Math.min(Number(limit) || this.eventLogLimit, this.eventLogLimit));
         return this.eventLog.filter((event) => event.seq > cursor).slice(-boundedLimit);
+    }
+
+    hasBackgroundTaskRuns() {
+        return this.backgroundTaskRuns.size > 0;
+    }
+
+    async waitForBackgroundTaskRuns() {
+        while (this.backgroundTaskRuns.size > 0) {
+            await Promise.allSettled([...this.backgroundTaskRuns]);
+        }
     }
 
     writeSseChunk(client, chunk) {
@@ -2941,8 +2959,8 @@ class AILISGateway extends EventEmitter {
                 ...input,
                 runId: privateRunId,
                 sessionId,
-                memoryPolicy: purpose === 'draft' ? 'read_only' : 'disabled',
-                messageHistory: purpose === 'draft' && Array.isArray(input.messageHistory)
+                memoryPolicy: 'read_only',
+                messageHistory: Array.isArray(input.messageHistory)
                     ? input.messageHistory
                     : [],
                 ephemeralDeveloperMessage: normalizeString(developerPacket),
@@ -2960,7 +2978,7 @@ class AILISGateway extends EventEmitter {
                     taskAgentRoutingOwned: true,
                     personaDraft: purpose === 'draft',
                     personaRenderOnly: purpose !== 'draft',
-                    memoryPolicy: purpose === 'draft' ? 'read_only' : 'disabled'
+                    memoryPolicy: 'read_only'
                 }
             });
         } finally {
@@ -2987,7 +3005,7 @@ class AILISGateway extends EventEmitter {
                 ...input,
                 message: normalizeString(turnEnvelope.userMessage || input.message || input.prompt || input.task),
                 attachments: [],
-                messageHistory: []
+                messageHistory: Array.isArray(input.messageHistory) ? input.messageHistory : []
             },
             context: { ...context, turnEnvelope },
             sessionId,
@@ -3029,29 +3047,26 @@ class AILISGateway extends EventEmitter {
             runId: outerRunId,
             sessionId,
             status: 'running',
-            mode: 'task-agent-controlled',
-            source: 'persona_task_dual_lane'
+            mode: 'concurrent-persona-task-agent',
+            source: 'persona_actor'
         });
-        const fastLaneStreamId = `persona_fast_lane_${outerRunId}`;
-        let fastLaneText = '';
-        let fastLaneStreamStarted = false;
-        let fastLaneStreamSettled = false;
-        let finalOutputCommitted = false;
+        const personaStreamId = `persona_actor_${outerRunId}`;
+        let personaStreamText = '';
         const publishPersonaDelta = async (delta, metadata = {}) => {
             const textDelta = typeof delta === 'string' ? delta : '';
-            if (!textDelta || finalOutputCommitted) {
+            if (!textDelta) {
                 return;
             }
-            fastLaneText += textDelta;
+            personaStreamText += textDelta;
             this.emitGatewayEvent('agent.message.delta', {
                 runId: outerRunId,
                 sessionId,
                 status: 'streaming',
-                text: fastLaneText,
+                text: personaStreamText,
                 delta: textDelta,
-                streamId: fastLaneStreamId,
-                phase: 'persona_fast_lane',
-                source: 'persona_fast_lane'
+                streamId: personaStreamId,
+                phase: 'persona_actor',
+                source: 'persona_actor'
             });
             if (typeof input.onTextDelta === 'function') {
                 try {
@@ -3059,22 +3074,16 @@ class AILISGateway extends EventEmitter {
                         ...metadata,
                         runId: outerRunId,
                         sessionId,
-                        streamId: fastLaneStreamId,
-                        phase: 'persona_fast_lane'
+                        streamId: personaStreamId,
+                        phase: 'persona_actor'
                     });
                 } catch {}
             }
         };
         const publishPersonaStreamEvent = async (streamEvent = {}) => {
             const eventType = normalizeString(streamEvent.type);
-            if (!eventType || finalOutputCommitted) {
+            if (!eventType) {
                 return;
-            }
-            if (eventType === 'response.output_text.started') {
-                fastLaneStreamStarted = true;
-            }
-            if (eventType === 'response.output_text.committed' || eventType === 'response.output_text.discarded') {
-                fastLaneStreamSettled = true;
             }
             if (typeof input.onTextStreamEvent === 'function') {
                 try {
@@ -3083,90 +3092,56 @@ class AILISGateway extends EventEmitter {
                         type: eventType,
                         runId: outerRunId,
                         sessionId,
-                        streamId: fastLaneStreamId,
-                        phase: 'persona_fast_lane'
+                        streamId: personaStreamId,
+                        phase: 'persona_actor'
                     });
                 } catch {}
             }
         };
-        const commitFinalOutput = async ({ discardUnsettledStream = true } = {}) => {
-            finalOutputCommitted = true;
-            if (
-                discardUnsettledStream &&
-                fastLaneStreamStarted &&
-                !fastLaneStreamSettled &&
-                typeof input.onTextStreamEvent === 'function'
-            ) {
-                try {
-                    await input.onTextStreamEvent({
-                        type: 'response.output_text.discarded',
-                        runId: outerRunId,
-                        sessionId,
-                        streamId: fastLaneStreamId,
-                        phase: 'persona_fast_lane',
-                        reason: 'authoritative_task_result_ready'
-                    });
-                } catch {}
-            }
-        };
-        const fastLaneDeveloperPacket = [
-            'This is the public Persona fast lane running concurrently with the persistent TaskAgent on the same immutable Turn.',
-            'Your entire job in this provisional fast lane is to acknowledge the user immediately in one short, natural sentence. It is not the answer turn.',
-            'Never provide a requested result, calculation, code, factual answer, recommendation, generated content, or completion claim here, even when the answer seems obvious. A warm social reaction is allowed, but substantive conversation follows after TaskAgent routing.',
-            'TaskAgent independently owns chat-versus-execute routing, Goal state, tools, and task completion. Never mention that internal routing or orchestration.'
+        const personaDeveloperPacket = [
+            'You are the persistent user-facing Persona actor. The same immutable user message is being delivered concurrently to a separate persistent TaskAgent actor.',
+            'Respond now as a complete conversational participant; do not wait for TaskAgent routing or task completion. Fully handle ordinary conversation yourself.',
+            'When the request needs tools, current verification, or longer execution, respond naturally to the user now without inventing an unobserved result. Task progress and results will arrive later as separate events that you can present in new messages.',
+            'Do not describe the internal actors, routing, event channel, or orchestration.'
         ].join('\n');
-        const draftPromise = this.runPrivatePersonaTurn({
+        const personaPromise = this.runPrivatePersonaTurn({
             input: {
                 ...input,
-                runId: `persona_draft_${outerRunId}`,
+                runId: `persona_actor_${outerRunId}`,
                 ...(llmSettings ? { llmSettings } : {})
             },
             context: { ...context, turnEnvelope },
             sessionId,
-            runId: `persona_draft_${outerRunId}`,
+            runId: `persona_actor_${outerRunId}`,
             purpose: 'draft',
-            developerPacket: fastLaneDeveloperPacket,
+            developerPacket: personaDeveloperPacket,
             onTextDelta: typeof input.onTextDelta === 'function' ? publishPersonaDelta : null,
             onTextStreamEvent: typeof input.onTextDelta === 'function'
                 ? publishPersonaStreamEvent
                 : null
         });
-        draftPromise.then((draft) => {
-            if (finalOutputCommitted) {
-                return;
-            }
-            const text = normalizeString(draft?.displayText || draft?.finalAnswer || draft?.speechText);
-            if (!text) {
-                return;
-            }
-            this.emitGatewayEvent('agent.message.completed', {
-                runId: outerRunId,
-                sessionId,
-                status: 'in_progress',
-                ok: true,
-                text,
-                speechText: normalizeString(draft?.speechText, text),
-                bubbleText: normalizeString(draft?.bubbleText),
-                streamId: fastLaneStreamId,
-                phase: 'persona_fast_lane',
-                source: 'persona_fast_lane'
-            });
-        }).catch(() => {});
 
-        let progressRenderChain = Promise.resolve();
+        let lastProgressRenderAt = Date.now();
+        let progressRenderInFlight = null;
         const onTaskEvent = (event = {}) => {
             const type = normalizeString(event.type);
             const messageText = normalizeString(event.message || event.payload?.text || event.payload?.summary);
             const isProgress = type === 'agent.progress.note' && messageText;
-            if (!isProgress) {
+            const now = Date.now();
+            if (
+                !isProgress ||
+                progressRenderInFlight ||
+                now - lastProgressRenderAt < PERSONA_TASK_PROGRESS_MIN_INTERVAL_MS
+            ) {
                 return;
             }
+            lastProgressRenderAt = now;
             const packet = {
                 type: 'task.progress',
                 status: normalizeString(event.status, 'running'),
                 summary: messageText
             };
-            progressRenderChain = progressRenderChain.then(async () => {
+            progressRenderInFlight = (async () => {
                 const text = await this.renderTaskPacket({
                     input,
                     context,
@@ -3177,146 +3152,196 @@ class AILISGateway extends EventEmitter {
                     purpose: 'progress'
                 });
                 if (text) {
-                    this.emitGatewayEvent('agent.progress.note', {
+                    this.emitGatewayEvent('persona.background.message', {
                         runId: outerRunId,
                         sessionId,
                         status: packet.status,
                         text,
-                        source: 'task_event_persona_renderer'
+                        speechText: text,
+                        kind: 'progress',
+                        phase: 'task_progress',
+                        source: 'task_event_persona_actor'
                     });
                 }
-            }).catch(() => {});
+            })().catch(() => {}).finally(() => {
+                progressRenderInFlight = null;
+            });
         };
 
-        let taskResult;
-        try {
-            taskResult = await this.taskAgentHarness.dispatchTurn({
-                ...context,
+        let backgroundTaskStatus = 'completed';
+        const taskPromise = (async () => {
+            this.emitGatewayEvent('task.background.started', {
                 runId: outerRunId,
-                parentRunId: outerRunId,
                 sessionId,
-                sessionKey: sessionId,
-                currentUserMessage: message,
-                turnEnvelope,
-                attachments: turnEnvelope.attachments,
-                fileAttachments: turnEnvelope.attachments,
-                llmSettings: llmSettings || context.llmSettings || null,
-                returnAfterSteer: true,
-                onTaskEvent
+                status: 'running',
+                currentRequest: message,
+                source: 'task_agent_actor'
             });
-        } catch (error) {
-            await progressRenderChain;
-            const failurePacket = {
-                type: 'task.failed',
-                status: 'failed',
-                error: error?.message || String(error),
-                current_request: message
-            };
+            let taskResult;
+            try {
+                taskResult = await this.taskAgentHarness.dispatchTurn({
+                    ...context,
+                    runId: `task_${outerRunId}`,
+                    parentRunId: outerRunId,
+                    sessionId,
+                    sessionKey: sessionId,
+                    currentUserMessage: message,
+                    turnEnvelope,
+                    attachments: turnEnvelope.attachments,
+                    fileAttachments: turnEnvelope.attachments,
+                    llmSettings: llmSettings || context.llmSettings || null,
+                    returnAfterSteer: true,
+                    onTaskEvent
+                });
+            } catch (error) {
+                backgroundTaskStatus = 'failed';
+                if (progressRenderInFlight) {
+                    await progressRenderInFlight;
+                }
+                const failurePacket = {
+                    type: 'task.failed',
+                    status: 'failed',
+                    error: error?.message || String(error),
+                    current_request: message
+                };
+                const displayText = await this.renderTaskPacket({
+                    input,
+                    context,
+                    sessionId,
+                    outerRunId,
+                    turnEnvelope,
+                    packet: failurePacket,
+                    purpose: 'failure'
+                });
+                this.emitGatewayEvent('persona.background.message', {
+                    runId: outerRunId,
+                    sessionId,
+                    status: 'failed',
+                    text: displayText,
+                    speechText: displayText,
+                    kind: 'result',
+                    phase: 'task_failure',
+                    source: 'task_result_persona_actor'
+                });
+                return failurePacket;
+            }
+
+            if (taskResult?.route === 'chat') {
+                const persona = await personaPromise.catch(() => null);
+                const personaText = normalizeString(
+                    persona?.displayText || persona?.finalAnswer || persona?.speechText
+                );
+                this.taskAgentHarness.recordPersonaOutput(
+                    sessionId,
+                    taskResult.turn_id,
+                    personaText,
+                    'chat'
+                );
+                return taskResult;
+            }
+
+            if (taskResult?.steer_accepted === true) {
+                return taskResult;
+            }
+
+            if (progressRenderInFlight) {
+                await progressRenderInFlight;
+            }
             const displayText = await this.renderTaskPacket({
                 input,
                 context,
                 sessionId,
                 outerRunId,
                 turnEnvelope,
-                packet: failurePacket,
-                purpose: 'failure'
-            });
-            await commitFinalOutput();
-            return {
-                ok: false,
-                runId: outerRunId,
-                sessionId,
-                status: 'failed',
-                mode: 'task-agent-controlled',
-                intent: 'task_execution_failed',
-                executionRequired: true,
-                displayText,
-                speechText: displayText,
-                taskResult: failurePacket
-            };
-        }
-
-        if (taskResult?.route === 'chat') {
-            const fastDraft = await draftPromise.catch(() => null);
-            const draft = await this.runPrivatePersonaTurn({
-                input: {
-                    ...input,
-                    runId: `persona_chat_${outerRunId}`,
-                    ...(llmSettings ? { llmSettings } : {})
-                },
-                context: { ...context, turnEnvelope },
-                sessionId,
-                runId: `persona_chat_${outerRunId}`,
-                purpose: 'draft',
-                developerPacket: [
-                    'The persistent TaskAgent has classified this Turn as ordinary conversation.',
-                    'Now provide the complete natural Persona reply to the user. Do not mention routing, agents, drafts, or this instruction.'
-                ].join('\n')
-            }).catch(() => fastDraft);
-            const displayText = normalizeString(
-                draft?.displayText || draft?.finalAnswer || draft?.speechText
-            );
-            this.ensureAgentRunner().recordMemoryTurn({
-                request: {
-                    ...input,
-                    context: { ...context, memoryPolicy: 'read_write' },
-                    memoryPolicy: 'read_write'
-                },
-                result: { ...draft, displayText },
-                message,
-                sessionId,
-                source: 'persona_chat_committed'
+                packet: taskResult,
+                purpose: 'result'
             });
             this.taskAgentHarness.recordPersonaOutput(
                 sessionId,
-                taskResult.turn_id,
+                taskResult?.turn_id,
                 displayText,
-                'chat'
+                'result'
             );
-            await commitFinalOutput({ discardUnsettledStream: false });
-            return {
-                ...draft,
+            this.emitGatewayEvent('persona.background.message', {
                 runId: outerRunId,
                 sessionId,
-                taskRoute: 'chat',
-                taskResult,
-                displayText,
-                speechText: normalizeString(draft?.speechText, displayText)
-            };
-        }
-
-        await progressRenderChain;
-        const purpose = taskResult?.steer_accepted === true ? 'steer' : 'result';
-        const displayText = await this.renderTaskPacket({
-            input,
-            context,
-            sessionId,
-            outerRunId,
-            turnEnvelope,
-            packet: taskResult,
-            purpose
+                status: normalizeString(taskResult?.status, 'completed'),
+                text: displayText,
+                speechText: displayText,
+                kind: 'result',
+                phase: 'task_result',
+                source: 'task_result_persona_actor',
+                taskResult
+            });
+            return taskResult;
+        })();
+        let trackedTaskPromise;
+        trackedTaskPromise = taskPromise.catch((error) => {
+            backgroundTaskStatus = 'failed';
+            const fallbackText = `任务执行链路异常：${error?.message || String(error)}`;
+            this.emitGatewayEvent('persona.background.message', {
+                runId: outerRunId,
+                sessionId,
+                status: 'failed',
+                text: fallbackText,
+                speechText: fallbackText,
+                kind: 'result',
+                phase: 'task_failure',
+                source: 'task_result_persona_actor'
+            });
+        }).finally(() => {
+            this.backgroundTaskRuns.delete(trackedTaskPromise);
+            this.emitGatewayEvent('task.background.finished', {
+                runId: outerRunId,
+                sessionId,
+                status: backgroundTaskStatus,
+                source: 'task_agent_actor'
+            });
         });
-        await commitFinalOutput();
-        this.taskAgentHarness.recordPersonaOutput(
-            sessionId,
-            taskResult?.turn_id,
-            displayText,
-            purpose
+        this.backgroundTaskRuns.add(trackedTaskPromise);
+
+        const persona = await personaPromise;
+        const displayText = normalizeString(
+            persona?.displayText || persona?.finalAnswer || persona?.speechText
         );
-        return {
-            ok: taskResult?.steer_accepted === true || ['completed', 'completed_with_warnings', 'success', 'succeeded'].includes(
-                normalizeString(taskResult?.status).toLowerCase()
-            ),
+        this.ensureAgentRunner().recordMemoryTurn({
+            request: {
+                ...input,
+                context: { ...context, memoryPolicy: 'read_write' },
+                memoryPolicy: 'read_write'
+            },
+            result: { ...persona, displayText },
+            message,
+            sessionId,
+            source: 'persona_actor_committed'
+        });
+        this.emitGatewayEvent('agent.message.completed', {
             runId: outerRunId,
             sessionId,
-            status: normalizeString(taskResult?.status, 'completed'),
-            mode: 'task-agent-controlled',
-            intent: taskResult?.steer_accepted === true ? 'task_steer_accepted' : 'task_result_rendered',
-            taskRoute: 'execute',
-            executionRequired: true,
+            status: 'completed',
+            ok: true,
+            text: displayText,
+            speechText: normalizeString(persona?.speechText, displayText),
+            bubbleText: normalizeString(persona?.bubbleText),
+            streamId: personaStreamId,
+            phase: 'persona_actor',
+            source: 'persona_actor'
+        });
+        return {
+            ...persona,
+            runId: outerRunId,
+            sessionId,
+            status: 'completed',
+            mode: 'concurrent-persona-task-agent',
+            intent: 'persona_reply',
+            taskRoute: 'pending',
             displayText,
-            speechText: displayText,
-            taskResult
+            speechText: normalizeString(persona?.speechText, displayText),
+            backgroundTask: {
+                runId: outerRunId,
+                sessionId,
+                status: 'running'
+            }
         };
     }
 
@@ -3402,7 +3427,7 @@ class AILISGateway extends EventEmitter {
                 ok: payload.ok === true,
                 displayText: normalizeString(payload.displayText || payload.text),
                 speechText: normalizeString(payload.speechText),
-                source: 'persona_task_dual_lane'
+                source: 'persona_actor'
             });
         };
         const finalText = normalizeString(

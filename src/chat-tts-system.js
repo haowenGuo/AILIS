@@ -115,6 +115,9 @@ export class ChatTTSSystem {
         this.activeChunkedSpeechSession = null;
         this.activeTurn = null;
         this.cancelledTurnIds = new Set();
+        this.backgroundMessageIds = new Set();
+        this.backgroundMessageChain = Promise.resolve();
+        this.backgroundMessageUnsubscribe = null;
         this.lastAutoChatMode = String(CONFIG.AUTO_CHAT_MODE || 'off');
         this.proactiveCompanion = new ProactiveCompanionManager({
             getConfig: () => CONFIG,
@@ -132,6 +135,7 @@ export class ChatTTSSystem {
             onSpeak: (decision) => this.triggerAutoChat(decision)
         });
         this.historyReady = this.restorePersistedConversation();
+        this.bindBackgroundAssistantMessages();
 
         this.inputEl.disabled = true;
         this.sendBtnEl.disabled = true;
@@ -710,8 +714,61 @@ export class ChatTTSSystem {
     }
 
     setChatService(nextChatService) {
+        this.backgroundMessageUnsubscribe?.();
+        this.backgroundMessageUnsubscribe = null;
         this.chatService = nextChatService;
+        this.bindBackgroundAssistantMessages();
         this.startAutoChatTimer('service_changed');
+    }
+
+    bindBackgroundAssistantMessages() {
+        if (typeof this.chatService?.onBackgroundAssistantMessage !== 'function') {
+            return;
+        }
+        this.backgroundMessageUnsubscribe = this.chatService.onBackgroundAssistantMessage((payload) => {
+            this.backgroundMessageChain = this.backgroundMessageChain
+                .then(() => this.commitBackgroundAssistantMessage(payload))
+                .catch((error) => {
+                    console.warn('提交后台任务消息失败：', error);
+                });
+        });
+    }
+
+    async commitBackgroundAssistantMessage(payload = {}) {
+        await this.historyReady;
+        const displayText = payload.display_text || payload.speech_text || '';
+        if (!displayText) {
+            return;
+        }
+        const eventId = String(payload.backgroundEventId || '').trim();
+        if (eventId && this.backgroundMessageIds.has(eventId)) {
+            return;
+        }
+        if (eventId) {
+            this.backgroundMessageIds.add(eventId);
+            if (this.backgroundMessageIds.size > 160) {
+                this.backgroundMessageIds.delete(this.backgroundMessageIds.values().next().value);
+            }
+        }
+
+        const aiMessageDiv = this.createAIMessage();
+        this.executeAvatarCue(payload, aiMessageDiv);
+        this.updateMessageContent(aiMessageDiv, displayText);
+        this.scrollToBottom();
+        this.messageHistory.push({
+            role: 'assistant',
+            content: displayText,
+            source: payload.source || 'task_result_persona_actor',
+            taskEventKind: payload.backgroundTaskKind || 'progress',
+            createdAt: new Date().toISOString()
+        });
+        await this.persistConversation();
+        this.proactiveCompanion.noteAssistantTurn();
+        this.stopLingeringSpeech('background-assistant-message');
+        this.startCommittedBubbleSpeech(payload, aiMessageDiv, null);
+        this.startAutoChatTimer(
+            payload.backgroundTaskKind === 'result' ? 'task_result' : 'task_progress'
+        );
     }
 
     async triggerAutoChat(opportunity = null) {
