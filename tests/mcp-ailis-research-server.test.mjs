@@ -2980,6 +2980,44 @@ print(json.dumps({
     });
 });
 
+test('web_fetch passes the configured render delay to the local Crawl4AI worker', async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ailis-crawl4ai-delay-'));
+    const workerPath = path.join(tempDir, 'fake-crawl4ai-worker.py');
+    fs.writeFileSync(workerPath, `
+import argparse, json
+parser = argparse.ArgumentParser()
+parser.add_argument("--url", required=True)
+parser.add_argument("--timeout-ms", default="90000")
+parser.add_argument("--max-links", default="80")
+parser.add_argument("--delay-ms", default="0")
+args = parser.parse_args()
+print(json.dumps({
+  "ok": True,
+  "status": 200,
+  "contentType": "text/markdown; charset=utf-8",
+  "markdown": "# Rendered page\\n\\ndelay_ms=" + args.delay_ms,
+  "links": []
+}))
+`.trim(), 'utf8');
+
+    const previousDelay = process.env.AILIS_CRAWL4AI_DELAY_MS;
+    process.env.AILIS_CRAWL4AI_DELAY_MS = '2500';
+    try {
+        const result = await webFetch({
+            url: 'https://example.com/dynamic-page',
+            provider: 'crawl4ai',
+            crawl4aiWorker: workerPath
+        });
+
+        assert.equal(result.isError, undefined, result.content[0].text);
+        assert.equal(result.structuredContent.fetchBackend, 'crawl4ai_local');
+        assert.match(result.content[0].text, /delay_ms=2500/);
+    } finally {
+        if (previousDelay === undefined) delete process.env.AILIS_CRAWL4AI_DELAY_MS;
+        else process.env.AILIS_CRAWL4AI_DELAY_MS = previousDelay;
+    }
+});
+
 test('web_fetch Crawl4AI config prefers packaged private web runtime Python', () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ailis-web-runtime-'));
     const runtimeDir = path.join(tempDir, 'ailis-web-runtime');

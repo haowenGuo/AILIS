@@ -5560,7 +5560,11 @@ async function fetchWithLocalCrawl4aiWorker(url, config = {}, args = {}, timeout
     if (waitFor) {
         processArgs.push('--wait-for', waitFor);
     }
-    const delayMs = clampNumber(args.delayMs || args.delay_ms, 0, 0, 30000);
+    const configuredDelayMs = args.delayMs ??
+        args.delay_ms ??
+        process.env.AILIS_CRAWL4AI_DELAY_MS ??
+        process.env.CRAWL4AI_DELAY_MS;
+    const delayMs = clampNumber(configuredDelayMs, 0, 0, 30000);
     if (delayMs) {
         processArgs.push('--delay-ms', String(delayMs));
     }

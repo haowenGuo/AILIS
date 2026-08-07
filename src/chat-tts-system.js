@@ -521,6 +521,47 @@ export class ChatTTSSystem {
         return typeof session.hasPlaybackStarted === 'function' ? session.hasPlaybackStarted() : true;
     }
 
+    startCommittedBubbleSpeech(payload, aiMessageDiv, session = null) {
+        const displayText = payload.display_text || payload.speech_text || '...';
+        const bubbleSpeechText = deriveTtsSpeechText({}, displayText);
+        const speechPayload = {
+            ...payload,
+            speech_text: bubbleSpeechText,
+            speechText: bubbleSpeechText
+        };
+        const alignment = payload.normalized_alignment || payload.alignment || null;
+        const playbackGeneration = Number(this.speechPlaybackGeneration) || 0;
+        const isCurrentPlayback = () => playbackGeneration === (Number(this.speechPlaybackGeneration) || 0);
+
+        const playbackTask = (async () => {
+            const usedChunkedSpeech = await this.finishChunkedSpeechSession(
+                session,
+                bubbleSpeechText
+            );
+            if (!isCurrentPlayback()) {
+                return;
+            }
+            if (usedChunkedSpeech) {
+                this.executeAvatarCue(speechPayload, aiMessageDiv);
+                return;
+            }
+            await this.playPreferredSpeech({
+                payload: speechPayload,
+                displayText,
+                alignment,
+                aiMessageDiv,
+                preserveMessageContent: true
+            });
+        })();
+
+        void playbackTask.catch((error) => {
+            if (isCurrentPlayback()) {
+                console.warn('已提交气泡的后台语音播放失败：', error);
+            }
+        });
+        return playbackTask;
+    }
+
     clearChunkedSpeechSession(session) {
         if (this.activeChunkedSpeechSession === session) {
             this.activeChunkedSpeechSession = null;
@@ -541,6 +582,7 @@ export class ChatTTSSystem {
     }
 
     stopLingeringSpeech(reason = 'new-turn') {
+        this.speechPlaybackGeneration = (Number(this.speechPlaybackGeneration) || 0) + 1;
         const session = this.activeChunkedSpeechSession;
         if (session) {
             Promise.resolve(session.cancel?.(reason)).catch((error) => {
@@ -698,7 +740,6 @@ export class ChatTTSSystem {
                         return;
                     }
                     this.renderStreamingAssistantReply(partialPayload, aiMessageDiv);
-                    this.appendChunkedSpeechProgress(chunkedSpeechSession, partialPayload);
                 }, {
                     messageHistory: messageHistorySnapshot,
                     shouldContinue: () => this.isTurnActive(turn),
@@ -707,20 +748,9 @@ export class ChatTTSSystem {
             if (!this.isTurnActive(turn)) {
                 return;
             }
-            const usedChunkedSpeech = await this.finishChunkedSpeechSession(
-                chunkedSpeechSession,
-                deriveTtsSpeechText(payload, payload.display_text || '')
-            );
-            if (!this.isTurnActive(turn)) {
-                return;
-            }
-            if (usedChunkedSpeech) {
-                this.executeAvatarCue(payload, aiMessageDiv);
-                this.updateMessageContent(aiMessageDiv, payload.display_text || payload.speech_text || '...');
-                this.scrollToBottom();
-            } else {
-                await this.renderAssistantReply(payload, aiMessageDiv);
-            }
+            this.executeAvatarCue(payload, aiMessageDiv);
+            this.updateMessageContent(aiMessageDiv, payload.display_text || payload.speech_text || '...');
+            this.scrollToBottom();
             this.messageHistory.push({
                 role: 'assistant',
                 content: payload.display_text,
@@ -728,6 +758,7 @@ export class ChatTTSSystem {
                 createdAt: new Date().toISOString()
             });
             await this.persistConversation();
+            this.startCommittedBubbleSpeech(payload, aiMessageDiv, chunkedSpeechSession);
             return { ok: true };
         } catch (error) {
             await chunkedSpeechSession?.cancel?.('auto-chat-error');
@@ -794,7 +825,6 @@ export class ChatTTSSystem {
                 }
                 this.removeMessageElement(loadingEl);
                 this.renderStreamingAssistantReply(partialPayload, aiMessageDiv);
-                this.appendChunkedSpeechProgress(chunkedSpeechSession, partialPayload);
             }, {
                 messageHistory: messageHistorySnapshot,
                 shouldContinue: () => this.isTurnActive(turn)
@@ -803,20 +833,9 @@ export class ChatTTSSystem {
                 return;
             }
             this.removeMessageElement(loadingEl);
-            const usedChunkedSpeech = await this.finishChunkedSpeechSession(
-                chunkedSpeechSession,
-                deriveTtsSpeechText(payload, payload.display_text || '')
-            );
-            if (!this.isTurnActive(turn)) {
-                return;
-            }
-            if (usedChunkedSpeech) {
-                this.executeAvatarCue(payload, aiMessageDiv);
-                this.updateMessageContent(aiMessageDiv, payload.display_text || payload.speech_text || '...');
-                this.scrollToBottom();
-            } else {
-                await this.renderAssistantReply(payload, aiMessageDiv);
-            }
+            this.executeAvatarCue(payload, aiMessageDiv);
+            this.updateMessageContent(aiMessageDiv, payload.display_text || payload.speech_text || '...');
+            this.scrollToBottom();
             this.messageHistory.push({
                 role: 'assistant',
                 content: payload.display_text,
@@ -824,6 +843,7 @@ export class ChatTTSSystem {
             });
             await this.persistConversation();
             this.proactiveCompanion.noteAssistantTurn();
+            this.startCommittedBubbleSpeech(payload, aiMessageDiv, chunkedSpeechSession);
         } catch (error) {
             await chunkedSpeechSession?.cancel?.('chat-turn-error');
             this.removeMessageElement(loadingEl);
@@ -1009,7 +1029,7 @@ export class ChatTTSSystem {
         }
     }
 
-    async playPreferredSpeech({ payload, displayText, alignment, aiMessageDiv }) {
+    async playPreferredSpeech({ payload, displayText, alignment, aiMessageDiv, preserveMessageContent = false }) {
         const speechText = deriveTtsSpeechText(payload, displayText);
         const speechPayload = {
             ...payload,
@@ -1017,10 +1037,18 @@ export class ChatTTSSystem {
         };
         if (this.speechProvider?.isSpeechDisabled) {
             await this.playFallbackSpeech(displayText, aiMessageDiv, speechPayload, {
-                revealText: !payload.streamMode
+                revealText: !payload.streamMode,
+                preserveMessageContent
             });
             return;
         }
+
+        const updateSpeechDisplay = preserveMessageContent
+            ? () => {}
+            : (text) => this.updateMessageContent(aiMessageDiv, text);
+        const scrollSpeechDisplay = preserveMessageContent
+            ? () => {}
+            : () => this.scrollToBottom();
 
         const speechResult = await this.speechProvider?.playSpeech?.({
             payload: speechPayload,
@@ -1028,8 +1056,8 @@ export class ChatTTSSystem {
             alignment,
             audioPlayer: this.audioPlayer,
             vrmSystem: this.vrmSystem,
-            updateMessageContent: (text) => this.updateMessageContent(aiMessageDiv, text),
-            scrollToBottom: () => this.scrollToBottom(),
+            updateMessageContent: updateSpeechDisplay,
+            scrollToBottom: scrollSpeechDisplay,
             onAvatarPlaybackStart: () => this.startAvatarPlayback(speechPayload, displayText, aiMessageDiv)
         });
 
@@ -1051,7 +1079,8 @@ export class ChatTTSSystem {
         if (payload.fallbackMode || !payload.audio_base64 || !this.speechProvider?.supportsTTS) {
             await this.playFallbackSpeech(displayText, aiMessageDiv, speechPayload, {
                 revealText: !payload.streamMode,
-                animateMouth: false
+                animateMouth: false,
+                preserveMessageContent
             });
             if (!this.hasShownTextFallbackHint) {
                 this.addSystemMessage(t('当前语音服务不可用，已自动切换为纯文本回复。'));
@@ -1067,26 +1096,36 @@ export class ChatTTSSystem {
                 displayText,
                 alignment,
                 onTextProgress: (text) => {
-                    this.updateMessageContent(aiMessageDiv, text || '');
-                    this.scrollToBottom();
+                    if (!preserveMessageContent) {
+                        this.updateMessageContent(aiMessageDiv, text || '');
+                        this.scrollToBottom();
+                    }
                 },
                 onPlaybackStart: () => {
-                    if (alignment?.characters?.length) {
-                        this.updateMessageContent(aiMessageDiv, '');
-                    } else {
-                        this.updateMessageContent(aiMessageDiv, displayText);
+                    if (!preserveMessageContent) {
+                        if (alignment?.characters?.length) {
+                            this.updateMessageContent(aiMessageDiv, '');
+                        } else {
+                            this.updateMessageContent(aiMessageDiv, displayText);
+                        }
                     }
                     this.startAvatarPlayback(speechPayload, displayText, aiMessageDiv);
-                    this.scrollToBottom();
+                    if (!preserveMessageContent) {
+                        this.scrollToBottom();
+                    }
                 },
                 onPlaybackEnd: () => {
                     this.endAvatarSpeech(aiMessageDiv);
-                    this.updateMessageContent(aiMessageDiv, displayText);
-                    this.scrollToBottom();
+                    if (!preserveMessageContent) {
+                        this.updateMessageContent(aiMessageDiv, displayText);
+                        this.scrollToBottom();
+                    }
                 }
             });
         } catch (error) {
-            this.updateMessageContent(aiMessageDiv, displayText);
+            if (!preserveMessageContent) {
+                this.updateMessageContent(aiMessageDiv, displayText);
+            }
             this.vrmSystem.stopSpeaking();
             this.endAvatarSpeech(aiMessageDiv);
 
@@ -1103,6 +1142,7 @@ export class ChatTTSSystem {
         );
         const revealText = options.revealText !== false;
         const animateMouth = options.animateMouth !== false;
+        const preserveMessageContent = options.preserveMessageContent === true;
 
         if (animateMouth) {
             this.vrmSystem.startFallbackSpeech();
@@ -1117,9 +1157,11 @@ export class ChatTTSSystem {
             }, displayText, aiMessageDiv);
         }
 
-        if (!revealText) {
-            this.updateMessageContent(aiMessageDiv, displayText);
-            this.scrollToBottom();
+        if (!revealText || preserveMessageContent) {
+            if (!preserveMessageContent) {
+                this.updateMessageContent(aiMessageDiv, displayText);
+                this.scrollToBottom();
+            }
             await new Promise((resolve) => window.setTimeout(resolve, durationMs));
             if (animateMouth) {
                 this.vrmSystem.stopSpeaking();
