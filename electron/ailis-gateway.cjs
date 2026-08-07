@@ -252,7 +252,7 @@ const AILIS_LOCAL_TOOL_DEFINITIONS = Object.freeze([
     Object.freeze({
         id: HANDOFF_TASK_TOOL_ID,
         label: 'handoff_task',
-        description: 'Transfer the immutable current user request to the session\'s persistent system TaskAgent and wait for one compact TaskResult packet. No task text or lifecycle command is accepted from the model; the Harness owns thread identity, checkpointing, execution, and result transport.',
+        description: 'Transfer execution control to the session\'s persistent system TaskAgent. The tool accepts no task text: TaskAgent reads the same canonical visible Session conversation as Persona, so the latest message may be only a continuation such as "继续" or "速度". The Harness owns context attachment, thread identity, checkpointing, execution, and result transport.',
         sectionId: 'persona-runtime',
         route: 'ailis-system-task-agent',
         materialized: true,
@@ -2973,6 +2973,9 @@ class AILISGateway extends EventEmitter {
                     runId: privateRunId,
                     sessionId,
                     sessionKey: sessionId,
+                    agentLoop: 'llm',
+                    planner: 'llm',
+                    directToolExecutor: true,
                     agentRole: 'persona_orchestrator',
                     contextMode: 'persona',
                     taskAgentRoutingOwned: true,
@@ -3537,9 +3540,37 @@ class AILISGateway extends EventEmitter {
         const inheritedCheckpoint = inheritanceMode === 'checkpoint'
             ? args.contextManagerCheckpoint || context.initialContextManagerCheckpoint || null
             : null;
-        const recentMessages = inheritanceMode === 'recent'
-            ? (Array.isArray(args.recentMessages) ? args.recentMessages : context.recentMessages || [])
-            : [];
+        const sharedSessionHistory = (
+            Array.isArray(args.sharedSessionHistory) ? args.sharedSessionHistory :
+            Array.isArray(context.sharedSessionHistory) ? context.sharedSessionHistory :
+            Array.isArray(context.shared_session_history) ? context.shared_session_history :
+            inheritanceMode === 'recent' && Array.isArray(args.recentMessages) ? args.recentMessages :
+            inheritanceMode === 'recent' && Array.isArray(context.recentMessages) ? context.recentMessages :
+            []
+        )
+            .filter((entry) => entry && ['user', 'assistant'].includes(entry.role))
+            .map((entry) => ({
+                role: entry.role,
+                content: normalizeString(entry.content),
+                ...(Array.isArray(entry.attachments) && entry.attachments.length
+                    ? { attachments: cloneJson(entry.attachments) || [] }
+                    : {})
+            }))
+            .filter((entry) => entry.content)
+            .slice(-240);
+        const sharedSessionDeveloperMessage = inheritanceMode === 'checkpoint' && sharedSessionHistory.length
+            ? [
+                  '<shared_session_context>',
+                  JSON.stringify({
+                      schema: 'ailis.shared_session_context.v1',
+                      session_id: normalizeString(agent?.sessionId || context.parentSessionId),
+                      visible_history: sharedSessionHistory,
+                      current_user_message: task,
+                      instruction: 'This is the canonical visible Session conversation shared with Persona. The current user message may be a continuation such as 继续 or 速度, so determine the requested task from the whole conversation. Handoff transferred execution control only and did not supply a rewritten task.'
+                  }),
+                  '</shared_session_context>'
+              ].join('\n')
+            : '';
         const attachments = Array.isArray(context.attachments)
             ? context.attachments
             : Array.isArray(context.fileAttachments)
@@ -3576,6 +3607,8 @@ class AILISGateway extends EventEmitter {
             cleanContext: inheritanceMode === 'clean',
             taskAgentInheritanceMode: inheritanceMode,
             initialContextManagerCheckpoint: inheritedCheckpoint,
+            sharedSessionHistory,
+            shared_session_history: sharedSessionHistory,
             attachments,
             fileAttachments: attachments
         });
@@ -3611,13 +3644,16 @@ class AILISGateway extends EventEmitter {
         const runPromise = agentRunner.runMessage({
             runId: agent?.childRunId,
             message: task,
-            messageHistory: recentMessages,
+            messageHistory: sharedSessionHistory,
             attachments,
             sessionId: agent?.childSessionId || context.sessionId || context.sessionKey,
             agentLoop: 'llm',
             planner: 'llm',
             agentRole: 'task_agent',
             ...(parentLlmSettings ? { llmSettings: parentLlmSettings } : {}),
+            ...(sharedSessionDeveloperMessage
+                ? { ephemeralDeveloperMessage: sharedSessionDeveloperMessage }
+                : {}),
             taskAgentInheritanceMode: inheritanceMode,
             initialContextManagerCheckpoint: inheritedCheckpoint,
             initialStepResults: Array.isArray(args.initialStepResults) ? args.initialStepResults : [],
@@ -4508,6 +4544,207 @@ class AILISGateway extends EventEmitter {
         };
     }
 
+    startDeferredPersonaTaskHandoff(args = {}, context = {}) {
+        const sessionId = normalizeString(context.sessionId || context.sessionKey, 'main');
+        const runId = normalizeString(context.runId || context.parentRunId, randomUUID());
+        const message = normalizeString(context.currentUserMessage);
+        const sharedSessionHistory = (
+            Array.isArray(context.sharedSessionHistory) ? context.sharedSessionHistory :
+            Array.isArray(context.turnEnvelope?.visibleHistory) ? context.turnEnvelope.visibleHistory :
+            []
+        ).slice(-240);
+        const turnEnvelope = {
+            ...(context.turnEnvelope && typeof context.turnEnvelope === 'object'
+                ? cloneJson(context.turnEnvelope) || {}
+                : {}),
+            sessionId,
+            userMessage: message,
+            visibleHistory: cloneJson(sharedSessionHistory) || [],
+            attachments: cloneJson(
+                context.turnEnvelope?.attachments ||
+                context.attachments ||
+                context.fileAttachments ||
+                []
+            ) || []
+        };
+        const renderInput = {
+            message,
+            messageHistory: cloneJson(sharedSessionHistory) || [],
+            ...(context.llmSettings && typeof context.llmSettings === 'object'
+                ? { llmSettings: context.llmSettings }
+                : {})
+        };
+        let lastProgressRenderAt = Date.now();
+        let progressRenderInFlight = null;
+        const onTaskEvent = (event = {}) => {
+            const type = normalizeString(event.type);
+            const progressText = normalizeString(event.message || event.payload?.text || event.payload?.summary);
+            const now = Date.now();
+            if (
+                type !== 'agent.progress.note' ||
+                !progressText ||
+                progressRenderInFlight ||
+                now - lastProgressRenderAt < PERSONA_TASK_PROGRESS_MIN_INTERVAL_MS
+            ) {
+                return;
+            }
+            lastProgressRenderAt = now;
+            const packet = {
+                type: 'task.progress',
+                status: normalizeString(event.status, 'running'),
+                summary: progressText
+            };
+            progressRenderInFlight = this.renderTaskPacket({
+                input: renderInput,
+                context,
+                sessionId,
+                outerRunId: runId,
+                turnEnvelope,
+                packet,
+                purpose: 'progress'
+            }).then((text) => {
+                if (text) {
+                    this.emitGatewayEvent('persona.background.message', {
+                        runId,
+                        sessionId,
+                        status: packet.status,
+                        text,
+                        speechText: text,
+                        kind: 'progress',
+                        phase: 'task_progress',
+                        source: 'persona_handoff_task_event'
+                    });
+                }
+            }).catch(() => {}).finally(() => {
+                progressRenderInFlight = null;
+            });
+        };
+
+        this.emitGatewayEvent('task.background.started', {
+            runId,
+            sessionId,
+            status: 'running',
+            currentRequest: message,
+            source: 'persona_handoff'
+        });
+        const harnessPromise = this.taskAgentHarness.handoff(args, {
+            ...context,
+            deferTaskHandoff: false,
+            sessionId,
+            sessionKey: sessionId,
+            currentUserMessage: message,
+            sharedSessionHistory,
+            turnEnvelope,
+            returnAfterSteer: true,
+            onTaskEvent
+        });
+        const activeThread = this.taskAgentHarness.getThread(sessionId);
+        const activeTurn = activeThread?.turns?.find((turn) => turn.turnId === activeThread.activeTurnId) || null;
+        let backgroundStatus = 'completed';
+        let trackedTaskPromise;
+        trackedTaskPromise = Promise.resolve(harnessPromise).then(async (taskResult) => {
+            const taskStatus = normalizeString(taskResult?.status, 'completed').toLowerCase();
+            if (!['accepted', 'completed', 'completed_with_warnings', 'success', 'succeeded'].includes(taskStatus)) {
+                backgroundStatus = taskStatus || 'failed';
+            }
+            if (taskResult?.steer_accepted === true) {
+                return taskResult;
+            }
+            if (progressRenderInFlight) {
+                await progressRenderInFlight;
+            }
+            if (taskResult?.route === 'chat') {
+                return taskResult;
+            }
+            const displayText = await this.renderTaskPacket({
+                input: renderInput,
+                context,
+                sessionId,
+                outerRunId: runId,
+                turnEnvelope,
+                packet: taskResult,
+                purpose: 'result'
+            });
+            this.taskAgentHarness.recordPersonaOutput(
+                sessionId,
+                taskResult?.turn_id,
+                displayText,
+                'result'
+            );
+            this.emitGatewayEvent('persona.background.message', {
+                runId,
+                sessionId,
+                status: normalizeString(taskResult?.status, 'completed'),
+                text: displayText,
+                speechText: displayText,
+                kind: 'result',
+                phase: 'task_result',
+                source: 'persona_handoff_task_result',
+                taskResult
+            });
+            return taskResult;
+        }).catch(async (error) => {
+            backgroundStatus = 'failed';
+            if (progressRenderInFlight) {
+                await progressRenderInFlight;
+            }
+            const failurePacket = {
+                type: 'task.failed',
+                status: 'failed',
+                error: error?.message || String(error),
+                current_request: message
+            };
+            const displayText = await this.renderTaskPacket({
+                input: renderInput,
+                context,
+                sessionId,
+                outerRunId: runId,
+                turnEnvelope,
+                packet: failurePacket,
+                purpose: 'failure'
+            });
+            this.emitGatewayEvent('persona.background.message', {
+                runId,
+                sessionId,
+                status: 'failed',
+                text: displayText,
+                speechText: displayText,
+                kind: 'result',
+                phase: 'task_failure',
+                source: 'persona_handoff_task_result'
+            });
+            return failurePacket;
+        }).finally(() => {
+            this.backgroundTaskRuns.delete(trackedTaskPromise);
+            this.emitGatewayEvent('task.background.finished', {
+                runId,
+                sessionId,
+                status: backgroundStatus,
+                source: 'persona_handoff'
+            });
+        });
+        this.backgroundTaskRuns.add(trackedTaskPromise);
+
+        return {
+            schema: 'ailis.task_result.v1',
+            optimization: '长程任务优化',
+            thread_id: normalizeString(activeThread?.threadId),
+            turn_id: normalizeString(activeTurn?.turnId),
+            task_id: normalizeString(activeTurn?.turnId),
+            status: 'accepted',
+            route: 'execute',
+            current_request: message,
+            final_answer: '',
+            display_text: '',
+            partial_answer: '',
+            source_refs: [],
+            output_refs: [],
+            unresolved_fields: [],
+            trace_ref: normalizeString(activeTurn?.runId),
+            checkpoint_available: Boolean(activeThread?.contextCheckpoint)
+        };
+    }
+
     async executeGatewayLocalTool(toolId, args, context = {}) {
         const workspaceDir = context.workspaceDir || this.resolveWorkspace(context.workspace, context);
         if (toolId === TASK_ROUTE_TOOL_ID) {
@@ -4542,11 +4779,14 @@ class AILISGateway extends EventEmitter {
             };
         }
         if (toolId === HANDOFF_TASK_TOOL_ID) {
-            const taskResult = await this.taskAgentHarness.handoff(args, {
+            const handoffContext = {
                 ...context,
                 workspace: context.workspace || workspaceDir,
                 workspaceDir
-            });
+            };
+            const taskResult = context.deferTaskHandoff === true
+                ? this.startDeferredPersonaTaskHandoff(args, handoffContext)
+                : await this.taskAgentHarness.handoff(args, handoffContext);
             return {
                 content: [{ type: 'text', text: JSON.stringify(taskResult, null, 2) }],
                 isError: false,

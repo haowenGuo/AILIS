@@ -55,6 +55,7 @@ const {
     toolOutputToRuntimeEvent
 } = require('./ailis-agent-object-model.cjs');
 const {
+    cloneJson,
     responseItemOutputToText
 } = require('./ailis-response-model.cjs');
 const {
@@ -6627,7 +6628,7 @@ function buildLlmAgentDirectToolPrompt({
         'For facts that may have changed, use current information already present in the conversation or ask TaskAgent to look them up. Do not present pretrained knowledge as current fact when freshness matters.',
         taskAgentRoutingOwned
             ? 'The persistent TaskAgent independently owns task routing and execution. You never transfer, schedule, resume, or control tasks. Produce only the conversational or render text requested by this turn.'
-            : 'When the user asks for concrete task execution that cannot be answered safely from the visible conversation, call handoff_task exactly once. The Harness transfers the immutable current user request; do not restate, rewrite, expand, or plan the task in tool arguments.',
+            : 'When the user asks for concrete task execution that cannot be answered safely from the visible conversation, call handoff_task exactly once. This transfers only execution control: TaskAgent reads the same canonical visible Session conversation you received. Do not restate, summarize, rewrite, expand, or plan the task in tool arguments.',
         !taskAgentRoutingOwned
             ? 'When the latest user message continues, corrects, or redirects previously executed work, treat it as a concrete execution request and call handoff_task. The persistent TaskAgent Session owns the relevant Turn, Goal, and execution history; do not reconstruct that lifecycle inside Persona.'
             : '',
@@ -6638,7 +6639,7 @@ function buildLlmAgentDirectToolPrompt({
             ? 'This turn has an explicit task-execution contract. Call handoff_task exactly once before producing any answer; do not answer the task directly from model memory or arithmetic.'
             : '',
         !taskAgentRoutingOwned
-            ? 'handoff_task blocks while the system Harness runs or resumes the single TaskAgent. You do not create, wait for, resume, list, or close agents. After the tool returns, render its TaskResult packet instead of calling another orchestration tool.'
+            ? 'When handoff_task reports accepted, the TaskAgent is running asynchronously. Reply once with a short natural acknowledgment and do not claim a result; progress and the final TaskResult will return through the Persona event channel. When it returns a completed TaskResult, render that packet instead of calling another orchestration tool.'
             : '',
         personaRenderOnly
             ? 'This is a render-only turn. The developer packet is the sole factual authority. Preserve its status, uncertainty, sources, artifacts, and failure state. Do not promise future work, infer progress, or add facts.'
@@ -6658,7 +6659,7 @@ function buildLlmAgentDirectToolPrompt({
             : '',
         'Use native tool calls when work requires files, artifacts, search, shell/code, APIs, or verification. Otherwise answer with an assistant message.',
         persistentTaskAgentSession
-            ? 'The persistent TaskAgent Session contains an ordered history of Turns. task_state.current_request is authoritative for the active Turn. task_state.active_goal is optional durable state for a long-running objective; it is not Session identity and it never overrides the latest user input.'
+            ? 'The persistent TaskAgent Session contains an ordered history of Turns. task_state.current_request is the latest user message, but it may be only a continuation, correction, or urgency cue rather than a standalone task. The canonical shared_session_context, when present, is the same visible Session conversation Persona received; interpret the current request inside that conversation. task_state.active_goal is optional durable state for a long-running objective and never overrides the shared Session or latest user input.'
             : 'task_state.current_request / task_state.delegated_task is the current user request for this turn. task_state.original_user_goal is durable thread context for continuity, not a reason to ignore the current request; when the user continues, corrects, or redirects the task, preserve useful prior artifacts/checkpoints while making the current request the active objective.',
         persistentTaskAgentSession
             ? 'task_state.session_ledger is the canonical Session context projection. Apply its authority ordering: the current user Turn outranks the active Goal, unresolved task state, verified results, and completed-Turn history. Entries marked display_only are presentation artifacts and must never become task instructions.'
@@ -8209,6 +8210,7 @@ class AILISAgentRunner {
     }
 
     async executeAgentToolStep({ runId, step, toolContext, request, iteration }) {
+        const directToolId = canonicalDirectToolId(step.tool);
         const inheritedLlmSettings = (
             request?.llmSettings && typeof request.llmSettings === 'object' ? request.llmSettings :
             request?.llm && typeof request.llm === 'object' ? request.llm :
@@ -8216,13 +8218,49 @@ class AILISAgentRunner {
             request?.context?.llm && typeof request.context.llm === 'object' ? request.context.llm :
             null
         );
-        const effectiveToolContext = isCollaborationTool(step) && inheritedLlmSettings
+        const collaborationToolContext = isCollaborationTool(step) && inheritedLlmSettings
             ? { ...toolContext, llmSettings: inheritedLlmSettings }
             : toolContext;
-        const agentWaitTimeoutMs = canonicalDirectToolId(step.tool) === 'wait_agent'
+        const sharedSessionHistory = directToolId === PERSONA_HANDOFF_TOOL_ID
+            ? (Array.isArray(request?.messageHistory) ? request.messageHistory : [])
+                .filter((entry) => entry && ['user', 'assistant'].includes(entry.role))
+                .map((entry) => ({
+                    role: entry.role,
+                    content: normalizeText(entry.content),
+                    ...(Array.isArray(entry.attachments) && entry.attachments.length
+                        ? { attachments: cloneJson(entry.attachments) }
+                        : {})
+                }))
+                .filter((entry) => entry.content)
+                .slice(-240)
+            : [];
+        const effectiveToolContext = directToolId === PERSONA_HANDOFF_TOOL_ID
+            ? {
+                  ...collaborationToolContext,
+                  sharedSessionHistory,
+                  turnEnvelope: {
+                      sessionId: normalizeText(
+                          collaborationToolContext.sessionId || collaborationToolContext.sessionKey
+                      ),
+                      userMessage: normalizeText(collaborationToolContext.currentUserMessage),
+                      attachments: cloneJson(
+                          collaborationToolContext.attachments ||
+                          collaborationToolContext.fileAttachments ||
+                          request?.attachments ||
+                          []
+                      ),
+                      visibleHistory: cloneJson(sharedSessionHistory),
+                      createdAt: new Date().toISOString()
+                  },
+                  deferTaskHandoff:
+                      collaborationToolContext.deferTaskHandoff === true ||
+                      request?.context?.deferTaskHandoff === true
+              }
+            : collaborationToolContext;
+        const agentWaitTimeoutMs = directToolId === 'wait_agent'
             ? Number(step.args?.timeout_ms)
             : 0;
-        const taskHandoffTimeoutMs = canonicalDirectToolId(step.tool) === PERSONA_HANDOFF_TOOL_ID
+        const taskHandoffTimeoutMs = directToolId === PERSONA_HANDOFF_TOOL_ID
             ? Number(
                   request?.taskHandoffTimeoutMs ||
                   request?.context?.taskHandoffTimeoutMs ||
@@ -8472,30 +8510,49 @@ class AILISAgentRunner {
                 nextAction: options.nextAction || '',
                 source: options.source || ''
             });
+            const acceptedBackgroundHandoff = stepResults
+                .map((stepResult) => ({
+                    stepResult,
+                    packet: canonicalDirectToolId(stepResult?.tool) === PERSONA_HANDOFF_TOOL_ID
+                        ? parseTaskResultPacketFromHandoffStep(stepResult)
+                        : null
+                }))
+                .find(({ packet }) => normalizeText(packet?.status).toLowerCase() === 'accepted');
+            const surfaced = acceptedBackgroundHandoff
+                ? {
+                      ...presented,
+                      backgroundTask: {
+                          runId,
+                          sessionId,
+                          status: 'running',
+                          taskId: normalizeText(acceptedBackgroundHandoff.packet?.task_id)
+                      }
+                  }
+                : presented;
             this.gateway.emitGatewayEvent?.('agent.message.completed', {
                 runId,
                 sessionId,
-                status: presented.status || result.status || '',
-                ok: presented.ok === true,
-                text: presented.displayText || presented.finalAnswer || '',
-                speechText: presented.speechText || '',
-                bubbleText: presented.bubbleText || '',
+                status: surfaced.status || result.status || '',
+                ok: surfaced.ok === true,
+                text: surfaced.displayText || surfaced.finalAnswer || '',
+                speechText: surfaced.speechText || '',
+                bubbleText: surfaced.bubbleText || '',
                 source: options.source || 'agent_final'
             });
-            if (presented.surface) {
+            if (surfaced.surface) {
                 this.gateway.emitGatewayEvent?.('persona.surface', {
                     runId,
                     sessionId,
-                    status: presented.status || result.status || '',
-                    surface: presented.surface
+                    status: surfaced.status || result.status || '',
+                    surface: surfaced.surface
                 });
             }
             if (!runtimeStarted || !runtime) {
-                return presented;
+                return surfaced;
             }
-            const transcript = await runtime.completeRun(runId, presented);
+            const transcript = await runtime.completeRun(runId, surfaced);
             return {
-                ...presented,
+                ...surfaced,
                 transcript
             };
         };
@@ -8918,7 +8975,7 @@ class AILISAgentRunner {
                 toolSummary: isPersonaOrchestratorRole(agentRuntimeRole)
                     ? requestContext.taskAgentRoutingOwned === true
                         ? 'Persona has no task-control tools. Persona and TaskAgent receive the user Turn concurrently: Persona owns the live conversation, while TaskAgent independently owns routing and execution. TaskEvent/TaskResult packets return to Persona as later user-facing messages.'
-                        : 'Persona tool surface: handoff_task transfers the immutable current user request to the system TaskAgent and returns one compact TaskResult packet. The Harness owns lifecycle and internal orchestration remains invisible to the user.'
+                        : 'Persona tool surface: handoff_task transfers execution control, never task text. TaskAgent reads the same canonical visible Session conversation as Persona. An accepted handoff runs asynchronously and its TaskResult returns through the Persona event channel.'
                     : directToolSpecs.length
                         ? `Native direct tools exposed: ${directToolSpecs.map((tool) => tool.name).slice(0, 16).join(', ')}${directToolSpecs.length > 16 ? ', ...' : ''}.`
                         : 'No native tools are exposed in this turn; answer directly if possible.'
@@ -10324,6 +10381,16 @@ class AILISAgentRunner {
                         }),
                     '任务执行器已经返回结果，但没有可直接展示的文本。'
                 );
+                if (packetStatus === 'accepted' && stepResult.response?.ok === true) {
+                    events.push({
+                        type: 'task_handoff',
+                        status: 'accepted',
+                        iteration,
+                        taskId: normalizeText(packet?.task_id),
+                        turnId: normalizeText(packet?.turn_id)
+                    });
+                    continue;
+                }
                 const handoffOk = stepResult.response?.ok === true &&
                     (packetStatus.startsWith('completed') || ['success', 'succeeded'].includes(packetStatus));
                 return await finishRuntimeRun(attachPersonaSurface({

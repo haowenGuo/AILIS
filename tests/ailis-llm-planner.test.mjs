@@ -726,7 +726,8 @@ test('Persona prompt stays in AILIS persona and exposes only system TaskAgent ha
         assert.match(llmServer.calls[0].system, /关系表达协议/);
         assert.match(llmServer.calls[0].system, /authoritative host clock/);
         assert.match(llmServer.calls[0].system, /call handoff_task exactly once/);
-        assert.match(llmServer.calls[0].system, /Harness transfers the immutable current user request/);
+        assert.match(llmServer.calls[0].system, /transfers only execution control/);
+        assert.match(llmServer.calls[0].system, /same canonical visible Session conversation/);
         assert.match(llmServer.calls[0].system, /TaskResult packet is the factual boundary/);
         assert.doesNotMatch(llmServer.calls[0].system, /continuation=/);
         const toolNames = (llmServer.calls[0].payload.tools || []).map((tool) => tool.function?.name || tool.name);

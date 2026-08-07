@@ -906,7 +906,8 @@ export class AILISDesktopChatService {
                         agentLoop: 'llm',
                         directToolExecutor: true,
                         maxAgentSteps: 4,
-                        agentRole: 'persona_orchestrator'
+                        agentRole: 'persona_orchestrator',
+                        deferTaskHandoff: true
                     }
                 },
                 {

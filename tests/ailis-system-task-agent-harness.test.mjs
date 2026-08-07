@@ -178,6 +178,52 @@ test('system TaskAgent handoff preserves the exact request and returns a compact
     assert.equal(JSON.stringify(packet).includes('private'), false);
 });
 
+test('Persona handoff attaches the complete visible Session instead of only the latest cue', async () => {
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-task-shared-session-'));
+    const calls = [];
+    const harness = new AILISSystemTaskAgentHarness({
+        rootDir,
+        executeTaskAgent: async (payload) => {
+            calls.push(payload);
+            return completedResult({
+                runId: payload.agent.childRunId,
+                answer: '木偶攻略完成。',
+                checkpoint: null
+            });
+        }
+    });
+    const visibleHistory = [
+        { role: 'user', content: '帮我查木偶攻略' },
+        { role: 'assistant', content: '好，我来看看。' },
+        { role: 'user', content: '速度' }
+    ];
+
+    await harness.handoff({}, {
+        currentUserMessage: '速度',
+        sessionId: 'shared-persona-session',
+        runId: 'persona-speed-run',
+        turnEnvelope: {
+            userMessage: '速度',
+            visibleHistory
+        }
+    });
+
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].agent.task, '速度');
+    assert.deepEqual(
+        calls[0].args.sharedSessionHistory.map(({ role, content }) => ({ role, content })),
+        visibleHistory
+    );
+    assert.deepEqual(
+        calls[0].context.sharedSessionHistory.map(({ role, content }) => ({ role, content })),
+        visibleHistory
+    );
+    assert.match(
+        JSON.stringify(calls[0].context.sessionLedgerProjection.visible_history),
+        /帮我查木偶攻略/
+    );
+});
+
 test('system TaskAgent result packet uses the natural final response and ignores legacy exact-answer metadata', async () => {
     const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-task-harness-exact-answer-'));
     const harness = new AILISSystemTaskAgentHarness({

@@ -57,10 +57,13 @@ function normalizeVisibleHistory(values = []) {
         .map((entry) => ({
             role: entry.role,
             content: normalizeString(entry.content),
-            authority: entry.role === 'user' ? 'user_instruction' : 'display_only'
+            authority: entry.role === 'user' ? 'user_instruction' : 'display_only',
+            ...(Array.isArray(entry.attachments) && entry.attachments.length
+                ? { attachments: cloneJson(entry.attachments) || [] }
+                : {})
         }))
         .filter((entry) => entry.content)
-        .slice(-120);
+        .slice(-240);
 }
 
 function normalizeLedgerEntry(value = {}) {
@@ -833,6 +836,14 @@ class AILISSystemTaskAgentHarness {
             } else {
                 running.pendingInputs.push(message);
             }
+            const sharedVisibleHistory = normalizeVisibleHistory(
+                context.turnEnvelope?.visibleHistory ||
+                context.turnEnvelope?.visible_history ||
+                context.sharedSessionHistory
+            );
+            if (sharedVisibleHistory.length && running.turn.envelope) {
+                running.turn.envelope.visibleHistory = sharedVisibleHistory;
+            }
             this.steerTurn(running.thread, running.turn, message);
             this.state.sessions[sessionId] = running.thread;
             this.persist();
@@ -879,7 +890,16 @@ class AILISSystemTaskAgentHarness {
         if (expectedTurnId) {
             throw new Error(`TaskAgent Turn mismatch: expected ${expectedTurnId}, but the Session has no active Turn.`);
         }
-        const turn = this.createTurn(thread, message, context.turnEnvelope || {});
+        const turn = this.createTurn(thread, message, {
+            ...(context.turnEnvelope && typeof context.turnEnvelope === 'object'
+                ? context.turnEnvelope
+                : {}),
+            visibleHistory:
+                context.turnEnvelope?.visibleHistory ||
+                context.turnEnvelope?.visible_history ||
+                context.sharedSessionHistory ||
+                []
+        });
         this.state.sessions[sessionId] = thread;
         this.persist();
         this.emitEvent('task_agent.handoff.started', {
@@ -931,6 +951,7 @@ class AILISSystemTaskAgentHarness {
                         task: turn.latestRequest,
                         inheritanceMode,
                         contextManagerCheckpoint: thread.contextCheckpoint,
+                        sharedSessionHistory: cloneJson(turn.envelope?.visibleHistory || []),
                         llmSettings: context.llmSettings || context.llm || null
                     },
                     context: {
@@ -948,6 +969,8 @@ class AILISSystemTaskAgentHarness {
                         task_agent_active_goal: thread.activeGoal ? cloneJson(thread.activeGoal) : null,
                         currentTaskRequest: turn.latestRequest,
                         current_task_request: turn.latestRequest,
+                        sharedSessionHistory: cloneJson(turn.envelope?.visibleHistory || []),
+                        shared_session_history: cloneJson(turn.envelope?.visibleHistory || []),
                         taskAgentRoutePending: context.taskAgentRoutingOwned === true,
                         taskAgentRoutingOwned: context.taskAgentRoutingOwned === true,
                         sessionLedgerProjection: this.getSessionProjection(sessionId),

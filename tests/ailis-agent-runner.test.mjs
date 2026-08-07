@@ -935,10 +935,11 @@ test('AILIS parent Persona prompt stays conversational while TaskAgent keeps exe
     assert.match(personaPrompt.instructions, /Keep ordinary conversation natural/);
     assert.match(personaPrompt.instructions, /authoritative host clock/);
     assert.match(personaPrompt.instructions, /call handoff_task exactly once/);
-    assert.match(personaPrompt.instructions, /Harness transfers the immutable current user request/);
+    assert.match(personaPrompt.instructions, /transfers only execution control/);
+    assert.match(personaPrompt.instructions, /same canonical visible Session conversation/);
     assert.match(personaPrompt.instructions, /continues, corrects, or redirects previously executed work/);
     assert.match(personaPrompt.instructions, /TaskResult packet is the factual boundary/);
-    assert.match(personaPrompt.instructions, /You do not create, wait for, resume, list, or close agents/);
+    assert.match(personaPrompt.instructions, /TaskAgent is running asynchronously/);
     assert.doesNotMatch(personaPrompt.instructions, /arithmetic, multi-step logic, optimization/);
     assert.doesNotMatch(personaPrompt.instructions, /spawn_agent creates|subagent_notification|task_name/);
     assert.doesNotMatch(personaPrompt.instructions, /mcp__ailis_research__web_research|For local file and data tasks|When exec output is truncated/);

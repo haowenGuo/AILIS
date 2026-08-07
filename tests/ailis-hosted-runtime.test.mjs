@@ -87,7 +87,8 @@ test('hosted runtime isolates memory and workspace roots per signed tenant', asy
     assert.notEqual(gateways[0].options.auditDir, gateways[1].options.auditDir);
     assert.notEqual(gateways[0].options.workspaceRoot, gateways[1].options.workspaceRoot);
     assert.equal(gateways[0].options.projectRoot, projectRoot);
-    assert.equal(gateways[0].options.getDefaultContext().taskAgentRoutingOwned, true);
+    assert.equal(gateways[0].options.getDefaultContext().taskAgentRoutingOwned, false);
+    assert.equal(gateways[0].options.getDefaultContext().deferTaskHandoff, true);
     assert.match(gateways[0].options.auditDir, new RegExp(tenantKey('web:alice')));
     assert.match(gateways[1].options.auditDir, new RegExp(tenantKey('web:bob')));
     assert.equal(gateways[0].requests[0].llmSettings.apiKey, 'test-key');
@@ -133,7 +134,8 @@ test('hosted runtime replaces browser-supplied paths, credentials, and approvals
     assert.equal(request.llmSettings.apiKey, 'server-key');
     assert.equal(request.context.workspace, record.workspaceRoot);
     assert.equal(request.context.projectRoot, record.projectRoot);
-    assert.equal(request.context.taskAgentRoutingOwned, true);
+    assert.equal(request.context.taskAgentRoutingOwned, false);
+    assert.equal(request.context.deferTaskHandoff, true);
     assert.equal(request.context.approved, undefined);
     assert.equal(request.context.autoConfirm, undefined);
     assert.equal(request.workspace, undefined);
@@ -178,7 +180,7 @@ test('hosted runtime forwards provider text deltas outside the serialized reques
     }
 });
 
-test('real hosted Persona streams independently while TaskAgent routes chat in background', async () => {
+test('real hosted Persona answers ordinary chat without starting TaskAgent', async () => {
     const modelRequests = [];
     const modelServer = http.createServer(async (req, res) => {
         const chunks = [];
@@ -275,8 +277,11 @@ test('real hosted Persona streams independently while TaskAgent routes chat in b
         ]);
         assert.ok(modelRequests.some((request) => request.stream === true));
         assert.ok(modelRequests.some((request) => (request.tools || []).some((tool) =>
-            (tool?.function?.name || tool?.name) === 'task_route'
+            (tool?.function?.name || tool?.name) === 'handoff_task'
         )));
+        assert.equal(modelRequests.some((request) => (request.tools || []).some((tool) =>
+            (tool?.function?.name || tool?.name) === 'task_route'
+        )), false);
     } finally {
         await manager.close();
         await new Promise((resolve) => modelServer.close(resolve));
@@ -350,7 +355,7 @@ test('hosted runtime executes the real Persona Agent and restores memory after r
             (request.tools || []).map((tool) => tool?.function?.name || tool?.name || '')
         );
         assert.ok(
-            personaToolNames.includes('task_route'),
+            personaToolNames.includes('handoff_task'),
             JSON.stringify(requests.map((request) => ({
                 keys: Object.keys(request),
                 toolNames: (request.tools || []).map((tool) => tool?.function?.name || tool?.name || '')
@@ -388,7 +393,7 @@ test('hosted runtime executes the real Persona Agent and restores memory after r
     }
 });
 
-test('hosted TaskAgent owns web task routing and Persona renders its result', async () => {
+test('hosted Persona handoff gives TaskAgent the complete shared Session conversation', async () => {
     const requests = [];
     const modelServer = http.createServer(async (req, res) => {
         const chunks = [];
@@ -398,20 +403,29 @@ test('hosted TaskAgent owns web task routing and Persona renders its result', as
         const toolNames = (request.tools || []).map((tool) =>
             tool?.function?.name || tool?.name || ''
         );
-        const isTaskResultRenderer = JSON.stringify(request).includes('Render the following authoritative TaskEvent/TaskResult');
-        const message = toolNames.includes('task_route')
+        const requestText = JSON.stringify(request);
+        const isTaskResultRenderer = requestText.includes('Render the following authoritative TaskEvent/TaskResult');
+        const isAcceptedHandoffTurn = (request.messages || []).some((entry) => (
+            entry?.role === 'tool' && String(entry.content || '').includes('accepted')
+        ));
+        const isTaskAgentTurn = toolNames.includes('tool_search');
+        const message = toolNames.includes('handoff_task') && !isAcceptedHandoffTurn
             ? {
                   role: 'assistant',
                   content: null,
                   tool_calls: [{
-                      id: 'call-hosted-task-route',
+                      id: 'call-hosted-handoff',
                       type: 'function',
-                      function: { name: 'task_route', arguments: '{"mode":"execute"}' }
+                      function: { name: 'handoff_task', arguments: '{}' }
                   }]
               }
             : {
                   role: 'assistant',
-                  content: isTaskResultRenderer ? '网页任务已经完成。' : '好，我先看看。'
+                  content: isTaskResultRenderer
+                      ? '木偶攻略已经查好了。'
+                      : isTaskAgentTurn
+                          ? '已完成木偶攻略查询。'
+                          : '好，我马上查。'
               };
         const response = Buffer.from(JSON.stringify({
             id: 'chatcmpl-hosted-handoff',
@@ -442,25 +456,60 @@ test('hosted TaskAgent owns web task routing and Persona renders its result', as
     try {
         const result = await manager.runAgent('web:task-agent', {
             sessionId: 'main',
-            message: '请执行一个需要工具的任务。',
-            messageHistory: [{ role: 'user', content: '请执行一个需要工具的任务。' }],
+            message: '速度',
+            messageHistory: [
+                { role: 'user', content: '帮我查木偶攻略' },
+                { role: 'assistant', content: '好，我来看看。' },
+                { role: 'user', content: '速度' }
+            ],
             maxAgentSteps: 4,
             requireTaskExecution: true
         });
         assert.equal(result.ok, true);
-        assert.match(result.displayText || result.finalAnswer, /好，我先看看/);
+        assert.match(result.displayText || result.finalAnswer, /马上查/);
+        assert.equal(result.backgroundTask?.status, 'running', JSON.stringify(result, null, 2));
         await manager.waitForBackgroundTasks('web:task-agent');
         const allToolSurfaces = requests.map((request) =>
             (request.tools || []).map((tool) => tool?.function?.name || tool?.name || '')
         );
-        assert.ok(allToolSurfaces.some((tools) => tools.includes('task_route')));
-        assert.equal(allToolSurfaces.some((tools) => tools.includes('handoff_task')), false);
+        assert.ok(allToolSurfaces.some((tools) => tools.includes('handoff_task')));
+        assert.equal(allToolSurfaces.some((tools) => tools.includes('task_route')), false);
         assert.ok(allToolSurfaces.some((tools) => tools.includes('tool_search')));
+        const taskAgentRequest = requests.find((request) =>
+            (request.tools || []).some((tool) => (tool?.function?.name || tool?.name) === 'tool_search')
+        );
+        assert.ok(taskAgentRequest, JSON.stringify(requests));
+        assert.match(JSON.stringify(taskAgentRequest), /帮我查木偶攻略/);
+        assert.match(JSON.stringify(taskAgentRequest), /速度/);
         const backgroundEvents = manager.getEvents('web:task-agent', { cursor: 0, limit: 500 }).events;
         assert.ok(backgroundEvents.some((event) => (
             event.type === 'persona.background.message' &&
-            /网页任务已经完成/.test(event.payload?.text || '')
-        )));
+            /木偶攻略已经查好了/.test(event.payload?.text || '')
+        )), JSON.stringify(backgroundEvents, null, 2));
+
+        const requestCountBeforeResume = requests.length;
+        const resumed = await manager.runAgent('web:task-agent', {
+            sessionId: 'main',
+            message: '继续',
+            messageHistory: [
+                { role: 'user', content: '帮我查木偶攻略' },
+                { role: 'assistant', content: '好，我来看看。' },
+                { role: 'user', content: '速度' },
+                { role: 'assistant', content: '木偶攻略已经查好了。' },
+                { role: 'user', content: '继续' }
+            ],
+            maxAgentSteps: 4,
+            requireTaskExecution: true
+        });
+        assert.match(resumed.displayText || resumed.finalAnswer, /马上查/);
+        await manager.waitForBackgroundTasks('web:task-agent');
+        const resumedTaskRequest = requests.slice(requestCountBeforeResume).find((request) =>
+            (request.tools || []).some((tool) => (tool?.function?.name || tool?.name) === 'tool_search')
+        );
+        assert.ok(resumedTaskRequest, JSON.stringify(requests.slice(requestCountBeforeResume)));
+        assert.match(JSON.stringify(resumedTaskRequest), /shared_session_context/);
+        assert.match(JSON.stringify(resumedTaskRequest), /帮我查木偶攻略/);
+        assert.match(JSON.stringify(resumedTaskRequest), /继续/);
 
         const key = tenantKey('web:task-agent');
         const harnessRoot = path.join(
