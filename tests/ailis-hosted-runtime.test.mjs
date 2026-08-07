@@ -178,7 +178,7 @@ test('hosted runtime forwards provider text deltas outside the serialized reques
     }
 });
 
-test('real hosted Persona buffers its draft until TaskAgent routes chat', async () => {
+test('real hosted Persona streams its fast lane while TaskAgent routes chat', async () => {
     const modelRequests = [];
     const modelServer = http.createServer(async (req, res) => {
         const chunks = [];
@@ -205,6 +205,21 @@ test('real hosted Persona buffers its draft until TaskAgent routes chat', async 
                 'content-length': response.length
             });
             res.end(response);
+            return;
+        }
+        if (request.stream === true) {
+            res.writeHead(200, {
+                'content-type': 'text/event-stream; charset=utf-8',
+                'cache-control': 'no-cache'
+            });
+            res.write(`data: ${JSON.stringify({
+                choices: [{ index: 0, delta: { role: 'assistant', content: '你好，我在这里。' }, finish_reason: null }]
+            })}\n\n`);
+            res.write(`data: ${JSON.stringify({
+                choices: [{ index: 0, delta: {}, finish_reason: 'stop' }],
+                usage: { prompt_tokens: 20, completion_tokens: 6, total_tokens: 26 }
+            })}\n\n`);
+            res.end('data: [DONE]\n\n');
             return;
         }
         const response = Buffer.from(JSON.stringify({
@@ -254,8 +269,11 @@ test('real hosted Persona buffers its draft until TaskAgent routes chat', async 
         assert.equal(result.ok, true);
         assert.equal(result.displayText, '你好，我在这里。');
         assert.deepEqual(deltas, ['你好，我在这里。']);
-        assert.deepEqual(streamEvents, []);
-        assert.ok(modelRequests.every((request) => request.stream !== true));
+        assert.deepEqual(streamEvents, [
+            'response.output_text.started',
+            'response.output_text.committed'
+        ]);
+        assert.ok(modelRequests.some((request) => request.stream === true));
         assert.ok(modelRequests.some((request) => (request.tools || []).some((tool) =>
             (tool?.function?.name || tool?.name) === 'task_route'
         )));
