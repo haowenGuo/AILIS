@@ -3007,9 +3007,19 @@ class AILISGateway extends EventEmitter {
         packet = {},
         purpose = 'result'
     } = {}) {
+        const packetStatus = normalizeString(packet.status, 'unknown');
+        const authoritativeAnswer = normalizeString(
+            packet.final_answer || packet.partial_answer || packet.summary || packet.message
+        );
         const developerPacket = [
             'Render the following authoritative TaskEvent/TaskResult for the user.',
-            'Use only this packet and the current user request as factual input. Preserve status, failure, uncertainty, sources, artifacts, and unresolved fields. Never promise work that the packet does not report as running.',
+            `The TaskAgent packet status is ${packetStatus}. This packet reports work that has already reached that status; do not treat the current user request as a new task.`,
+            authoritativeAnswer
+                ? `Authoritative answer to deliver:\n${authoritativeAnswer}`
+                : 'The packet contains no final or partial answer. State its actual status and unresolved fields without inventing a result.',
+            'Use only this packet and the current user request as factual input. Preserve status, failure, uncertainty, sources, artifacts, and unresolved fields. For a completed packet, deliver the substance of the authoritative answer now; never replace it with an acknowledgment, a promise to start, or a request to wait.',
+            'You may improve tone and presentation, but do not discard the concrete answer, numbered items, source attribution, or failure details.',
+            'Full structured packet:',
             JSON.stringify(packet)
         ].join('\n');
         const rendered = await this.runPrivatePersonaTurn({
@@ -3025,13 +3035,24 @@ class AILISGateway extends EventEmitter {
             purpose,
             developerPacket
         }).catch(() => null);
-        return normalizeString(
+        const renderedText = normalizeString(
             rendered?.displayText || rendered?.finalAnswer || rendered?.speechText,
-            normalizeString(
-                packet.final_answer || packet.partial_answer || packet.summary || packet.message,
-                packet.status ? `任务状态：${packet.status}` : ''
-            )
+            authoritativeAnswer || (packet.status ? `任务状态：${packet.status}` : '')
         );
+        const completedPacket = ['completed', 'completed_with_warnings', 'success', 'succeeded']
+            .includes(packetStatus.toLowerCase());
+        const minimumFaithfulLength = Math.min(
+            240,
+            Math.max(80, Math.floor(authoritativeAnswer.length * 0.15))
+        );
+        if (
+            completedPacket &&
+            authoritativeAnswer.length >= 160 &&
+            renderedText.length < minimumFaithfulLength
+        ) {
+            return authoritativeAnswer;
+        }
+        return renderedText;
     }
 
     startPrivatePersonaDraft({

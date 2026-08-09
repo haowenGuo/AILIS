@@ -1305,6 +1305,67 @@ test('AILIS Gateway keeps task execution private until one Persona FinalAnswer i
     }
 });
 
+test('AILIS Gateway preserves a completed TaskResult when Persona returns only a lossy acknowledgement', async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-task-result-fidelity-'));
+    const gateway = new AILISGateway({
+        port: 0,
+        workspaceRoot,
+        projectRoot: path.resolve('.'),
+        auditDir: path.join(workspaceRoot, '.audit'),
+        emberHarnessEnabled: false,
+        getDefaultContext: () => ({ taskAgentRoutingOwned: true })
+    });
+    const authoritativeAnswer = [
+        '查询已经完成，以下是三条有来源依据的更新：',
+        '1. 第一项官方更新包含明确的版本、日期、玩法变化和来源链接。',
+        '2. 第二项官方更新包含明确的活动时间、奖励信息和来源链接。',
+        '3. 第三项官方更新包含明确的维护内容、影响范围和来源链接。',
+        '这些信息已经由任务执行器完成检索并核对，用户现在需要的是结果，而不是新的等待提示。',
+        '来源：https://example.com/official-update'
+    ].join('\n');
+    gateway.ensureAgentRunner = () => ({
+        runMessage: async (request) => ({
+            ok: true,
+            status: 'completed',
+            displayText: request.context?.personaDraft
+                ? '我先看看。'
+                : '好的，我这就去查询，请稍等。'
+        }),
+        recordMemoryTurn: () => {}
+    });
+    gateway.taskAgentHarness = {
+        dispatchTurn: async (context) => ({
+            schema: 'ailis.task_result.v1',
+            status: 'completed',
+            route: 'execute',
+            turn_id: 'turn-result-fidelity',
+            current_request: context.currentUserMessage,
+            final_answer: authoritativeAnswer,
+            source_refs: [{ url: 'https://example.com/official-update' }],
+            unresolved_fields: []
+        }),
+        recordPersonaOutput: () => {}
+    };
+
+    try {
+        await gateway.runAgent({
+            message: '查询最新官方更新并给我三条要点',
+            sessionId: 'session-result-fidelity'
+        });
+        await gateway.waitForBackgroundTaskRuns();
+        const taskMessage = gateway.eventLog.find((event) => (
+            event.type === 'persona.background.message' && event.payload?.kind === 'result'
+        ));
+        assert.equal(taskMessage?.payload?.text, authoritativeAnswer);
+        assert.equal(taskMessage?.payload?.phase, 'final_answer');
+        assert.equal(gateway.eventLog.filter((event) => (
+            event.type === 'persona.background.message' && event.payload?.phase === 'final_answer'
+        )).length, 1);
+    } finally {
+        await fs.rm(workspaceRoot, { recursive: true, force: true });
+    }
+});
+
 test('AILIS Gateway does not inject a second persistent TaskAgent mailbox into Persona context', async () => {
     const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-persona-task-inbox-'));
     const gateway = new AILISGateway({
