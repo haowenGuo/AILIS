@@ -1094,7 +1094,7 @@ test('AILIS Gateway TaskAgent thread reuses parent LLM settings', async () => {
     assert.equal(calls[0].context.allowSystemMutation, true);
 });
 
-test('AILIS Gateway returns the Persona actor without waiting for the persistent TaskAgent actor', async () => {
+test('AILIS Gateway opens one background Turn and publishes Persona only after TaskAgent routes chat', async () => {
     const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-task-route-gate-'));
     const gateway = new AILISGateway({
         port: 0,
@@ -1119,22 +1119,35 @@ test('AILIS Gateway returns the Persona actor without waiting for the persistent
         runMessage: async (request) => {
             runnerCalls.push(request);
             const isPersonaActor = request.context?.personaDraft === true;
+            const displayText = request.message === '改成只写一个四字标题，不要三条。'
+                ? '夏日清风'
+                : '初始的三条夏日短句';
             if (isPersonaActor) {
                 await request.onTextStreamEvent?.({ type: 'response.output_text.started' });
-                await request.onTextDelta?.('我在呢，马上回应你。');
+                await request.onTextDelta?.(displayText);
                 await request.onTextStreamEvent?.({ type: 'response.output_text.committed' });
             }
             return {
                 ok: true,
                 status: 'completed',
-                displayText: isPersonaActor ? '我在呢，马上回应你。' : '自然聊天回复'
+                displayText: isPersonaActor ? displayText : '自然聊天回复'
             };
         },
         recordMemoryTurn: (payload) => memoryCalls.push(payload)
     });
     const personaOutputs = [];
     gateway.taskAgentHarness = {
+        getThread: () => ({ activeTurnId: 'turn-chat' }),
         dispatchTurn: async (context) => {
+            if (context.currentUserMessage === '改成只写一个四字标题，不要三条。') {
+                return {
+                    schema: 'ailis.task_result.v1',
+                    status: 'accepted',
+                    route: 'execute',
+                    turn_id: 'turn-chat',
+                    steer_accepted: true
+                };
+            }
             dispatchedContext = context;
             await taskRouteGate;
             return {
@@ -1150,16 +1163,17 @@ test('AILIS Gateway returns the Persona actor without waiting for the persistent
 
     try {
         const resultPromise = gateway.runAgent({
-            message: '陪我聊聊天',
+            message: '写三条关于夏天的短句，每条十字左右。',
             sessionId: 'session-chat',
             onTextDelta: (delta, metadata) => textDeltas.push({ delta, metadata }),
             onTextStreamEvent: (event) => streamEvents.push(event)
         });
         await new Promise((resolve) => setImmediate(resolve));
-        assert.equal(textDeltas.map((entry) => entry.delta).join(''), '我在呢，马上回应你。');
+        assert.equal(textDeltas.length, 0);
         const result = await resultPromise;
         assert.equal(result.taskRoute, 'pending');
-        assert.equal(result.displayText, '我在呢，马上回应你。');
+        assert.equal(result.displayText, '');
+        assert.equal(result.deferAssistantCommit, true);
         assert.equal(result.backgroundTask.status, 'running');
         assert.equal(runnerCalls.length, 1);
         assert.equal(runnerCalls[0].context.personaDraft, true);
@@ -1167,24 +1181,45 @@ test('AILIS Gateway returns the Persona actor without waiting for the persistent
         assert.equal(runnerCalls[0].context.turnEnvelope, dispatchedContext.turnEnvelope);
         assert.equal(Object.isFrozen(dispatchedContext.turnEnvelope), true);
         assert.equal(runnerCalls[0].memoryPolicy, 'read_only');
-        assert.equal(memoryCalls.length, 1);
+        assert.equal(memoryCalls.length, 0);
         assert.equal(personaOutputs.length, 0);
-        assert.equal(textDeltas.map((entry) => entry.delta).join(''), '我在呢，马上回应你。');
-        assert.ok(textDeltas.every((entry) => entry.metadata.phase === 'persona_actor'));
-        assert.deepEqual(
-            streamEvents.map((entry) => entry.type),
-            ['response.output_text.started', 'response.output_text.committed']
-        );
-        assert.ok(streamEvents.every((entry) => entry.phase === 'persona_actor'));
-        assert.match(runnerCalls[0].ephemeralDeveloperMessage, /persistent user-facing Persona actor/);
-        assert.match(runnerCalls[0].ephemeralDeveloperMessage, /do not wait for TaskAgent/);
+        assert.equal(streamEvents.length, 0);
+        assert.match(runnerCalls[0].ephemeralDeveloperMessage, /private candidate FinalAnswer/);
+        assert.match(runnerCalls[0].ephemeralDeveloperMessage, /published only if TaskAgent chooses chat/);
         assert.ok(publicEvents.some((event) => event.type === 'agent.run.started'));
-        assert.ok(publicEvents.some((event) => event.type === 'agent.message.completed' && event.payload?.source === 'persona_actor'));
-        assert.ok(publicEvents.some((event) => event.type === 'agent.run.finished'));
+        assert.equal(publicEvents.some((event) => event.type === 'agent.message.completed'), false);
+        assert.equal(publicEvents.some((event) => event.type === 'agent.run.finished'), false);
         assert.equal(gateway.hasBackgroundTaskRuns(), true);
+        const steered = await gateway.runAgent({
+            message: '改成只写一个四字标题，不要三条。',
+            sessionId: 'session-chat',
+            messageHistory: [
+                { role: 'user', content: '写三条关于夏天的短句，每条十字左右。' },
+                { role: 'user', content: '改成只写一个四字标题，不要三条。' }
+            ]
+        });
+        assert.equal(steered.intent, 'turn_steered');
+        assert.equal(steered.deferAssistantCommit, true);
+        assert.equal(steered.steerAccepted, true);
+        assert.equal(steered.runId, result.runId);
+        assert.equal(runnerCalls.length, 2);
+        assert.equal(runnerCalls[1].message, '改成只写一个四字标题，不要三条。');
+        assert.match(JSON.stringify(runnerCalls[1].messageHistory), /写三条关于夏天/);
+        assert.match(JSON.stringify(runnerCalls[1].messageHistory), /只写一个四字标题/);
+        assert.equal(publicEvents.filter((event) => event.type === 'agent.run.started').length, 1);
+        assert.equal(publicEvents.filter((event) => event.type === 'agent.turn.steered').length, 1);
         releaseTaskRoute();
         await gateway.waitForBackgroundTaskRuns();
         assert.equal(personaOutputs.length, 1);
+        assert.equal(memoryCalls.length, 1);
+        const finalMessages = publicEvents.filter((event) => (
+            event.type === 'persona.background.message' && event.payload?.phase === 'final_answer'
+        ));
+        assert.equal(finalMessages.length, 1);
+        assert.equal(finalMessages[0].payload.text, '夏日清风');
+        assert.equal(memoryCalls[0].message, '改成只写一个四字标题，不要三条。');
+        assert.equal(publicEvents.filter((event) => event.type === 'agent.message.completed').length, 1);
+        assert.equal(publicEvents.filter((event) => event.type === 'agent.run.finished').length, 1);
         assert.equal(gateway.hasBackgroundTaskRuns(), false);
     } finally {
         releaseTaskRoute?.();
@@ -1192,7 +1227,7 @@ test('AILIS Gateway returns the Persona actor without waiting for the persistent
     }
 });
 
-test('AILIS Gateway publishes TaskResult through Persona as a later background message', async () => {
+test('AILIS Gateway keeps task execution private until one Persona FinalAnswer is ready', async () => {
     const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-task-result-gate-'));
     const gateway = new AILISGateway({
         port: 0,
@@ -1249,10 +1284,9 @@ test('AILIS Gateway publishes TaskResult through Persona as a later background m
             onTextDelta: (delta, metadata) => textDeltas.push({ delta, metadata })
         });
         assert.equal(result.taskRoute, 'pending');
-        assert.equal(result.displayText, '好，我先整理一下。');
-        assert.equal(textDeltas.map((entry) => entry.delta).join(''), '好，我先整理一下。');
-        assert.ok(textDeltas.every((entry) => entry.metadata.phase === 'persona_actor'));
-        assert.equal(memoryCalls.length, 1);
+        assert.equal(result.displayText, '');
+        assert.equal(result.deferAssistantCommit, true);
+        assert.equal(textDeltas.length, 0);
         await gateway.waitForBackgroundTaskRuns();
         const renderCalls = runnerCalls.filter((request) => request.context?.personaRenderOnly === true);
         assert.equal(renderCalls.length, 1);
@@ -1263,12 +1297,200 @@ test('AILIS Gateway publishes TaskResult through Persona as a later background m
             event.type === 'persona.background.message' && event.payload?.kind === 'result'
         ));
         assert.equal(taskMessage?.payload?.text, '攻略已经整理完成。');
+        assert.equal(taskMessage?.payload?.phase, 'final_answer');
+        assert.equal(memoryCalls.length, 1);
+        assert.equal(gateway.eventLog.filter((event) => event.type === 'agent.message.completed').length, 1);
     } finally {
         await fs.rm(workspaceRoot, { recursive: true, force: true });
     }
 });
 
-test('AILIS Gateway keeps a late Persona reply and an earlier TaskResult as separate messages', async () => {
+test('AILIS Gateway does not inject a second persistent TaskAgent mailbox into Persona context', async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-persona-task-inbox-'));
+    const gateway = new AILISGateway({
+        port: 0,
+        workspaceRoot,
+        projectRoot: path.resolve('.'),
+        auditDir: path.join(workspaceRoot, '.audit'),
+        emberHarnessEnabled: false,
+        getDefaultContext: () => ({ taskAgentRoutingOwned: false })
+    });
+    const runnerCalls = [];
+    gateway.ensureAgentRunner = () => ({
+        runMessage: async (request) => {
+            runnerCalls.push(request);
+            return {
+                ok: true,
+                status: 'completed',
+                displayText: '我知道攻略还在核对，已经把加速要求传过去了。'
+            };
+        }
+    });
+    gateway.taskAgentHarness = {
+        getPersonaMessages: () => [{
+            messageId: 'task-message-1',
+            sequence: 1,
+            sessionId: 'session-persona-inbox',
+            threadId: 'thread-persona-inbox',
+            turnId: 'turn-persona-inbox',
+            taskId: 'turn-persona-inbox',
+            kind: 'progress',
+            content: '我已经确认“木偶”对应的游戏，正在核对最新版本。',
+            createdAt: '2026-08-08T00:00:00.000Z'
+        }]
+    };
+
+    try {
+        const result = await gateway.runAgent({
+            message: '速度',
+            sessionId: 'session-persona-inbox',
+            messageHistory: [
+                { role: 'user', content: '帮我查木偶攻略' },
+                { role: 'assistant', content: '好，我去核对。' }
+            ]
+        });
+
+        assert.equal(result.displayText, '我知道攻略还在核对，已经把加速要求传过去了。');
+        assert.equal(runnerCalls.length, 1);
+        assert.equal(runnerCalls[0].ephemeralDeveloperMessage, undefined);
+    } finally {
+        await fs.rm(workspaceRoot, { recursive: true, force: true });
+    }
+});
+
+test('completed TaskAgent state is not duplicated into an unrelated Persona prompt', async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-persona-terminal-task-message-'));
+    const gateway = new AILISGateway({
+        port: 0,
+        workspaceRoot,
+        projectRoot: path.resolve('.'),
+        auditDir: path.join(workspaceRoot, '.audit'),
+        emberHarnessEnabled: false,
+        getDefaultContext: () => ({ taskAgentRoutingOwned: false })
+    });
+    const runnerCalls = [];
+    gateway.ensureAgentRunner = () => ({
+        runMessage: async (request) => {
+            runnerCalls.push(request);
+            return { ok: true, status: 'completed', displayText: '任务已经完成。' };
+        }
+    });
+    const baseMessage = {
+        sessionId: 'session-terminal-inbox',
+        threadId: 'thread-terminal-inbox',
+        turnId: 'turn-terminal-inbox',
+        taskId: 'turn-terminal-inbox',
+        createdAt: '2026-08-08T00:00:00.000Z'
+    };
+    gateway.taskAgentHarness = {
+        getThread: () => ({ activeTurnId: '' }),
+        getPersonaMessages: () => [
+            { ...baseMessage, messageId: 'message-accepted', sequence: 1, kind: 'accepted', content: '正在执行旧任务。' },
+            { ...baseMessage, messageId: 'message-progress', sequence: 2, kind: 'progress', content: '旧任务仍在运行。' },
+            { ...baseMessage, messageId: 'message-final', sequence: 3, kind: 'final', content: '最终结果是 333833500。' }
+        ]
+    };
+
+    try {
+        await gateway.runAgent({
+            message: '结果出来了吗？',
+            sessionId: 'session-terminal-inbox'
+        });
+        assert.equal(runnerCalls[0].ephemeralDeveloperMessage, undefined);
+    } finally {
+        await fs.rm(workspaceRoot, { recursive: true, force: true });
+    }
+});
+
+test('a running TaskAgent does not overwrite Persona context through a stale mailbox', async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-persona-live-task-message-'));
+    const gateway = new AILISGateway({
+        port: 0,
+        workspaceRoot,
+        projectRoot: path.resolve('.'),
+        auditDir: path.join(workspaceRoot, '.audit'),
+        emberHarnessEnabled: false,
+        getDefaultContext: () => ({ taskAgentRoutingOwned: false })
+    });
+    const runnerCalls = [];
+    let releaseTask;
+    let markProgressReady;
+    const taskGate = new Promise((resolve) => {
+        releaseTask = resolve;
+    });
+    const progressReady = new Promise((resolve) => {
+        markProgressReady = resolve;
+    });
+    gateway.ensureAgentRunner = () => ({
+        runMessage: async (request) => {
+            runnerCalls.push(request);
+            return {
+                ok: true,
+                status: 'completed',
+                displayText: request.context?.personaRenderOnly
+                    ? '已经确认游戏，正在核对版本。'
+                    : '我知道她正在核对版本，已经把“速度”传过去了。'
+            };
+        }
+    });
+    gateway.taskAgentHarness.executeTaskAgent = async (payload) => {
+        await payload.onEvent({
+            type: 'agent.progress.note',
+            status: 'running',
+            message: '我已经确认对应游戏，正在核对最新版本。',
+            payload: {
+                iteration: 1,
+                text: '我已经确认对应游戏，正在核对最新版本。'
+            }
+        });
+        markProgressReady();
+        await taskGate;
+        return {
+            ok: true,
+            status: 'completed',
+            runId: payload.agent.childRunId,
+            displayText: '木偶攻略最终结果。',
+            taskRunHandoff: {
+                status: 'completed',
+                finalAnswer: '木偶攻略最终结果。',
+                sourceRefs: [],
+                collectedData: [],
+                traceRef: payload.agent.childRunId
+            }
+        };
+    };
+
+    try {
+        gateway.startDeferredPersonaTaskHandoff({}, {
+            currentUserMessage: '帮我查木偶攻略',
+            sessionId: 'session-live-task-message',
+            runId: 'run-live-task-message',
+            sharedSessionHistory: [{ role: 'user', content: '帮我查木偶攻略' }]
+        });
+        await progressReady;
+
+        const result = await gateway.runAgent({
+            message: '速度',
+            sessionId: 'session-live-task-message',
+            messageHistory: [
+                { role: 'user', content: '帮我查木偶攻略' },
+                { role: 'assistant', content: '好，我去核对。' }
+            ]
+        });
+        assert.equal(result.displayText, '我知道她正在核对版本，已经把“速度”传过去了。');
+        const userTurnCall = runnerCalls.find((request) => (
+            request.message === '速度' && request.context?.personaRenderOnly !== true
+        ));
+        assert.ok(userTurnCall);
+        assert.equal(userTurnCall.ephemeralDeveloperMessage, undefined);
+    } finally {
+        releaseTask?.();
+        await gateway.waitForBackgroundTaskRuns();
+        await fs.rm(workspaceRoot, { recursive: true, force: true });
+    }
+});
+
+test('AILIS Gateway discards a late private Persona draft after TaskAgent owns execution', async () => {
     const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-task-late-draft-'));
     const gateway = new AILISGateway({
         port: 0,
@@ -1320,18 +1542,21 @@ test('AILIS Gateway keeps a late Persona reply and an earlier TaskResult as sepa
         while (!releaseDraft) {
             await new Promise((resolve) => setImmediate(resolve));
         }
+        const result = await resultPromise;
+        assert.equal(result.displayText, '');
+        assert.equal(result.deferAssistantCommit, true);
         await gateway.waitForBackgroundTaskRuns();
         const taskMessage = publicEvents.find((event) => (
             event.type === 'persona.background.message' && event.payload?.kind === 'result'
         ));
         assert.equal(taskMessage?.payload?.text, '权威任务结果');
         releaseDraft();
-        const result = await resultPromise;
-        assert.equal(result.displayText, '迟到的草稿');
-        assert.deepEqual(textDeltas, ['迟到的草稿']);
-        assert.ok(publicEvents.some((event) => (
+        await new Promise((resolve) => setImmediate(resolve));
+        assert.deepEqual(textDeltas, []);
+        assert.equal(publicEvents.filter((event) => event.type === 'agent.message.completed').length, 1);
+        assert.equal(publicEvents.some((event) => (
             event.type === 'agent.message.completed' && event.payload?.source === 'persona_actor'
-        )));
+        )), false);
     } finally {
         releaseDraft?.();
         await fs.rm(workspaceRoot, { recursive: true, force: true });

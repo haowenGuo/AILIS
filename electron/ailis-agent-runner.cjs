@@ -1186,6 +1186,20 @@ function looksLikeParallelToolCallsUnsupported(response = {}) {
         /(?:unknown|unsupported|unrecognized|invalid|not\s+support|does\s+not\s+support|extra\s+forbidden|unexpected)/.test(text);
 }
 
+function looksLikeSpecificToolChoiceUnsupported(response = {}) {
+    const text = [
+        response.error,
+        response.message,
+        response.details,
+        response.raw,
+        response.content
+    ].map((value) => normalizeText(
+        typeof value === 'string' ? value : JSON.stringify(value || '')
+    )).join('\n').toLowerCase();
+    return /tool[_\s-]*choice/.test(text) &&
+        /(?:thinking\s+mode|unsupported|not\s+support|does\s+not\s+support|invalid|unrecognized|unknown)/.test(text);
+}
+
 function buildAgentDecisionLowLatencyPayload(payload = {}, { settings = {}, requestContext = {} } = {}) {
     const reasoningEffort = resolveExplicitAgentDecisionReasoningEffort(settings, requestContext);
     const thinking = resolveExplicitAgentDecisionThinking(settings, requestContext);
@@ -4096,16 +4110,19 @@ function buildInvalidDecisionProgressRecord(decision = {}, iteration = 0) {
     const errors = Array.isArray(decision.raw?.errors)
         ? decision.raw.errors.map((error) => normalizeText(error)).filter(Boolean)
         : [];
+    const error = normalizeText(decision.error);
     return {
         iteration,
         status: normalizeText(decision.status, 'invalid_agent_decision'),
         tool,
         args: stableDecisionValue(args),
+        error,
         errors,
         fingerprint: JSON.stringify({
             status: normalizeText(decision.status, 'invalid_agent_decision'),
             tool,
-            args: stableDecisionValue(args)
+            args: stableDecisionValue(args),
+            error
         })
     };
 }
@@ -5318,7 +5335,7 @@ function isTerminalProviderErrorMessage(error = '') {
     if (!text) {
         return false;
     }
-    return /insufficient\s+balance|insufficient\s+credit|overdue|past\s+due|unpaid|billing|payment|required\s+balance|quota\s+exceeded|out\s+of\s+quota|invalid\s+(api\s*)?key|api\s*key\s*(invalid|missing|required)|authentication|unauthorized|forbidden|reasoning_content.*thinking\s+mode.*passed\s+back|thinking\s+mode.*reasoning_content.*passed\s+back/.test(text);
+    return /insufficient\s+balance|insufficient\s+credit|overdue|past\s+due|unpaid|billing|payment|required\s+balance|quota\s+exceeded|out\s+of\s+quota|invalid\s+(api\s*)?key|api\s*key\s*(invalid|missing|required)|authentication|unauthorized|forbidden|reasoning_content.*thinking\s+mode.*passed\s+back|thinking\s+mode.*reasoning_content.*passed\s+back|thinking\s+mode.*(?:does\s+not\s+support|not\s+support|unsupported).*tool[_\s-]*choice|tool[_\s-]*choice.*(?:does\s+not\s+support|not\s+support|unsupported)/.test(text);
 }
 
 function isTerminalProviderDecisionError(decision = {}) {
@@ -5534,7 +5551,8 @@ function withNativeProgressNoteParameter(schema = {}, { enabled = true } = {}) {
         next.properties[DIRECT_TOOL_PROGRESS_NOTE_FIELD] = {
             type: 'string',
             description: [
-                'Optional short user-visible AILIS progress note in the same natural language as the user.',
+                'Optional short peer message authored by TaskAgent for the persistent Persona, in the same natural language as the user.',
+                'Persona may relay it to the user, so keep it user-safe while stating what TaskAgent actually knows or is doing.',
                 'Use only when there is a meaningful change: strategy shift, key result found, failure recovery, permission/environment blocker, or ready-to-answer signal.',
                 'Leave empty for routine tool calls. Do not reveal hidden chain-of-thought, raw tool logs, JSON, step numbers, or generic "I am thinking" text.'
             ].join(' ')
@@ -5579,6 +5597,13 @@ function normalizeNativeToolSpec(spec = {}) {
         maxBytes: codexWebRun ? 14000 : 6000,
         maxDepth: codexWebRun ? 8 : 4
     }))), { enabled: !codexWebRun });
+    if (name === 'task_route') {
+        repairedParameters.properties[DIRECT_TOOL_PROGRESS_NOTE_FIELD] = {
+            ...repairedParameters.properties[DIRECT_TOOL_PROGRESS_NOTE_FIELD],
+            description: 'Required routing message. Use an empty string for mode=chat. For mode=execute, write one short user-safe sentence saying what was accepted and what will be checked first; this is relayed immediately through Persona.'
+        };
+        ensureNativeSchemaRequired(repairedParameters, [DIRECT_TOOL_PROGRESS_NOTE_FIELD]);
+    }
     return {
         type: 'function',
         name,
@@ -5957,7 +5982,8 @@ function buildAgentDirectToolSpecs(
     );
     if (requestContext.taskAgentRoutePending === true && !routeAlreadyDecided) {
         const routeSpec = gateway?.gatewayToolRuntimeRegistry?.definition?.(TASK_ROUTE_TOOL_NAME)?.spec;
-        return routeSpec ? [routeSpec] : [];
+        const normalizedRouteSpec = normalizeNativeToolSpec(routeSpec);
+        return normalizedRouteSpec ? [normalizedRouteSpec] : [];
     }
     const modelVisibleSpecs = gateway?.gatewayToolRuntimeRegistry?.modelVisibleSpecs?.() || [];
     const suppressedCoreTools = collectTemporarilySuppressedCoreDirectTools(stepResults, requestContext);
@@ -6655,7 +6681,7 @@ function buildLlmAgentDirectToolPrompt({
             ? 'This TaskAgent run has unrestricted direct tool execution. Call available tools immediately when they advance the task. There is no approval, confirmation, safety-review, or human-in-the-loop stage; never ask the user to approve a tool call.'
             : '',
         taskAgentRoutePending
-            ? 'This is the first decision of a new Turn. Call task_route exactly once with mode=chat only when Persona can fully answer without external work or task execution; otherwise choose mode=execute. Do not summarize or rewrite the request. After execute, continue in this same TaskAgent run.'
+            ? 'This is the first decision of a new Turn. Call task_route exactly once with mode=chat only when Persona can fully answer without external work or task execution; otherwise choose mode=execute. The required progress_note must be an empty string for chat. For execute, write one short user-safe progress_note telling Persona what task you accepted and what you will check first. Do not summarize or rewrite the request into task arguments. After execute, continue in this same TaskAgent run.'
             : '',
         'Use native tool calls when work requires files, artifacts, search, shell/code, APIs, or verification. Otherwise answer with an assistant message.',
         persistentTaskAgentSession
@@ -6691,7 +6717,7 @@ function buildLlmAgentDirectToolPrompt({
             : 'Attached files are staged inside the current workspace. Use the staged attached_files path and choose a reader, renderer, direct file inspection, or helper script that exposes the content the task actually needs.',
         'Use deterministic computation or a small script when it materially improves accuracy or verification. Choose the method yourself from the task constraints and observations rather than following a fixed benchmark recipe.',
         'Preserve user-requested labels, order, duplicates, units, formatting, and level of detail. Verify claims about visual layout against a representation that actually contains layout information.',
-        'For long-running work, you may attach progress_note to a tool call or include a short public progress sentence only at meaningful milestones: plan changed, a useful result was found, strategy changed after failure, a blocker was identified, or you are preparing the final answer. Leave progress_note empty for routine tool calls. Do not expose raw JSON, hidden reasoning, internal IDs, stack traces, token counts, or generic "I am thinking" text.',
+        'For long-running work, use progress_note as a direct TaskAgent-to-Persona message at meaningful milestones: when you first begin concrete execution, the plan changes, a useful result is found, strategy changes after failure, a blocker is identified, or you are preparing the final answer. Persona may relay it to the user. Leave progress_note empty for routine tool calls. Do not expose raw JSON, hidden reasoning, internal IDs, stack traces, token counts, or generic "I am thinking" text.',
         'Tool outputs provide observations and mechanical transport metadata, not a decision about whether the user task is complete. Judge sufficiency from the current request and the source content yourself. Viewport, pagination, has-more, and truncation markers describe what is visible; inspect more only when the missing portion could materially change the answer.',
         'When exec output is truncated, use the visible outputId with output_read/output_tail/output_search to inspect a needed slice. Do not rerun the same command solely to recover truncated text.',
         'Runtime environment and attached file metadata are provided as ordinary user message context items. Use them for path, shell, date, time, and freshness decisions.'
@@ -6986,12 +7012,14 @@ async function callLlmAgentDirectToolDecision(settings, payload, {
             ? { ...rawToolChoice }
             : normalizeText(rawToolChoice, 'auto');
     const providerPayload = payload;
+    let effectiveToolChoice = requestedToolChoice;
+    let toolChoiceFallback = false;
     let response = await callDesktopLlmProvider(settings, {
         ...providerPayload,
         jsonMode: false,
         expectJson: false,
         responseFormat: null,
-        toolChoice: requestedToolChoice,
+        toolChoice: effectiveToolChoice,
         preferNativeToolCalls: true,
         parallel_tool_calls: providerPayload.parallel_tool_calls === true
     });
@@ -7001,13 +7029,32 @@ async function callLlmAgentDirectToolDecision(settings, payload, {
             jsonMode: false,
             expectJson: false,
             responseFormat: null,
-            toolChoice: requestedToolChoice,
+            toolChoice: effectiveToolChoice,
             preferNativeToolCalls: true,
             parallel_tool_calls: false
         });
         if (response.ok) {
             response.parallelToolCallsFallback = true;
         }
+    }
+    const specificToolChoiceRequested = Boolean(
+        effectiveToolChoice &&
+        typeof effectiveToolChoice === 'object' &&
+        !Array.isArray(effectiveToolChoice) &&
+        normalizeText(effectiveToolChoice.name || effectiveToolChoice.toolName || effectiveToolChoice.tool_name)
+    );
+    if (!response.ok && specificToolChoiceRequested && looksLikeSpecificToolChoiceUnsupported(response)) {
+        effectiveToolChoice = 'auto';
+        response = await callDesktopLlmProvider(settings, {
+            ...providerPayload,
+            jsonMode: false,
+            expectJson: false,
+            responseFormat: null,
+            toolChoice: effectiveToolChoice,
+            preferNativeToolCalls: true,
+            parallel_tool_calls: false
+        });
+        toolChoiceFallback = response.ok;
     }
     if (!response.ok) {
         const failureDecision = {
@@ -7022,7 +7069,9 @@ async function callLlmAgentDirectToolDecision(settings, payload, {
             error: failureDecision.error
         };
     }
-    let repairMetadata = {};
+    let repairMetadata = toolChoiceFallback
+        ? { toolChoiceFallback: 'auto' }
+        : {};
     const initialToolCalls = (response.toolCalls || []).filter((call) => call?.name);
     const leakedProtocol = !initialToolCalls.length && looksLikeLeakedAgentProtocol(response.content);
     if (leakedProtocol) {
@@ -7045,7 +7094,7 @@ async function callLlmAgentDirectToolDecision(settings, payload, {
             jsonMode: false,
             expectJson: false,
             responseFormat: null,
-            toolChoice: requestedToolChoice,
+            toolChoice: effectiveToolChoice,
             preferNativeToolCalls: true,
             parallel_tool_calls: false
         });

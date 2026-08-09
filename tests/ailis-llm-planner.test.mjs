@@ -436,6 +436,61 @@ async function createScriptedChatCompletionsServer(decisionFactory) {
     };
 }
 
+async function createToolChoiceCompatibilityServer({ fallbackSucceeds = true } = {}) {
+    const calls = [];
+    const server = http.createServer(async (req, res) => {
+        let raw = '';
+        req.on('data', (chunk) => {
+            raw += chunk;
+        });
+        req.on('end', () => {
+            const payload = raw ? JSON.parse(raw) : {};
+            calls.push({ url: req.url, payload });
+            const isSpecificChoice = Boolean(
+                payload.tool_choice &&
+                typeof payload.tool_choice === 'object' &&
+                payload.tool_choice !== null
+            );
+            if (isSpecificChoice || !fallbackSucceeds) {
+                res.writeHead(400, { 'content-type': 'application/json' });
+                res.end(JSON.stringify({
+                    error: {
+                        message: 'Thinking mode does not support this tool_choice',
+                        type: 'invalid_request_error',
+                        code: 'invalid_request_error'
+                    }
+                }));
+                return;
+            }
+            res.writeHead(200, { 'content-type': 'application/json' });
+            res.end(JSON.stringify({
+                choices: [{
+                    message: {
+                        content: '',
+                        tool_calls: [{
+                            id: 'task-route-auto-fallback',
+                            type: 'function',
+                            function: {
+                                name: 'task_route',
+                                arguments: JSON.stringify({ mode: 'chat', progress_note: '' })
+                            }
+                        }]
+                    }
+                }],
+                usage: { prompt_tokens: 10, completion_tokens: 4, total_tokens: 14 }
+            }));
+        });
+    });
+
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    return {
+        url: `http://127.0.0.1:${address.port}/v1`,
+        calls,
+        close: () => new Promise((resolve) => server.close(resolve))
+    };
+}
+
 async function createDelayedChatCompletionsServer(delayMs = 5000) {
     const calls = [];
     let closedByClient = 0;
@@ -1468,13 +1523,19 @@ test('dispatchTurn lets the same persistent TaskAgent route chat or continue exe
         if (decisionCount === 1) {
             return {
                 action: 'tool',
-                tool_call: { tool: 'task_route', args: { mode: 'chat' } }
+                tool_call: { tool: 'task_route', args: { mode: 'chat', progress_note: '' } }
             };
         }
         if (decisionCount === 2) {
             return {
                 action: 'tool',
-                tool_call: { tool: 'task_route', args: { mode: 'execute' } }
+                tool_call: {
+                    tool: 'task_route',
+                    args: {
+                        mode: 'execute',
+                        progress_note: '我已经接下这个任务，现在开始处理。'
+                    }
+                }
             };
         }
         return {
@@ -1496,6 +1557,7 @@ test('dispatchTurn lets the same persistent TaskAgent route chat or continue exe
         timeoutMs: 10000
     };
     const publicEvents = [];
+    const taskEvents = [];
     gateway.on('event', (event) => publicEvents.push(event));
 
     try {
@@ -1510,7 +1572,8 @@ test('dispatchTurn lets the same persistent TaskAgent route chat or continue exe
             currentUserMessage: '执行一个具体任务',
             sessionId: 'task-route-execute-session',
             runId: 'task-route-execute-parent',
-            llmSettings
+            llmSettings,
+            onTaskEvent: (event) => taskEvents.push(event)
         });
 
         assert.equal(chat.route, 'chat');
@@ -1522,7 +1585,13 @@ test('dispatchTurn lets the same persistent TaskAgent route chat or continue exe
             const toolNames = (call.payload.tools || []).map((tool) => tool.function?.name || tool.name);
             assert.deepEqual(toolNames, ['task_route']);
             assert.match(JSON.stringify(call.payload.tool_choice), /task_route/);
+            const routeTool = call.payload.tools[0]?.function || call.payload.tools[0];
+            assert.ok(routeTool.parameters.required.includes('progress_note'));
         }
+        assert.ok(taskEvents.some((event) => (
+            event.type === 'agent.progress.note' &&
+            /已经接下这个任务/.test(event.message || '')
+        )));
         const executionToolNames = (llmServer.calls[2].payload.tools || [])
             .map((tool) => tool.function?.name || tool.name);
         assert.equal(executionToolNames.includes('task_route'), false);
@@ -1532,6 +1601,83 @@ test('dispatchTurn lets the same persistent TaskAgent route chat or continue exe
             ['agent.message.completed', 'persona.surface', 'agent.progress.note'].includes(event.type) &&
             [chat.trace_ref, execute.trace_ref].includes(event.payload?.runId)
         ), false);
+    } finally {
+        await gateway.stop().catch(() => {});
+        await llmServer.close().catch(() => {});
+        await fs.rm(workspaceRoot, { recursive: true, force: true });
+    }
+});
+
+test('dispatchTurn retries TaskAgent routing with auto when thinking mode rejects a specific tool_choice', async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-task-route-tool-choice-fallback-'));
+    const llmServer = await createToolChoiceCompatibilityServer();
+    const gateway = new AILISGateway({
+        port: 0,
+        workspaceRoot,
+        projectRoot: path.resolve('.'),
+        auditDir: path.join(workspaceRoot, '.audit')
+    });
+
+    try {
+        await gateway.start();
+        const result = await gateway.taskAgentHarness.dispatchTurn({
+            currentUserMessage: '你好，简单介绍一下你自己。',
+            sessionId: 'task-route-tool-choice-fallback-session',
+            runId: 'task-route-tool-choice-fallback-parent',
+            llmSettings: {
+                provider: 'openai-compatible',
+                baseUrl: llmServer.url,
+                apiKey: 'test-key',
+                model: 'mock-thinking-mode',
+                timeoutMs: 10000
+            }
+        });
+
+        assert.equal(result.route, 'chat');
+        assert.equal(result.final_answer, '');
+        assert.equal(llmServer.calls.length, 2);
+        assert.match(JSON.stringify(llmServer.calls[0].payload.tool_choice), /task_route/);
+        assert.equal(llmServer.calls[1].payload.tool_choice, 'auto');
+        assert.deepEqual(
+            (llmServer.calls[1].payload.tools || []).map((tool) => tool.function?.name || tool.name),
+            ['task_route']
+        );
+    } finally {
+        await gateway.stop().catch(() => {});
+        await llmServer.close().catch(() => {});
+        await fs.rm(workspaceRoot, { recursive: true, force: true });
+    }
+});
+
+test('dispatchTurn fails promptly when thinking mode rejects both specific and auto tool_choice', async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-task-route-tool-choice-fail-fast-'));
+    const llmServer = await createToolChoiceCompatibilityServer({ fallbackSucceeds: false });
+    const gateway = new AILISGateway({
+        port: 0,
+        workspaceRoot,
+        projectRoot: path.resolve('.'),
+        auditDir: path.join(workspaceRoot, '.audit')
+    });
+
+    try {
+        await gateway.start();
+        const result = await gateway.taskAgentHarness.dispatchTurn({
+            currentUserMessage: '你好',
+            sessionId: 'task-route-tool-choice-fail-fast-session',
+            runId: 'task-route-tool-choice-fail-fast-parent',
+            llmSettings: {
+                provider: 'openai-compatible',
+                baseUrl: llmServer.url,
+                apiKey: 'test-key',
+                model: 'mock-thinking-mode',
+                timeoutMs: 10000
+            }
+        });
+
+        assert.equal(result.status, 'provider_error');
+        assert.equal(llmServer.calls.length, 2);
+        assert.match(JSON.stringify(llmServer.calls[0].payload.tool_choice), /task_route/);
+        assert.equal(llmServer.calls[1].payload.tool_choice, 'auto');
     } finally {
         await gateway.stop().catch(() => {});
         await llmServer.close().catch(() => {});

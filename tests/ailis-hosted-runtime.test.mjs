@@ -87,8 +87,8 @@ test('hosted runtime isolates memory and workspace roots per signed tenant', asy
     assert.notEqual(gateways[0].options.auditDir, gateways[1].options.auditDir);
     assert.notEqual(gateways[0].options.workspaceRoot, gateways[1].options.workspaceRoot);
     assert.equal(gateways[0].options.projectRoot, projectRoot);
-    assert.equal(gateways[0].options.getDefaultContext().taskAgentRoutingOwned, false);
-    assert.equal(gateways[0].options.getDefaultContext().deferTaskHandoff, true);
+    assert.equal(gateways[0].options.getDefaultContext().taskAgentRoutingOwned, true);
+    assert.equal(gateways[0].options.getDefaultContext().deferTaskHandoff, false);
     assert.match(gateways[0].options.auditDir, new RegExp(tenantKey('web:alice')));
     assert.match(gateways[1].options.auditDir, new RegExp(tenantKey('web:bob')));
     assert.equal(gateways[0].requests[0].llmSettings.apiKey, 'test-key');
@@ -134,8 +134,8 @@ test('hosted runtime replaces browser-supplied paths, credentials, and approvals
     assert.equal(request.llmSettings.apiKey, 'server-key');
     assert.equal(request.context.workspace, record.workspaceRoot);
     assert.equal(request.context.projectRoot, record.projectRoot);
-    assert.equal(request.context.taskAgentRoutingOwned, false);
-    assert.equal(request.context.deferTaskHandoff, true);
+    assert.equal(request.context.taskAgentRoutingOwned, true);
+    assert.equal(request.context.deferTaskHandoff, false);
     assert.equal(request.context.approved, undefined);
     assert.equal(request.context.autoConfirm, undefined);
     assert.equal(request.workspace, undefined);
@@ -180,7 +180,7 @@ test('hosted runtime forwards provider text deltas outside the serialized reques
     }
 });
 
-test('real hosted Persona answers ordinary chat without starting TaskAgent', async () => {
+test('real hosted chat uses TaskAgent route and publishes exactly one background FinalAnswer', async () => {
     const modelRequests = [];
     const modelServer = http.createServer(async (req, res) => {
         const chunks = [];
@@ -269,19 +269,23 @@ test('real hosted Persona answers ordinary chat without starting TaskAgent', asy
         );
 
         assert.equal(result.ok, true, JSON.stringify(result, null, 2));
-        assert.equal(result.displayText, '你好，我在这里。');
-        assert.deepEqual(deltas, ['你好，我在这里。']);
-        assert.deepEqual(streamEvents, [
-            'response.output_text.started',
-            'response.output_text.committed'
-        ]);
-        assert.ok(modelRequests.some((request) => request.stream === true));
-        assert.ok(modelRequests.some((request) => (request.tools || []).some((tool) =>
-            (tool?.function?.name || tool?.name) === 'handoff_task'
-        )));
+        assert.equal(result.displayText, '');
+        assert.equal(result.deferAssistantCommit, true);
+        assert.deepEqual(deltas, []);
+        assert.deepEqual(streamEvents, []);
+        await manager.waitForBackgroundTasks('web:real-stream');
+        const events = manager.getEvents('web:real-stream', { cursor: 0, limit: 500 }).events;
+        const finalAnswers = events.filter((event) => (
+            event.type === 'persona.background.message' && event.payload?.phase === 'final_answer'
+        ));
+        assert.equal(finalAnswers.length, 1);
+        assert.equal(finalAnswers[0].payload.text, '你好，我在这里。');
         assert.equal(modelRequests.some((request) => (request.tools || []).some((tool) =>
-            (tool?.function?.name || tool?.name) === 'task_route'
+            (tool?.function?.name || tool?.name) === 'handoff_task'
         )), false);
+        assert.ok(modelRequests.some((request) => (request.tools || []).some((tool) =>
+            (tool?.function?.name || tool?.name) === 'task_route'
+        )));
     } finally {
         await manager.close();
         await new Promise((resolve) => modelServer.close(resolve));
@@ -349,13 +353,18 @@ test('hosted runtime executes the real Persona Agent and restores memory after r
             maxAgentSteps: 2
         });
         assert.equal(result.ok, true);
-        assert.match(result.displayText || result.finalAnswer, /你好/);
+        assert.equal(result.deferAssistantCommit, true);
+        await manager.waitForBackgroundTasks('web:integration');
+        const firstEvents = manager.getEvents('web:integration', { cursor: 0, limit: 500 }).events;
+        assert.ok(firstEvents.some((event) => (
+            event.type === 'persona.background.message' && /你好/.test(event.payload?.text || '')
+        )));
         assert.ok(requests.length >= 1);
         const personaToolNames = requests.flatMap((request) =>
             (request.tools || []).map((tool) => tool?.function?.name || tool?.name || '')
         );
         assert.ok(
-            personaToolNames.includes('handoff_task'),
+            personaToolNames.includes('task_route'),
             JSON.stringify(requests.map((request) => ({
                 keys: Object.keys(request),
                 toolNames: (request.tools || []).map((tool) => tool?.function?.name || tool?.name || '')
@@ -384,6 +393,8 @@ test('hosted runtime executes the real Persona Agent and restores memory after r
             maxAgentSteps: 2
         });
         assert.equal(restoredResult.ok, true);
+        assert.equal(restoredResult.deferAssistantCommit, true);
+        await manager.waitForBackgroundTasks('web:integration');
         const restoredModelCalls = requests.slice(requestCountBeforeRestore);
         assert.ok(restoredModelCalls.length >= 1);
         assert.match(JSON.stringify(restoredModelCalls), /云辛/);
@@ -393,7 +404,7 @@ test('hosted runtime executes the real Persona Agent and restores memory after r
     }
 });
 
-test('hosted Persona handoff gives TaskAgent the complete shared Session conversation', async () => {
+test('hosted TaskAgent Turn receives the complete shared Session conversation', async () => {
     const requests = [];
     const modelServer = http.createServer(async (req, res) => {
         const chunks = [];
@@ -405,18 +416,19 @@ test('hosted Persona handoff gives TaskAgent the complete shared Session convers
         );
         const requestText = JSON.stringify(request);
         const isTaskResultRenderer = requestText.includes('Render the following authoritative TaskEvent/TaskResult');
-        const isAcceptedHandoffTurn = (request.messages || []).some((entry) => (
-            entry?.role === 'tool' && String(entry.content || '').includes('accepted')
-        ));
-        const isTaskAgentTurn = toolNames.includes('tool_search');
-        const message = toolNames.includes('handoff_task') && !isAcceptedHandoffTurn
+        const taskRouteAlreadyCalled = (request.messages || []).at(-1)?.role === 'tool';
+        const isTaskAgentTurn = toolNames.includes('task_route');
+        const message = toolNames.includes('task_route') && !taskRouteAlreadyCalled
             ? {
                   role: 'assistant',
                   content: null,
                   tool_calls: [{
-                      id: 'call-hosted-handoff',
+                      id: 'call-hosted-task-route',
                       type: 'function',
-                      function: { name: 'handoff_task', arguments: '{}' }
+                      function: {
+                          name: 'task_route',
+                          arguments: '{"mode":"execute","progress_note":"我已经开始核对木偶攻略。"}'
+                      }
                   }]
               }
             : {
@@ -466,17 +478,17 @@ test('hosted Persona handoff gives TaskAgent the complete shared Session convers
             requireTaskExecution: true
         });
         assert.equal(result.ok, true);
-        assert.match(result.displayText || result.finalAnswer, /马上查/);
+        assert.equal(result.displayText, '');
+        assert.equal(result.deferAssistantCommit, true);
         assert.equal(result.backgroundTask?.status, 'running', JSON.stringify(result, null, 2));
         await manager.waitForBackgroundTasks('web:task-agent');
         const allToolSurfaces = requests.map((request) =>
             (request.tools || []).map((tool) => tool?.function?.name || tool?.name || '')
         );
-        assert.ok(allToolSurfaces.some((tools) => tools.includes('handoff_task')));
-        assert.equal(allToolSurfaces.some((tools) => tools.includes('task_route')), false);
-        assert.ok(allToolSurfaces.some((tools) => tools.includes('tool_search')));
+        assert.equal(allToolSurfaces.some((tools) => tools.includes('handoff_task')), false);
+        assert.ok(allToolSurfaces.some((tools) => tools.includes('task_route')));
         const taskAgentRequest = requests.find((request) =>
-            (request.tools || []).some((tool) => (tool?.function?.name || tool?.name) === 'tool_search')
+            (request.tools || []).some((tool) => (tool?.function?.name || tool?.name) === 'task_route')
         );
         assert.ok(taskAgentRequest, JSON.stringify(requests));
         assert.match(JSON.stringify(taskAgentRequest), /帮我查木偶攻略/);
@@ -501,10 +513,11 @@ test('hosted Persona handoff gives TaskAgent the complete shared Session convers
             maxAgentSteps: 4,
             requireTaskExecution: true
         });
-        assert.match(resumed.displayText || resumed.finalAnswer, /马上查/);
+        assert.equal(resumed.displayText, '');
+        assert.equal(resumed.deferAssistantCommit, true);
         await manager.waitForBackgroundTasks('web:task-agent');
         const resumedTaskRequest = requests.slice(requestCountBeforeResume).find((request) =>
-            (request.tools || []).some((tool) => (tool?.function?.name || tool?.name) === 'tool_search')
+            (request.tools || []).some((tool) => (tool?.function?.name || tool?.name) === 'task_route')
         );
         assert.ok(resumedTaskRequest, JSON.stringify(requests.slice(requestCountBeforeResume)));
         assert.match(JSON.stringify(resumedTaskRequest), /shared_session_context/);

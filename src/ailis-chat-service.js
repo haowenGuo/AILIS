@@ -311,6 +311,9 @@ export function createGatewayProgressBridge({ gateway, sessionId, onProgress, on
             return;
         }
         if (type === 'agent.message.completed') {
+            if (normalizeText(payload.delivery).toLowerCase() === 'background') {
+                return;
+            }
             const finalText = normalizeMarkdownSource(payload.text || payload.displayText || payload.summary || '');
             if (finalText) {
                 onProgress(toAssistantPayload(finalText, {
@@ -578,6 +581,26 @@ async function attachServerTtsIfRequested(payload, replyMode) {
 }
 
 function toAILISPayload(result) {
+    if (result?.deferAssistantCommit === true) {
+        return {
+            raw_text: '',
+            display_text: '',
+            display_format: 'markdown',
+            contentFormat: 'markdown',
+            speech_text: '',
+            bubble_text: '',
+            action: null,
+            expression: null,
+            surface: null,
+            fallbackMode: false,
+            streamMode: false,
+            demoMode: false,
+            deferAssistantCommit: true,
+            messagePhase: normalizeText(result.messagePhase, 'commentary'),
+            backgroundTask: result.backgroundTask || null,
+            ailis: result
+        };
+    }
     const cue = getAvatarCue(result);
     const surface = result?.surface && typeof result.surface === 'object' ? result.surface : null;
     const surfaceText = normalizeMarkdownSource(surface?.text || '');
@@ -693,6 +716,7 @@ export class AILISDesktopChatService {
         this.activeRunId = '';
         this.activeSessionId = '';
         this.backgroundMessageListeners = new Set();
+        this.systemNoticeListeners = new Set();
         this.backgroundRunSessions = new Map();
         this.pendingBackgroundMessages = new Map();
         this.completedBackgroundRuns = new Set();
@@ -705,6 +729,22 @@ export class AILISDesktopChatService {
         const type = normalizeText(event.type);
         const eventPayload = event.payload && typeof event.payload === 'object' ? event.payload : {};
         const runId = normalizeText(eventPayload.runId || eventPayload.parentRunId);
+        if (type === 'agent.system.notice') {
+            const notice = {
+                message: normalizeText(eventPayload.message || eventPayload.text),
+                level: normalizeText(eventPayload.level, 'warning'),
+                code: normalizeText(eventPayload.code),
+                source: normalizeText(eventPayload.source, 'task_agent_runtime')
+            };
+            if (notice.message) {
+                for (const listener of [...this.systemNoticeListeners]) {
+                    try {
+                        listener(notice);
+                    } catch {}
+                }
+            }
+            return;
+        }
         if (!runId) {
             return;
         }
@@ -788,6 +828,14 @@ export class AILISDesktopChatService {
         }
         this.backgroundMessageListeners.add(listener);
         return () => this.backgroundMessageListeners.delete(listener);
+    }
+
+    onSystemNotice(listener) {
+        if (typeof listener !== 'function') {
+            return () => {};
+        }
+        this.systemNoticeListeners.add(listener);
+        return () => this.systemNoticeListeners.delete(listener);
     }
 
     getWelcomeMessage() {
@@ -907,7 +955,8 @@ export class AILISDesktopChatService {
                         directToolExecutor: true,
                         maxAgentSteps: 4,
                         agentRole: 'persona_orchestrator',
-                        deferTaskHandoff: true
+                        taskAgentRoutingOwned: true,
+                        deferTaskHandoff: false
                     }
                 },
                 {

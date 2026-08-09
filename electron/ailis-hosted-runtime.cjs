@@ -116,8 +116,8 @@ function sanitizeAgentRequest(payload = {}, record) {
             workspaceDir: record.workspaceRoot,
             workspaceRoot: record.workspaceRoot,
             projectRoot: record.projectRoot,
-            taskAgentRoutingOwned: false,
-            deferTaskHandoff: true,
+            taskAgentRoutingOwned: true,
+            deferTaskHandoff: false,
             llmSettings: { ...record.llmSettings }
         }
     };
@@ -196,8 +196,8 @@ class AILISHostedRuntimeManager {
                 workspaceDir: workspaceRoot,
                 workspaceRoot,
                 projectRoot: record.projectRoot,
-                taskAgentRoutingOwned: false,
-                deferTaskHandoff: true,
+                taskAgentRoutingOwned: true,
+                deferTaskHandoff: false,
                 llmSettings: { ...record.llmSettings }
             })
         });

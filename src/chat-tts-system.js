@@ -118,6 +118,7 @@ export class ChatTTSSystem {
         this.backgroundMessageIds = new Set();
         this.backgroundMessageChain = Promise.resolve();
         this.backgroundMessageUnsubscribe = null;
+        this.systemNoticeUnsubscribe = null;
         this.lastAutoChatMode = String(CONFIG.AUTO_CHAT_MODE || 'off');
         this.proactiveCompanion = new ProactiveCompanionManager({
             getConfig: () => CONFIG,
@@ -741,22 +742,32 @@ export class ChatTTSSystem {
     setChatService(nextChatService) {
         this.backgroundMessageUnsubscribe?.();
         this.backgroundMessageUnsubscribe = null;
+        this.systemNoticeUnsubscribe?.();
+        this.systemNoticeUnsubscribe = null;
         this.chatService = nextChatService;
         this.bindBackgroundAssistantMessages();
         this.startAutoChatTimer('service_changed');
     }
 
     bindBackgroundAssistantMessages() {
-        if (typeof this.chatService?.onBackgroundAssistantMessage !== 'function') {
-            return;
+        if (typeof this.chatService?.onBackgroundAssistantMessage === 'function') {
+            this.backgroundMessageUnsubscribe = this.chatService.onBackgroundAssistantMessage((payload) => {
+                this.backgroundMessageChain = this.backgroundMessageChain
+                    .then(() => this.commitBackgroundAssistantMessage(payload))
+                    .catch((error) => {
+                        console.warn('提交后台任务消息失败：', error);
+                    });
+            });
         }
-        this.backgroundMessageUnsubscribe = this.chatService.onBackgroundAssistantMessage((payload) => {
-            this.backgroundMessageChain = this.backgroundMessageChain
-                .then(() => this.commitBackgroundAssistantMessage(payload))
-                .catch((error) => {
-                    console.warn('提交后台任务消息失败：', error);
+        if (typeof this.chatService?.onSystemNotice === 'function') {
+            this.systemNoticeUnsubscribe = this.chatService.onSystemNotice((notice = {}) => {
+                this.showSystemNotice(notice.message, {
+                    level: notice.level,
+                    code: notice.code,
+                    source: notice.source
                 });
-        });
+            });
+        }
     }
 
     async commitBackgroundAssistantMessage(payload = {}) {
@@ -915,6 +926,11 @@ export class ChatTTSSystem {
                 return;
             }
             this.removeMessageElement(loadingEl);
+            if (payload.deferAssistantCommit === true || payload.ailis?.deferAssistantCommit === true) {
+                await chunkedSpeechSession?.cancel?.('assistant-final-deferred');
+                this.removeMessageElement(aiMessageDiv);
+                return;
+            }
             this.executeAvatarCue(payload, aiMessageDiv);
             this.updateMessageContent(aiMessageDiv, payload.display_text || payload.speech_text || '...');
             this.scrollToBottom();

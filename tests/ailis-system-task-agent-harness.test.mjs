@@ -224,6 +224,80 @@ test('Persona handoff attaches the complete visible Session instead of only the 
     );
 });
 
+test('TaskAgent keeps model-authored progress in the Turn ledger without hardcoded Persona messages', async () => {
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-task-persona-mailbox-'));
+    const progressEvent = {
+        type: 'agent.progress.note',
+        status: 'running',
+        message: '我已经确认对应游戏，正在核对最新版本。',
+        payload: {
+            iteration: 2,
+            text: '我已经确认对应游戏，正在核对最新版本。'
+        }
+    };
+    const harness = new AILISSystemTaskAgentHarness({
+        rootDir,
+        executeTaskAgent: async (payload) => {
+            await payload.onEvent(progressEvent);
+            await payload.onEvent(progressEvent);
+            return completedResult({
+                runId: payload.agent.childRunId,
+                answer: '木偶攻略最终结果。',
+                checkpoint: null
+            });
+        }
+    });
+
+    const packet = await harness.handoff({}, {
+        currentUserMessage: '帮我查木偶攻略',
+        sessionId: 'persona-mailbox-session',
+        runId: 'persona-mailbox-run'
+    });
+
+    const thread = harness.getThread('persona-mailbox-session');
+    const progress = thread.ledger.filter((entry) => (
+        entry.type === 'task.event' && entry.payload?.type === 'agent.progress.note'
+    ));
+    assert.equal(progress.length, 2);
+    assert.ok(progress.every((entry) => entry.turnId === packet.turn_id));
+    assert.equal(thread.ledger.some((entry) => entry.type === 'task.persona_message'), false);
+    const restored = new AILISSystemTaskAgentHarness({ rootDir });
+    assert.equal(
+        restored.getThread('persona-mailbox-session').ledger.some((entry) => entry.type === 'task.persona_message'),
+        false
+    );
+});
+
+test('TaskAgent results remain bound to their original Turn without a second message ledger', async () => {
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-task-persona-turn-binding-'));
+    const harness = new AILISSystemTaskAgentHarness({
+        rootDir,
+        executeTaskAgent: async (payload) => completedResult({
+            runId: payload.agent.childRunId,
+            answer: payload.agent.task === '第一个任务' ? '第一个结果' : '第二个结果',
+            checkpoint: null
+        })
+    });
+
+    const first = await harness.handoff({}, {
+        currentUserMessage: '第一个任务',
+        sessionId: 'persona-turn-binding',
+        runId: 'persona-turn-binding-1'
+    });
+    const second = await harness.handoff({}, {
+        currentUserMessage: '第二个任务',
+        sessionId: 'persona-turn-binding',
+        runId: 'persona-turn-binding-2'
+    });
+
+    const thread = harness.getThread('persona-turn-binding');
+    const firstTurn = thread.turns.find((turn) => turn.turnId === first.turn_id);
+    const secondTurn = thread.turns.find((turn) => turn.turnId === second.turn_id);
+    assert.equal(firstTurn.finalAnswer, '第一个结果');
+    assert.equal(secondTurn.finalAnswer, '第二个结果');
+    assert.equal(thread.ledger.some((entry) => entry.type === 'task.persona_message'), false);
+});
+
 test('system TaskAgent result packet uses the natural final response and ignores legacy exact-answer metadata', async () => {
     const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-task-harness-exact-answer-'));
     const harness = new AILISSystemTaskAgentHarness({
@@ -628,6 +702,11 @@ test('concurrent follow-up input joins the running system TaskAgent instead of s
     assert.equal(firstPacket.task_id, secondPacket.task_id);
     assert.equal(firstPacket.turn_id, secondPacket.turn_id);
     assert.equal(secondPacket.current_request, '补充检查测试覆盖率。');
+    const activeTurn = harness.getThread('session-queue').turns.find((turn) => turn.turnId === firstPacket.turn_id);
+    assert.deepEqual(activeTurn.inputs.map((input) => input.message), [
+        '分析这个项目。',
+        '补充检查测试覆盖率。'
+    ]);
 });
 
 test('the TaskAgent model can replace and retain a dynamic Goal across ordinary Session Turns', async () => {

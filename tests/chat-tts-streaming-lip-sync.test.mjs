@@ -185,6 +185,71 @@ test('chat unlocks after committing text without awaiting background speech', as
     await pendingSpeech;
 });
 
+test('a deferred active Turn unlocks the composer without creating a fake assistant answer', async () => {
+    const calls = [];
+    const system = Object.create(ChatTTSSystem.prototype);
+    system.historyReady = Promise.resolve();
+    system.isBusy = false;
+    system.inputEl = { value: '' };
+    system.messageHistory = [];
+    system.proactiveCompanion = {
+        stop() {},
+        noteUserTurn() {},
+        noteAssistantTurn() {
+            calls.push('assistant-turn');
+        }
+    };
+    system.stopLingeringSpeech = () => {};
+    system.setBusy = (value) => {
+        system.isBusy = value;
+        calls.push(value ? 'busy-on' : 'busy-off');
+    };
+    system.addUserMessage = () => {};
+    system.persistConversation = async () => {};
+    const loading = { id: 'loading' };
+    const assistant = { id: 'assistant', dataset: {} };
+    system.addLoadingMessage = () => loading;
+    system.createAIMessage = () => assistant;
+    system.createChunkedSpeechSession = () => ({
+        cancel: async () => calls.push('speech-cancelled')
+    });
+    system.createTurnState = () => {
+        const turn = { id: 'turn-deferred' };
+        system.activeTurn = turn;
+        return turn;
+    };
+    system.createMessageHistorySnapshot = () => [];
+    system.fetchAssistantTurnWithFallback = async () => ({
+        display_text: '',
+        speech_text: '',
+        deferAssistantCommit: true,
+        ailis: { deferAssistantCommit: true }
+    });
+    system.isTurnActive = (turn) => system.activeTurn?.id === turn.id;
+    system.isTurnCancelled = () => false;
+    system.removeMessageElement = (element) => calls.push(`removed:${element.id}`);
+    system.executeAvatarCue = () => calls.push('cue');
+    system.updateMessageContent = () => calls.push('assistant-text');
+    system.scrollToBottom = () => {};
+    system.startCommittedBubbleSpeech = () => calls.push('speech-start');
+    system.releaseChunkedSpeechSessionWhenDone = () => {};
+    system.releaseTurn = () => {
+        system.activeTurn = null;
+    };
+    system.startAutoChatTimer = () => {};
+
+    await system.sendMessage('帮我查资料');
+
+    assert.equal(system.isBusy, false);
+    assert.deepEqual(system.messageHistory.map((entry) => entry.role), ['user']);
+    assert.ok(calls.includes('removed:loading'));
+    assert.ok(calls.includes('removed:assistant'));
+    assert.ok(calls.includes('speech-cancelled'));
+    assert.equal(calls.includes('assistant-text'), false);
+    assert.equal(calls.includes('assistant-turn'), false);
+    assert.equal(calls.includes('speech-start'), false);
+});
+
 test('streaming draft text is not queued for speech before the bubble is committed', async () => {
     const calls = [];
     const session = { id: 'bubble-session' };
