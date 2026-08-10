@@ -9,7 +9,7 @@
   </p>
   <p>
     <img alt="ToolSandbox frozen holdout mean 71.51 percent" src="https://img.shields.io/badge/ToolSandbox_holdout-71.51%25-2563eb?style=for-the-badge">
-    <img alt="GAIA Level 1 strict first run 77.36 percent" src="https://img.shields.io/badge/GAIA_L1_strict_run_1-77.36%25-059669?style=for-the-badge">
+    <img alt="GAIA 165-task semantic score 73.33 percent" src="https://img.shields.io/badge/GAIA_165_semantic-73.33%25-059669?style=for-the-badge">
     <img alt="Internal longitudinal companion evaluation 78.46 out of 100" src="https://img.shields.io/badge/Humanlike_longitudinal-78.46%2F100-059669?style=for-the-badge">
   </p>
   <p>
@@ -37,13 +37,14 @@ AILIS is developed as an evaluated agent system, not only as a character demo. T
 | Evaluation track | Result | Scale | Evidence status |
 | --- | ---: | ---: | --- |
 | **Apple ToolSandbox** | **71.51%** frozen holdout mean | 239 / 239 officially scored, 0 errors | Primary public task-quality result |
-| **GAIA Level 1 strict rerun** | Run 1: **41 / 53, 77.36%** | First of two required full runs | Provisional strict-memory-isolated result; Run 2 is pending |
+| **GAIA full validation (current TaskAgent)** | **121 / 165, 73.33%** semantic correctness | Public L1-L3 validation; `gpt-5.6-luna`, medium | Current fixed-commit local diagnostic; not an official leaderboard submission |
+| **GAIA Level 1 strict (2026-07)** | Run 1: **41 / 53, 77.36%** | First of two planned full runs | Earlier strict-memory-isolated result retained for comparison |
 | **GAIA Level 1 historical** | **85.85%** two-run mean; best run **90.57%** | 53 public validation tasks x 2 | Historical local diagnostic; task-memory isolation was missing |
 | **Longitudinal companion eval** | **78.46 / 100** weighted mean | 171 judged checkpoints from 30-day scenarios | Internal product evaluation |
 | **OSWorld small run** | **2 / 4**, 50% | 4 historical desktop tasks | Early external-benchmark signal; sample is too small for a broad claim |
 | **Humanlike dataset validation** | **1000 / 1000** valid | 9 categories, 251 negative probes | Evaluation coverage, not model quality |
 
-> **Primary headline:** the frozen Apple ToolSandbox holdout mean is **71.51%**. The current strict GAIA protocol has completed its first full run at **77.36%**, with benchmark memory disabled and no failed-task replacement. It remains provisional until the second independent 53-task run finishes. The higher 85.85% historical mean stays visible for transparency, but is not the current reproducibility claim.
+> **Primary headline:** the frozen Apple ToolSandbox holdout mean is **71.51%**. The current full-set GAIA diagnostic is **121 / 165 (73.33%)**, produced by the pure AILIS TaskAgent path and scored by semantic equivalence. It is a local public-validation result, not an official private-test submission. Earlier Level 1 results remain visible for transparency but use different protocols and are not directly interchangeable with the 165-task score.
 
 [Full benchmark scorecard](docs/ailis-demo-benchmark-scorecard.md) ·
 [GAIA methodology](docs/ailis-desktop-real-gaia-eval.md) ·
@@ -104,7 +105,24 @@ AILIS is not only an expressive avatar and not only an automation console. The i
 
 ## GAIA: General Agent Capability
 
-The current strict-memory-isolated protocol is frozen at commit `6afc0ae`. Its first complete run scored **41 / 53 (77.36%)**; the required second run has not yet been incorporated into a final mean or stability score. An unexpected Windows reboot interrupted the first run after 46 completed rows. Recovery reused the same run ID, skipped every completed task, and executed only the seven unfinished tasks; no failed task was retried, replaced, or re-scored.
+### Current 165-task pure TaskAgent baseline
+
+The current full public-validation diagnostic is frozen at commit `f14083e`. It runs the pure AILIS TaskAgent directly through the clean GAIA runner, using `gpt-5.6-luna` at medium reasoning effort. A semantic audit counted answers as correct when their meaning matched the reference answer, without requiring identical wording.
+
+| Level | Current TaskAgent | Re-scored A6 baseline | Change |
+| --- | ---: | ---: | ---: |
+| L1 | **44 / 53, 83.02%** | 40 / 53, 75.47% | **+7.55 pp** |
+| L2 | **64 / 86, 74.42%** | 59 / 86, 68.60% | **+5.82 pp** |
+| L3 | **13 / 26, 50.00%** | 15 / 26, 57.69% | **-7.69 pp** |
+| **All levels** | **121 / 165, 73.33%** | 114 / 165, 69.09% | **+4.24 pp** |
+
+The semantic audit covers the complete user-visible responses. Three rows rejected by the controller actually contained complete, correct visible answers and are counted as correct; three genuine no-final-answer timeouts are counted as incorrect. The run also exposed evaluation-infrastructure faults: a fixed 12-minute process watchdog repeatedly killed active workers, and the short-answer extractor sometimes rejected valid prose or boxed numeric answers. These faults affected cost and completion, so the watchdog has since been changed to an inactivity timeout; they are not treated as TaskAgent accuracy failures in the semantic score.
+
+This result is intended as the new comparable development baseline, not a claim against the official private GAIA leaderboard. It shows gains on L1 and L2 over the semantically re-scored A6 baseline, while L3 remains the clearest regression target.
+
+### Earlier Level 1 runs
+
+The earlier strict-memory-isolated protocol was frozen at commit `6afc0ae`. Its first complete run scored **41 / 53 (77.36%)**; the planned second run was not incorporated into a final mean or stability score. An unexpected Windows reboot interrupted the first run after 46 completed rows. Recovery reused the same run ID, skipped every completed task, and executed only the seven unfinished tasks; no failed task was retried, replaced, or re-scored.
 
 <p align="center">
   <img alt="Historical AILIS GAIA Level 1 validation diagnostics: 81.13 percent and 90.57 percent across two runs, with an 85.85 percent mean" src="docs/assets/benchmarks/gaia-l1-validation-20260719.svg">
