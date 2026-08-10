@@ -190,6 +190,27 @@ test('chatvrm-style emote controller owns smooth emotion, blink, and lip sync ch
     assert.ok(values.blink > 0.8);
 });
 
+test('lip sync keeps fast speech peaks visible without double smoothing', () => {
+    const values = {};
+    const controller = new CharacterEmoteController({
+        getExpressionPresets: () => ({ aa: 1 })
+    });
+
+    controller.bindVrm({
+        expressionManager: {
+            setValue: (name, value) => {
+                values[name] = value;
+            }
+        }
+    });
+
+    controller.setLipSyncValue(0.8);
+    controller.update(0.05);
+
+    assert.ok(values.aa > 0.49);
+    assert.ok(values.aa < 0.8);
+});
+
 test('chatvrm/amica screenplay parses emotion tags without leaking VRM action names', () => {
     const parsed = parseEmotionTaggedText('[love]我有点想贴贴。');
     assert.equal(parsed.emotion, 'love');

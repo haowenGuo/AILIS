@@ -315,7 +315,10 @@ export class CharacterEmoteController {
 
         const expressionAlpha = getLerpAlpha(deltaTime, EXPRESSION_SMOOTHING);
         const lipAlpha = getLerpAlpha(deltaTime, LIP_SYNC_SMOOTHING);
-        this.lipSyncValue += (this.lipSyncTarget - this.lipSyncValue) * lipAlpha;
+        // The audio envelope and VRM model system already smooth the incoming
+        // signal. Keep one final expression-channel filter here instead of
+        // filtering the same fast mouth movement twice and losing its peaks.
+        this.lipSyncValue = this.lipSyncTarget;
 
         const knownNames = this.cachedKnownExpressionNames.length
             ? this.cachedKnownExpressionNames
