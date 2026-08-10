@@ -604,7 +604,26 @@ function toAILISPayload(result) {
     const cue = getAvatarCue(result);
     const surface = result?.surface && typeof result.surface === 'object' ? result.surface : null;
     const surfaceText = normalizeMarkdownSource(surface?.text || '');
-    const fallbackText = normalizeMarkdownSource(result?.displayText || result?.finalAnswer || result?.error || 'AILIS 没有返回可显示内容。');
+    const fallbackText = normalizeMarkdownSource(result?.displayText || result?.finalAnswer || result?.error || '');
+    if (!surfaceText && !fallbackText) {
+        return {
+            raw_text: '',
+            display_text: '',
+            display_format: 'markdown',
+            contentFormat: 'markdown',
+            speech_text: '',
+            bubble_text: '',
+            action: null,
+            expression: null,
+            surface: null,
+            fallbackMode: false,
+            streamMode: false,
+            demoMode: false,
+            deferAssistantCommit: true,
+            messagePhase: 'final_answer',
+            ailis: result
+        };
+    }
     return toAssistantPayload(surfaceText || fallbackText, {
         ...cue,
         action: surface ? surface.action : cue.action,
