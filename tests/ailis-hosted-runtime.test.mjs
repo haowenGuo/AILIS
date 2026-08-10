@@ -103,6 +103,60 @@ test('hosted runtime isolates memory and workspace roots per signed tenant', asy
     assert.ok(gateways.every((gateway) => gateway.stopped));
 });
 
+test('hosted runtime stores browser uploads inside the active tenant workspace', async () => {
+    const dataRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-hosted-upload-'));
+    const manager = new AILISHostedRuntimeManager({
+        dataRoot,
+        maxAttachmentBytes: 1024,
+        maxTenantAttachmentBytes: 4096,
+        gatewayFactory: (options) => new FakeGateway(options)
+    });
+
+    try {
+        const result = await manager.storeAttachment('web:attachment-alice', {
+            sessionId: 'main',
+            name: '../论文测试.pdf',
+            mimeType: 'application/pdf',
+            bytes: Buffer.from('%PDF-1.4\nAILIS_ATTACHMENT_TOKEN')
+        });
+        const expectedWorkspace = path.join(
+            dataRoot,
+            'tenants',
+            tenantKey('web:attachment-alice'),
+            'workspace'
+        );
+        assert.equal(result.ok, true);
+        assert.equal(result.attachment.source, 'hosted-upload');
+        assert.equal(result.attachment.name, '_论文测试.pdf');
+        assert.equal(path.relative(expectedWorkspace, result.attachment.path).startsWith('..'), false);
+        assert.equal(await fs.readFile(result.attachment.path, 'utf8'), '%PDF-1.4\nAILIS_ATTACHMENT_TOKEN');
+    } finally {
+        await manager.close();
+    }
+});
+
+test('hosted runtime rejects browser uploads above the configured file limit', async () => {
+    const dataRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-hosted-upload-limit-'));
+    const manager = new AILISHostedRuntimeManager({
+        dataRoot,
+        maxAttachmentBytes: 1024,
+        maxTenantAttachmentBytes: 2048,
+        gatewayFactory: (options) => new FakeGateway(options)
+    });
+
+    try {
+        await assert.rejects(
+            manager.storeAttachment('web:attachment-limit', {
+                name: 'large.bin',
+                bytes: Buffer.alloc(1025)
+            }),
+            (error) => error?.message === 'attachment_too_large' && error?.statusCode === 413
+        );
+    } finally {
+        await manager.close();
+    }
+});
+
 test('hosted runtime replaces browser-supplied paths, credentials, and approvals', () => {
     const record = {
         workspaceRoot: '/srv/ailis/tenant/workspace',

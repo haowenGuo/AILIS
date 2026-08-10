@@ -3,6 +3,7 @@ import { CONFIG } from './config.js';
 const SESSION_STORAGE_KEY = 'ailis_hosted_web_session.v1';
 const EVENT_POLL_INTERVAL_MS = 650;
 const STATUS_CACHE_TTL_MS = 5 * 60 * 1000;
+const MAX_HOSTED_ATTACHMENT_BYTES = 25 * 1024 * 1024;
 
 function normalizeBaseUrl(value = '') {
     return String(value || '').trim().replace(/\/+$/, '');
@@ -243,6 +244,48 @@ export class AILISHostedGatewayClient {
         }
     }
 
+    async uploadAttachment(file, options = {}, retrySession = true) {
+        if (!file || typeof file.arrayBuffer !== 'function') {
+            throw new Error('没有可上传的文件。');
+        }
+        const size = Math.max(0, Number(file.size) || 0);
+        if (!size) {
+            throw new Error('附件内容为空。');
+        }
+        if (size > MAX_HOSTED_ATTACHMENT_BYTES) {
+            throw new Error('单个附件不能超过 25 MB。');
+        }
+
+        await this.ensureSession();
+        const params = new URLSearchParams({
+            filename: String(file.name || 'attachment.bin').slice(0, 200),
+            sessionId: String(options.sessionId || 'main').slice(0, 160),
+            mimeType: String(file.type || 'application/octet-stream').slice(0, 160)
+        });
+        const response = await fetch(`${this.baseUrl}/api/agent/attachments?${params}`, {
+            method: 'POST',
+            cache: 'no-store',
+            headers: {
+                accept: 'application/json',
+                'content-type': file.type || 'application/octet-stream',
+                'x-ailis-web-session': this.sessionToken
+            },
+            body: file
+        });
+        if (response.status === 401 && retrySession) {
+            await this.ensureSession({ forceNew: true });
+            return await this.uploadAttachment(file, options, false);
+        }
+        if (!response.ok) {
+            throw new Error(await parseErrorResponse(response));
+        }
+        const payload = await response.json();
+        if (!payload?.attachment?.path) {
+            throw new Error('服务器没有返回可读取的附件。');
+        }
+        return payload.attachment;
+    }
+
     async runAgent(payload = {}, options = {}) {
         this.startPolling();
         try {
@@ -338,6 +381,7 @@ export class AILISHostedGatewayClient {
 
 export {
     SESSION_STORAGE_KEY,
+    MAX_HOSTED_ATTACHMENT_BYTES,
     STATUS_CACHE_TTL_MS,
     readAgentRunEventStream
 };

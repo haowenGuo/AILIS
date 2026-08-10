@@ -76,3 +76,50 @@ test('hosted gateway caches status for the active web session until expiry', asy
     await client.getStatus();
     assert.equal(statusCalls, 2);
 });
+
+test('hosted gateway uploads a browser File into the current signed session', async () => {
+    globalThis.window = {
+        localStorage: {
+            getItem: () => '',
+            setItem: () => {},
+            removeItem: () => {}
+        },
+        setTimeout,
+        clearTimeout
+    };
+    const client = new AILISHostedGatewayClient({ baseUrl: 'https://example.test' });
+    client.sessionId = 'session-upload';
+    client.sessionToken = 'token-upload';
+    const file = new Blob(['paper body'], { type: 'application/pdf' });
+    Object.defineProperty(file, 'name', { value: 'paper.pdf' });
+    const originalFetch = globalThis.fetch;
+    let request = null;
+    globalThis.fetch = async (url, options) => {
+        request = { url: String(url), options };
+        return new Response(JSON.stringify({
+            ok: true,
+            attachment: {
+                type: 'file',
+                id: 'hosted-upload-1',
+                name: 'paper.pdf',
+                path: '/srv/tenant/workspace/paper.pdf',
+                mimeType: 'application/pdf',
+                size: file.size
+            }
+        }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' }
+        });
+    };
+
+    try {
+        const attachment = await client.uploadAttachment(file, { sessionId: 'main' });
+        assert.equal(attachment.path, '/srv/tenant/workspace/paper.pdf');
+        assert.match(request.url, /\/api\/agent\/attachments\?/);
+        assert.match(request.url, /filename=paper.pdf/);
+        assert.equal(request.options.headers['x-ailis-web-session'], 'token-upload');
+        assert.equal(request.options.body, file);
+    } finally {
+        globalThis.fetch = originalFetch;
+    }
+});

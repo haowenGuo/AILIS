@@ -2,13 +2,16 @@
 
 const fs = require('fs');
 const path = require('path');
-const { createHash } = require('crypto');
+const { createHash, randomUUID } = require('crypto');
 const { AILISGateway } = require('./ailis-gateway.cjs');
 const { callDesktopLlmProvider } = require('./desktop-llm-provider.cjs');
 
 const DEFAULT_MAX_ACTIVE_TENANTS = 6;
 const DEFAULT_IDLE_TTL_MS = 30 * 60 * 1000;
 const DEFAULT_EVENT_LOG_LIMIT = 1000;
+const DEFAULT_MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
+const DEFAULT_MAX_TENANT_ATTACHMENT_BYTES = 128 * 1024 * 1024;
+const DEFAULT_ATTACHMENT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 function normalizeString(value, fallback = '') {
     const text = typeof value === 'string' ? value.trim() : '';
@@ -29,6 +32,43 @@ function tenantKey(tenantId = '') {
         throw new Error('tenant_id_invalid');
     }
     return createHash('sha256').update(normalized).digest('hex');
+}
+
+function sanitizeAttachmentFilename(value = '') {
+    const normalized = normalizeString(value, 'attachment.bin')
+        .normalize('NFKC')
+        .replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_')
+        .replace(/\s+/g, ' ')
+        .replace(/^\.+|\.+$/g, '')
+        .slice(0, 140);
+    return normalized || 'attachment.bin';
+}
+
+function attachmentSessionKey(sessionId = 'main') {
+    return createHash('sha256')
+        .update(normalizeString(sessionId, 'main'))
+        .digest('hex')
+        .slice(0, 16);
+}
+
+async function listRegularFiles(rootDir) {
+    const entries = await fs.promises.readdir(rootDir, { withFileTypes: true }).catch(() => []);
+    const files = [];
+    for (const entry of entries) {
+        const entryPath = path.join(rootDir, entry.name);
+        if (entry.isDirectory()) {
+            files.push(...await listRegularFiles(entryPath));
+            continue;
+        }
+        if (!entry.isFile()) {
+            continue;
+        }
+        const stat = await fs.promises.stat(entryPath).catch(() => null);
+        if (stat) {
+            files.push({ path: entryPath, stat });
+        }
+    }
+    return files;
 }
 
 function resolveHostedLlmSettings(env = process.env) {
@@ -149,6 +189,24 @@ class AILISHostedRuntimeManager {
             100,
             10000
         );
+        this.maxAttachmentBytes = boundedInteger(
+            options.maxAttachmentBytes ?? process.env.AILIS_HOSTED_ATTACHMENT_MAX_BYTES,
+            DEFAULT_MAX_ATTACHMENT_BYTES,
+            1024,
+            100 * 1024 * 1024
+        );
+        this.maxTenantAttachmentBytes = boundedInteger(
+            options.maxTenantAttachmentBytes ?? process.env.AILIS_HOSTED_TENANT_ATTACHMENT_MAX_BYTES,
+            DEFAULT_MAX_TENANT_ATTACHMENT_BYTES,
+            this.maxAttachmentBytes,
+            1024 * 1024 * 1024
+        );
+        this.attachmentTtlMs = boundedInteger(
+            options.attachmentTtlMs ?? process.env.AILIS_HOSTED_ATTACHMENT_TTL_MS,
+            DEFAULT_ATTACHMENT_TTL_MS,
+            60 * 60 * 1000,
+            90 * 24 * 60 * 60 * 1000
+        );
         this.llmSettings = options.llmSettings || resolveHostedLlmSettings(options.env || process.env);
         this.gatewayFactory = typeof options.gatewayFactory === 'function'
             ? options.gatewayFactory
@@ -156,6 +214,7 @@ class AILISHostedRuntimeManager {
         this.runtimes = new Map();
         this.eventLogs = new Map();
         this.eventSeq = new Map();
+        this.attachmentWriteChains = new Map();
         fs.mkdirSync(this.dataRoot, { recursive: true });
     }
 
@@ -222,6 +281,99 @@ class AILISHostedRuntimeManager {
         }
         record.lastUsedAt = Date.now();
         return record;
+    }
+
+    async storeAttachment(tenantId, payload = {}) {
+        const key = tenantKey(tenantId);
+        const previous = this.attachmentWriteChains.get(key) || Promise.resolve();
+        const current = previous
+            .catch(() => {})
+            .then(() => this.storeAttachmentUnlocked(tenantId, payload));
+        this.attachmentWriteChains.set(key, current);
+        try {
+            return await current;
+        } finally {
+            if (this.attachmentWriteChains.get(key) === current) {
+                this.attachmentWriteChains.delete(key);
+            }
+        }
+    }
+
+    async storeAttachmentUnlocked(tenantId, payload = {}) {
+        const record = await this.getRuntime(tenantId);
+        const bytes = Buffer.isBuffer(payload.bytes)
+            ? payload.bytes
+            : Buffer.from(payload.bytes || []);
+        if (!bytes.length) {
+            throw Object.assign(new Error('attachment_empty'), { statusCode: 400 });
+        }
+        if (bytes.length > this.maxAttachmentBytes) {
+            throw Object.assign(new Error('attachment_too_large'), {
+                statusCode: 413,
+                maxBytes: this.maxAttachmentBytes
+            });
+        }
+
+        const sessionId = normalizeString(payload.sessionId, 'main').slice(0, 160);
+        const uploadRoot = path.join(
+            record.workspaceRoot,
+            '.ailis-runtime',
+            'uploads',
+            attachmentSessionKey(sessionId)
+        );
+        await fs.promises.mkdir(uploadRoot, { recursive: true });
+
+        const now = Date.now();
+        const tenantUploadRoot = path.join(record.workspaceRoot, '.ailis-runtime', 'uploads');
+        const existingFiles = await listRegularFiles(tenantUploadRoot);
+        let retainedBytes = 0;
+        for (const file of existingFiles) {
+            if (now - file.stat.mtimeMs > this.attachmentTtlMs) {
+                await fs.promises.rm(file.path, { force: true }).catch(() => {});
+                continue;
+            }
+            retainedBytes += file.stat.size;
+        }
+        if (retainedBytes + bytes.length > this.maxTenantAttachmentBytes) {
+            throw Object.assign(new Error('tenant_attachment_storage_full'), {
+                statusCode: 413,
+                maxBytes: this.maxTenantAttachmentBytes
+            });
+        }
+
+        const originalName = sanitizeAttachmentFilename(payload.name);
+        const storedName = `${Date.now()}-${randomUUID().slice(0, 12)}-${originalName}`;
+        const targetPath = path.join(uploadRoot, storedName);
+        await fs.promises.writeFile(targetPath, bytes, { flag: 'wx', mode: 0o600 });
+        const storedPath = await fs.promises.realpath(targetPath);
+        const stat = await fs.promises.stat(storedPath);
+        const mimeType = normalizeString(payload.mimeType, 'application/octet-stream').slice(0, 160);
+        const createdAt = new Date(stat.mtimeMs).toISOString();
+        record.lastUsedAt = Date.now();
+
+        return {
+            ok: true,
+            attachment: {
+                type: 'file',
+                id: `hosted-upload-${path.basename(storedName, path.extname(storedName))}`,
+                source: 'hosted-upload',
+                label: originalName,
+                name: originalName,
+                path: storedPath,
+                mimeType,
+                extension: path.extname(originalName).toLowerCase(),
+                kind: 'file',
+                size: stat.size,
+                createdAt,
+                modifiedAt: createdAt,
+                staged: false,
+                stageStatus: 'already_in_workspace'
+            },
+            limits: {
+                maxFileBytes: this.maxAttachmentBytes,
+                maxTenantBytes: this.maxTenantAttachmentBytes
+            }
+        };
     }
 
     recordEvent(key, event = {}) {
@@ -336,6 +488,11 @@ class AILISHostedRuntimeManager {
                 baseUrl: this.llmSettings.baseUrl,
                 model: this.llmSettings.model,
                 configured: Boolean(this.llmSettings.apiKey)
+            },
+            attachments: {
+                maxFileBytes: this.maxAttachmentBytes,
+                maxTenantBytes: this.maxTenantAttachmentBytes,
+                ttlMs: this.attachmentTtlMs
             }
         };
     }
@@ -351,5 +508,6 @@ module.exports = {
     AILISHostedRuntimeManager,
     resolveHostedLlmSettings,
     sanitizeAgentRequest,
+    sanitizeAttachmentFilename,
     tenantKey
 };

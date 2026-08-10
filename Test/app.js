@@ -49,6 +49,9 @@ const elements = {
     historyBackdrop: document.getElementById('history-backdrop'),
     composer: document.getElementById('composer'),
     chatInput: document.getElementById('chat-input'),
+    fileInput: document.getElementById('file-input'),
+    attachButton: document.getElementById('attach-button'),
+    attachmentPreview: document.getElementById('attachment-preview'),
     sendButton: document.getElementById('send-button'),
     voiceSelect: document.getElementById('tts-voice-select'),
     quickButtons: Array.from(document.querySelectorAll('[data-prompt]')),
@@ -66,6 +69,9 @@ const state = {
     renderProfileId: DEFAULT_RENDER_PROFILE_ID,
     ttsVoiceId: CLOUD_TTS_VOICE_ID,
     followLatestMessage: true,
+    uploadingAttachments: false,
+    pendingAttachments: [],
+    fileDragDepth: 0,
     scrollFrame: 0,
     messagesById: new Map(),
     messageOrder: [],
@@ -277,9 +283,11 @@ function setBackendStatus(text, status = 'checking') {
 }
 
 function updateComposer() {
-    const ready = state.chatReady && !state.busy;
-    const canSend = ready && elements.chatInput.value.trim().length > 0;
+    const ready = state.chatReady && !state.busy && !state.uploadingAttachments;
+    const hasDraft = elements.chatInput.value.trim().length > 0 || state.pendingAttachments.length > 0;
+    const canSend = ready && hasDraft;
     elements.sendButton.disabled = !canSend;
+    elements.attachButton.disabled = !ready;
     elements.quickButtons.forEach((button) => {
         button.disabled = !ready;
     });
@@ -287,7 +295,9 @@ function updateComposer() {
     elements.messageList.setAttribute('aria-busy', String(state.busy));
     elements.dialogueContent.setAttribute('aria-busy', String(state.busy));
 
-    if (state.busy) {
+    if (state.uploadingAttachments) {
+        elements.composerStatus.textContent = '正在上传附件';
+    } else if (state.busy) {
         elements.composerStatus.textContent = 'AILIS 正在回应';
     } else if (!state.modelReady) {
         elements.composerStatus.textContent = '正在载入角色';
@@ -297,6 +307,98 @@ function updateComposer() {
         elements.composerStatus.textContent = '在线服务已连接';
     } else {
         elements.composerStatus.textContent = '正在连接在线服务';
+    }
+}
+
+function formatAttachmentBytes(bytes) {
+    const size = Math.max(0, Number(bytes) || 0);
+    if (size < 1024) {
+        return `${size} B`;
+    }
+    if (size < 1024 * 1024) {
+        return `${(size / 1024).toFixed(1)} KB`;
+    }
+    return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function renderAttachmentPreview() {
+    elements.attachmentPreview.replaceChildren();
+    elements.attachmentPreview.hidden = state.pendingAttachments.length === 0;
+    for (const attachment of state.pendingAttachments) {
+        const card = document.createElement('div');
+        card.className = 'attachment-card';
+
+        const icon = document.createElement('span');
+        icon.className = 'attachment-icon';
+        icon.textContent = (attachment.extension || '').replace(/^\./, '').slice(0, 4).toUpperCase() || 'FILE';
+
+        const copy = document.createElement('span');
+        copy.className = 'attachment-copy';
+        const name = document.createElement('strong');
+        name.textContent = attachment.name || attachment.label || '附件';
+        const meta = document.createElement('small');
+        meta.textContent = formatAttachmentBytes(attachment.size);
+        copy.append(name, meta);
+
+        const remove = document.createElement('button');
+        remove.type = 'button';
+        remove.className = 'attachment-remove';
+        remove.textContent = '×';
+        remove.setAttribute('aria-label', `移除 ${name.textContent}`);
+        remove.addEventListener('click', () => {
+            state.pendingAttachments = state.pendingAttachments.filter((item) => item.id !== attachment.id);
+            renderAttachmentPreview();
+            updateComposer();
+        });
+        card.append(icon, copy, remove);
+        elements.attachmentPreview.appendChild(card);
+    }
+}
+
+async function addBrowserFiles(fileList) {
+    const availableSlots = Math.max(0, 12 - state.pendingAttachments.length);
+    const files = Array.from(fileList || []).filter((file) => file?.size > 0).slice(0, availableSlots);
+    if (!files.length || state.busy || state.uploadingAttachments) {
+        return;
+    }
+    const gateway = getPetWindow()?.chatService?.gateway;
+    if (typeof gateway?.uploadAttachment !== 'function') {
+        showSystemNotice({
+            level: 'error',
+            message: '网页版附件服务尚未就绪，请刷新页面后重试。'
+        });
+        return;
+    }
+
+    state.uploadingAttachments = true;
+    updateComposer();
+    const results = await Promise.allSettled(
+        files.map((file) => gateway.uploadAttachment(file, { sessionId: 'main' }))
+    );
+    const uploaded = results
+        .filter((result) => result.status === 'fulfilled')
+        .map((result) => result.value);
+    const byId = new Map(state.pendingAttachments.map((attachment) => [attachment.id, attachment]));
+    uploaded.forEach((attachment) => byId.set(attachment.id, attachment));
+    state.pendingAttachments = [...byId.values()].slice(0, 12);
+    state.uploadingAttachments = false;
+    renderAttachmentPreview();
+    updateComposer();
+
+    const failed = results.filter((result) => result.status === 'rejected');
+    if (failed.length) {
+        showSystemNotice({
+            level: 'error',
+            message: failed.length === results.length
+                ? `附件上传失败：${failed[0].reason?.message || '请稍后重试'}`
+                : `${uploaded.length} 个附件已上传，${failed.length} 个上传失败。`
+        });
+    } else {
+        showSystemNotice({
+            level: 'success',
+            durationMs: 3500,
+            message: `已添加 ${uploaded.length} 个附件，可以直接让 AILIS 阅读。`
+        });
     }
 }
 
@@ -683,8 +785,9 @@ async function checkBackend() {
 
 async function sendPrompt(content) {
     const text = String(content || '').trim();
+    const attachments = [...state.pendingAttachments];
     const petWindow = getPetWindow();
-    if (!text || state.busy || !petWindow?.chatSystem?.sendExternalMessage) {
+    if ((!text && !attachments.length) || state.busy || state.uploadingAttachments || !petWindow?.chatSystem?.sendExternalMessage) {
         updateComposer();
         return;
     }
@@ -698,7 +801,11 @@ async function sendPrompt(content) {
 
     try {
         await petWindow.audioPlayer?.unlock?.();
-        await petWindow.chatSystem.sendExternalMessage(text);
+        const sendPromise = petWindow.chatSystem.sendExternalMessage(text, { attachments });
+        state.pendingAttachments = [];
+        renderAttachmentPreview();
+        updateComposer();
+        await sendPromise;
         syncPetSnapshot();
     } catch (error) {
         const id = `local-error-${Date.now()}`;
@@ -749,6 +856,50 @@ elements.quickButtons.forEach((button) => {
     button.addEventListener('click', () => {
         void sendPrompt(button.dataset.prompt);
     });
+});
+elements.attachButton.addEventListener('click', () => {
+    if (!elements.attachButton.disabled) {
+        elements.fileInput.click();
+    }
+});
+elements.fileInput.addEventListener('change', () => {
+    const files = elements.fileInput.files;
+    elements.fileInput.value = '';
+    void addBrowserFiles(files);
+});
+window.addEventListener('dragenter', (event) => {
+    if (!Array.from(event.dataTransfer?.types || []).includes('Files')) {
+        return;
+    }
+    event.preventDefault();
+    state.fileDragDepth += 1;
+    elements.experience.dataset.draggingFiles = 'true';
+});
+window.addEventListener('dragover', (event) => {
+    if (!Array.from(event.dataTransfer?.types || []).includes('Files')) {
+        return;
+    }
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'copy';
+});
+window.addEventListener('dragleave', (event) => {
+    if (!Array.from(event.dataTransfer?.types || []).includes('Files')) {
+        return;
+    }
+    event.preventDefault();
+    state.fileDragDepth = Math.max(0, state.fileDragDepth - 1);
+    if (!state.fileDragDepth) {
+        elements.experience.dataset.draggingFiles = 'false';
+    }
+});
+window.addEventListener('drop', (event) => {
+    if (!Array.from(event.dataTransfer?.types || []).includes('Files')) {
+        return;
+    }
+    event.preventDefault();
+    state.fileDragDepth = 0;
+    elements.experience.dataset.draggingFiles = 'false';
+    void addBrowserFiles(event.dataTransfer?.files);
 });
 elements.sceneButtons.forEach((button) => {
     button.addEventListener('click', () => {

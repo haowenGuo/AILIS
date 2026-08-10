@@ -529,7 +529,7 @@ svg {
     height: var(--dialogue-height);
     min-width: 0;
     display: grid;
-    grid-template-rows: 35px minmax(0, 1fr) auto auto;
+    grid-template-rows: 35px minmax(0, 1fr) auto auto auto;
     padding: 0 18px 14px;
     overflow: hidden;
     border: 1px solid rgba(222, 239, 242, 0.72);
@@ -629,16 +629,140 @@ svg {
     opacity: 0.42;
 }
 
+.attachment-preview {
+    min-width: 0;
+    display: flex;
+    gap: 7px;
+    overflow-x: auto;
+    padding: 0 0 8px;
+    scrollbar-width: thin;
+}
+
+.attachment-preview[hidden] {
+    display: none;
+}
+
+.attachment-card {
+    flex: 0 0 auto;
+    max-width: min(260px, 75vw);
+    display: grid;
+    grid-template-columns: 38px minmax(0, 1fr) 26px;
+    align-items: center;
+    gap: 7px;
+    padding: 6px;
+    border: 1px solid rgba(211, 230, 233, 0.34);
+    border-radius: 7px;
+    background: rgba(255, 255, 255, 0.14);
+}
+
+.attachment-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 38px;
+    height: 34px;
+    border-radius: 5px;
+    color: #ffffff;
+    background: rgba(203, 83, 118, 0.86);
+    font-size: 9px;
+    font-weight: 900;
+    text-shadow: none;
+}
+
+.attachment-copy {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+}
+
+.attachment-copy strong,
+.attachment-copy small {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.attachment-copy strong {
+    color: #ffffff;
+    font-size: 11px;
+}
+
+.attachment-copy small {
+    color: var(--dialogue-muted);
+    font-size: 10px;
+}
+
+.attachment-remove {
+    width: 26px;
+    height: 26px;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    color: var(--dialogue-muted);
+    background: transparent;
+    cursor: pointer;
+    font-size: 18px;
+}
+
+.attachment-remove:hover {
+    color: #ffffff;
+    background: rgba(255, 255, 255, 0.12);
+}
+
 .composer {
     min-width: 0;
     display: grid;
-    grid-template-columns: minmax(0, 1fr) 42px;
+    grid-template-columns: 36px minmax(0, 1fr) 42px;
     gap: 8px;
     align-items: end;
     padding: 5px;
     border: 1px solid rgba(211, 230, 233, 0.34);
     border-radius: 8px;
     background: rgba(255, 255, 255, 0.16);
+}
+
+.attach-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 42px;
+    padding: 0;
+    border: 0;
+    border-radius: 7px;
+    color: #dbe9eb;
+    background: transparent;
+    cursor: pointer;
+}
+
+.attach-button:hover:enabled {
+    color: #ffffff;
+    background: rgba(255, 255, 255, 0.12);
+}
+
+.attach-button:disabled {
+    cursor: not-allowed;
+    opacity: 0.42;
+}
+
+.attach-button svg,
+.send-button svg {
+    width: 20px;
+    height: 20px;
+    fill: none;
+    stroke: currentColor;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    stroke-width: 1.8;
+}
+
+.experience[data-dragging-files="true"] .dialogue-box {
+    border-color: rgba(255, 255, 255, 0.9);
+    box-shadow:
+        0 20px 44px rgba(8, 22, 27, 0.38),
+        0 0 0 4px rgba(203, 83, 118, 0.28),
+        inset 0 1px 0 rgba(255, 255, 255, 0.08);
 }
 
 .composer:focus-within {

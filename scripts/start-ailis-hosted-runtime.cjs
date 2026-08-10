@@ -42,20 +42,25 @@ function writeEventStream(res, event, payload) {
     return true;
 }
 
-async function readJson(req) {
+async function readBody(req, maxBytes = 4 * 1024 * 1024) {
     const chunks = [];
     let total = 0;
     for await (const chunk of req) {
         total += chunk.length;
-        if (total > 4 * 1024 * 1024) {
+        if (total > maxBytes) {
             throw Object.assign(new Error('payload_too_large'), { statusCode: 413 });
         }
         chunks.push(chunk);
     }
-    if (!chunks.length) {
+    return chunks.length ? Buffer.concat(chunks) : Buffer.alloc(0);
+}
+
+async function readJson(req) {
+    const body = await readBody(req);
+    if (!body.length) {
         return {};
     }
-    return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    return JSON.parse(body.toString('utf8'));
 }
 
 function authorize(req) {
@@ -85,6 +90,20 @@ const server = http.createServer(async (req, res) => {
                 cursor: url.searchParams.get('cursor'),
                 limit: url.searchParams.get('limit')
             }));
+            return;
+        }
+        if (url.pathname === '/attachments/upload' && req.method === 'POST') {
+            const maxBytes = manager.maxAttachmentBytes + 1;
+            const bytes = await readBody(req, maxBytes);
+            sendJson(res, 200, await manager.storeAttachment(
+                url.searchParams.get('tenantId') || '',
+                {
+                    sessionId: url.searchParams.get('sessionId') || 'main',
+                    name: url.searchParams.get('filename') || 'attachment.bin',
+                    mimeType: url.searchParams.get('mimeType') || req.headers['content-type'],
+                    bytes
+                }
+            ));
             return;
         }
         if (url.pathname === '/agent/run' && req.method === 'POST') {

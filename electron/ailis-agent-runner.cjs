@@ -5990,6 +5990,17 @@ function buildAgentDirectToolSpecs(
     const hasPersistentTaskAgentSession = Boolean(
         normalizeText(requestContext.taskAgentThreadId || requestContext.task_agent_thread_id)
     );
+    const attachedFiles = normalizeFileAttachments(
+        requestContext.fileAttachments || requestContext.attachments
+    );
+    if (attachedFiles.length) {
+        for (const toolId of ['read', 'artifact_tools']) {
+            const attachmentToolSpec = gateway?.gatewayToolRuntimeRegistry?.definition?.(toolId)?.spec;
+            if (!suppressedCoreTools.has(toolId)) {
+                pushUniqueNativeToolSpec(specs, seen, attachmentToolSpec);
+            }
+        }
+    }
     for (const spec of modelVisibleSpecs) {
         const toolId = canonicalDirectToolId(spec.name || spec.function?.name);
         if (

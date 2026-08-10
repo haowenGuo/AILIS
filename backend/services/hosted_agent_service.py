@@ -160,6 +160,34 @@ class HostedAgentRuntimeClient:
         })
         return await self._request("GET", f"/events/recent?{query}", timeout=30)
 
+    async def upload_attachment(
+        self,
+        tenant_id: str,
+        *,
+        session_id: str,
+        filename: str,
+        mime_type: str,
+        content: bytes,
+    ) -> dict[str, Any]:
+        query = urlencode({
+            "tenantId": tenant_id,
+            "sessionId": session_id or "main",
+            "filename": filename or "attachment.bin",
+            "mimeType": mime_type or "application/octet-stream",
+        })
+        headers = {
+            **self._headers(),
+            "content-type": "application/octet-stream",
+        }
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.post(
+                f"{self.base_url}/attachments/upload?{query}",
+                headers=headers,
+                content=content,
+            )
+        response.raise_for_status()
+        return response.json()
+
     async def run_agent(self, tenant_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         return await self._request(
             "POST",

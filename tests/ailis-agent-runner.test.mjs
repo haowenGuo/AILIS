@@ -877,6 +877,35 @@ test('TaskAgent loads structured MCP follow-up action specs on the next turn', (
     assert.ok(specs.some((spec) => spec.name === 'mcp__ailis_research__open_page'));
 });
 
+test('TaskAgent receives direct file readers when the current Turn has an attachment', () => {
+    const specsById = Object.fromEntries(['read', 'artifact_tools'].map((name) => [name, {
+        name,
+        description: `${name} tool`,
+        parameters: {
+            type: 'object',
+            properties: { path: { type: 'string' } },
+            additionalProperties: false
+        }
+    }]));
+    const specs = buildAgentDirectToolSpecs({
+        gatewayToolRuntimeRegistry: {
+            modelVisibleSpecs: () => [],
+            definition: (toolId) => specsById[toolId] ? { spec: specsById[toolId] } : null
+        }
+    }, {
+        requestContext: {
+            agentRole: 'task_agent',
+            fileAttachments: [{
+                type: 'file',
+                name: 'paper.pdf',
+                path: '/workspace/paper.pdf'
+            }]
+        }
+    });
+
+    assert.deepEqual(specs.map((spec) => spec.name), ['read', 'artifact_tools']);
+});
+
 async function jsonFetch(url, options = {}) {
     const response = await fetch(url, {
         ...options,
