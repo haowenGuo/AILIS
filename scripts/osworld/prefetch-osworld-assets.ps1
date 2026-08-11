@@ -85,10 +85,14 @@ function Add-Asset {
         [string]$Kind
     )
     if (-not $Url -or -not $RelativeName) { return }
+    # DrvFS exposes Linux-reserved Windows characters through its private-use
+    # encoding. Encode the Windows-side cache leaf the same way so OSWorld,
+    # running in WSL, can still open the original Linux cache path verbatim.
+    $drvFsRelativeName = $RelativeName.Replace(':', [string][char]0xF03A)
     $Assets.Add([pscustomobject]@{
         taskId = $TaskId
         url = $Url
-        relativeName = $RelativeName
+        relativeName = $drvFsRelativeName
         kind = $Kind
     })
 }
