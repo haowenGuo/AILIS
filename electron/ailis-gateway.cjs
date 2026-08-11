@@ -1213,6 +1213,7 @@ class AILISGateway extends EventEmitter {
             emitGatewayEvent: (type, payload) => this.emitGatewayEvent(type, payload),
             mcpServers: options.mcpServers,
             mcpConfigPath: options.mcpConfigPath || path.join(this.auditDir, 'mcp-servers.json'),
+            disableBuiltinAilisResearchMcp: options.disableBuiltinAilisResearchMcp,
             agentExecutor: (payload) => this.executeTaskAgent(payload)
         });
         this.server = null;
@@ -1243,10 +1244,16 @@ class AILISGateway extends EventEmitter {
         this.profileCurationDebounceTimer = null;
         this.profileCurationDebounceMs = Math.max(5000, Number(options.profileCurationDebounceMs) || DEFAULT_PROFILE_CURATION_DEBOUNCE_MS);
         this.profileCurationRunning = false;
-        this.computerTool = new AILISComputerTool({
+        this.computerTool = options.computerTool || new AILISComputerTool({
             workspaceRoot: this.workspaceRoot,
             platformAdapter: this.platformAdapter
         });
+        this.directLocalToolIds = Array.isArray(options.directLocalToolIds)
+            ? new Set(options.directLocalToolIds.map((id) => normalizeString(id)).filter(Boolean))
+            : null;
+        this.toolAllowlist = Array.isArray(options.toolAllowlist)
+            ? new Set(options.toolAllowlist.map((id) => normalizeString(id)).filter(Boolean))
+            : null;
         this.getEmailProfiles = typeof options.getEmailProfiles === 'function'
             ? options.getEmailProfiles
             : () => options.emailProfiles || {};
@@ -1373,10 +1380,12 @@ class AILISGateway extends EventEmitter {
 
     createGatewayToolRuntimeRegistry() {
         const registry = new AILISToolRuntimeRegistry({ runtime: this.runtime });
+        const directLocalToolIds = this.directLocalToolIds || CODEX_STYLE_DIRECT_LOCAL_TOOL_IDS;
+        const toolAllowed = (id) => !this.toolAllowlist || this.toolAllowlist.has(id);
         const localDefinitions = [
             ...AILIS_LOCAL_TOOL_DEFINITIONS.map((definition) => ({
                 ...definition,
-                exposure: CODEX_STYLE_DIRECT_LOCAL_TOOL_IDS.has(definition.id)
+                exposure: directLocalToolIds.has(definition.id)
                     ? TOOL_EXPOSURE.DIRECT
                     : EXTENDED_LOCAL_TOOL_EXPOSURE
             })),
@@ -1391,19 +1400,19 @@ class AILISGateway extends EventEmitter {
                     materialized: true,
                     status: 'available',
                     needsApprovalActions: id === 'exec' ? Object.freeze(['exec']) : id === 'apply_patch' ? Object.freeze(['apply_patch']) : Object.freeze([]),
-                    exposure: CODEX_STYLE_DIRECT_LOCAL_TOOL_IDS.has(id)
+                    exposure: directLocalToolIds.has(id)
                         ? TOOL_EXPOSURE.DIRECT
                         : EXTENDED_LOCAL_TOOL_EXPOSURE
                 };
             })
-        ];
+        ].filter((definition) => toolAllowed(definition.id));
         for (const definition of localDefinitions) {
             registry.register(new AILISRuntimeTool({
                 definition,
                 handle: async (args, context) => this.executeGatewayLocalTool(definition.id, args, context)
             }));
         }
-        for (const definition of this.runtime.getRuntimeToolDefinitions()) {
+        for (const definition of this.runtime.getRuntimeToolDefinitions().filter((entry) => toolAllowed(entry.id))) {
             if (definition.id === 'tool_search') {
                 registry.register(new AILISRuntimeTool({
                     definition: {

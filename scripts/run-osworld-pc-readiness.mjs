@@ -3,6 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { spawnSync } from 'node:child_process';
+import { SUPPORTED_ACTIONS as OSWORLD_BRIDGE_ACTIONS } from './osworld/osworld-computer-bridge.mjs';
 
 const require = createRequire(import.meta.url);
 const { getToolContract } = require('../electron/ailis-tool-contracts.cjs');
@@ -14,6 +15,7 @@ const defaultOsworldRoot = path.join(projectRoot, 'build-cache', 'OSWorld');
 const osworldRoot = path.resolve(process.env.OSWORLD_REPO || defaultOsworldRoot);
 const wslPython = process.env.OSWORLD_WSL_PYTHON || '/root/ailis-osworld-venv/bin/python';
 const reportDir = path.join(projectRoot, 'eval-results', 'engineering', 'osworld-pc-readiness');
+const sourceLockPath = path.join(projectRoot, 'evals', 'engineering', 'osworld-source-lock.json');
 
 function run(command, args = [], options = {}) {
     const result = spawnSync(command, args, {
@@ -107,13 +109,32 @@ async function main() {
     const allMeta = osworldExists
         ? await readJson(path.join(osworldRoot, 'evaluation_examples', 'test_all.json'), {})
         : {};
+    const noGdriveMeta = osworldExists
+        ? await readJson(path.join(osworldRoot, 'evaluation_examples', 'test_nogdrive.json'), {})
+        : {};
+    const infeasibleMeta = osworldExists
+        ? await readJson(path.join(osworldRoot, 'evaluation_examples', 'test_infeasible.json'), {})
+        : {};
+    const sourceLock = await readJson(sourceLockPath, {});
+    const gitTopLevel = osworldExists
+        ? run('git', ['-C', osworldRoot, 'rev-parse', '--show-toplevel']).stdout
+        : '';
+    const osworldIsStandaloneGitCheckout = Boolean(
+        gitTopLevel && path.resolve(gitTopLevel) === path.resolve(osworldRoot)
+    );
+    const gitCommit = osworldIsStandaloneGitCheckout
+        ? run('git', ['-C', osworldRoot, 'rev-parse', 'HEAD']).stdout
+        : '';
+    const sourceCommit = gitCommit || sourceLock.commit || '';
 
     const osworldWslRoot = wslPath(osworldRoot);
     const checks = {
         osworldRepo: {
             ok: osworldExists,
             path: osworldRoot,
-            commit: osworldExists ? run('git', ['-C', osworldRoot, 'log', '-1', '--oneline']).stdout : ''
+            commit: sourceCommit,
+            source: gitCommit ? 'git' : sourceLock.commit ? 'source-lock' : 'unknown',
+            lockPath: sourceLockPath
         },
         python: run('python', ['--version']),
         vmware: run('where.exe', ['vmrun']),
@@ -122,6 +143,8 @@ async function main() {
         wsl: run('wsl', ['--status']),
         wslDocker: run('wsl', ['-d', 'Ubuntu-22.04', '--', 'bash', '-lc', 'docker info >/tmp/ailis-osworld-docker-info.txt 2>/tmp/ailis-osworld-docker-info.err; code=$?; echo status:$code; head -30 /tmp/ailis-osworld-docker-info.txt; head -30 /tmp/ailis-osworld-docker-info.err']),
         wslKvm: run('wsl', ['-d', 'Ubuntu-22.04', '--', 'bash', '-lc', 'if [ -e /dev/kvm ]; then echo KVM_PRESENT; else echo KVM_MISSING; fi; egrep -c "(vmx|svm)" /proc/cpuinfo || true']),
+        wslVmDisk: run('wsl', ['-d', 'Ubuntu-22.04', '--', 'test', '-s', `${osworldWslRoot}/docker_vm_data/Ubuntu.qcow2`]),
+        wslDockerImage: run('wsl', ['-d', 'Ubuntu-22.04', '--', 'docker', 'image', 'inspect', 'happysixd/osworld-docker:latest']),
         wslPython: run('wsl', ['-d', 'Ubuntu-22.04', '--', 'bash', '-lc', `test -x ${JSON.stringify(wslPython)} && ${JSON.stringify(wslPython)} --version`]),
         wslOsworldImport: osworldExists
             ? run('wsl', ['-d', 'Ubuntu-22.04', '--', 'bash', '-lc', `cd ${JSON.stringify(osworldWslRoot)} && ${JSON.stringify(wslPython)} -c "from desktop_env.desktop_env import DesktopEnv; print('ok')"`], {
@@ -156,6 +179,12 @@ async function main() {
     if (!checks.docker.ok && wslRunReady) {
         warnings.push('Windows native Docker is missing, but WSL Docker/KVM is ready. Official OSWorld should be run through WSL.');
     }
+    if (wslRunReady && !checks.wslVmDisk.ok) {
+        blockers.push('OSWorld Ubuntu.qcow2 is missing from build-cache/OSWorld/docker_vm_data.');
+    }
+    if (wslRunReady && !checks.wslDockerImage.ok) {
+        blockers.push('The happysixd/osworld-docker:latest image is missing in WSL Docker.');
+    }
 
     const report = {
         generatedAt: new Date().toISOString(),
@@ -170,11 +199,27 @@ async function main() {
         },
         datasets: {
             testSmall: summarizeDomains(smallMeta),
-            testAll: summarizeDomains(allMeta)
+            testAll: summarizeDomains(allMeta),
+            testNoGdrive: summarizeDomains(noGdriveMeta),
+            testInfeasible: summarizeDomains(infeasibleMeta)
         },
         ailisComputerCapability: buildCapabilityGap(),
-        officialRunReady: windowsRunReady || wslRunReady,
-        runRoute: wslRunReady ? 'wsl-docker-kvm' : windowsRunReady ? 'windows-native-provider' : 'not-ready',
+        cleanBridge: {
+            path: path.join(projectRoot, 'scripts', 'osworld', 'osworld-computer-bridge.mjs'),
+            actionCount: OSWORLD_BRIDGE_ACTIONS.length,
+            actions: OSWORLD_BRIDGE_ACTIONS,
+            taskAgentRunner: path.join(projectRoot, 'scripts', 'run-osworld-task-agent.mjs'),
+            officialEnvironmentRunner: path.join(projectRoot, 'scripts', 'osworld', 'run_clean_ailis_osworld.py')
+        },
+        sourceLock,
+        officialRunReady: (windowsRunReady || wslRunReady) && blockers.length === 0,
+        runRoute: blockers.length
+            ? 'not-ready'
+            : wslRunReady
+                ? 'wsl-docker-kvm'
+                : windowsRunReady
+                    ? 'windows-native-provider'
+                    : 'not-ready',
         blockers,
         warnings,
         recommendedNextSteps: blockers.length
@@ -186,8 +231,9 @@ async function main() {
               ]
             : [
                   'Run quickstart.py with the available provider.',
-                  'Add an AILIS OSWorld agent wrapper and run test_small.json.',
-                  'Use trajectory logs to tune screenshot, GUI input, recovery, and evidence collection.'
+                  'Run bench:osworld:ailis:test-small:wsl for a clean production TaskAgent smoke test.',
+                  'Run bench:osworld:ailis:verified:smoke:wsl against test_nogdrive.json before expanding the local verified-compatible run.',
+                  'Use official evaluator scores and trajectory logs to improve generic observation, GUI grounding, and recovery.'
               ]
     };
 
@@ -216,11 +262,16 @@ async function main() {
             `- WSL KVM: ${wslKvmReady ? 'ok' : 'missing'}`,
             `- WSL Python: ${checks.wslPython.ok ? 'ok' : 'missing'} ${checks.wslPython.stdout || checks.wslPython.stderr || checks.wslPython.error}`,
             `- WSL OSWorld import: ${checks.wslOsworldImport.ok ? 'ok' : 'failed'} ${checks.wslOsworldImport.stdout || checks.wslOsworldImport.stderr || checks.wslOsworldImport.error}`,
+            `- WSL OSWorld VM disk: ${checks.wslVmDisk.ok ? 'ok' : 'missing'}`,
+            `- WSL OSWorld Docker image: ${checks.wslDockerImage.ok ? 'ok' : 'missing'}`,
             '',
             '## Dataset',
             '',
             `- test_small: ${report.datasets.testSmall.total} tasks`,
             `- test_all: ${report.datasets.testAll.total} tasks`,
+            `- test_nogdrive (local Verified-compatible): ${report.datasets.testNoGdrive.total} tasks`,
+            `- test_infeasible: ${report.datasets.testInfeasible.total} tasks`,
+            `- pinned source: ${sourceCommit || 'unknown'}`,
             '',
             '## AILIS Computer Capability',
             '',

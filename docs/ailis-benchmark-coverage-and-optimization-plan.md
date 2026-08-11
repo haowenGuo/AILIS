@@ -18,7 +18,7 @@ AILIS 不能继续靠主观试用和单点修补来判断能力。后续优化�
 | Artifact / 大文件 | `eval:artifact-tools:run` | 10/10 passed，覆盖 XLSX/PDF/DOCX/PPTX/CSV/Image | 缺更大压力集：长 PDF、扫描 PDF、复杂 DOCX/PPTX、超大 CSV/JSON、多文件引用 |
 | 人设/好感度/记忆风格 | `eval:ailis-humanlike:validate` | 1000 条 scenarios 结构验证通过 | 缺真实 LLM judge、长期 Raw Memory Ledger 抽取质量评分、用户偏好漂移检测 |
 | 工具执行/权限/Transcript | `ailis:benchmark-execution` | 通过：代码修复、PTY 会话、安全阻断、transcript | 缺真实模型闭环任务、Windows/macOS/Linux 跨平台命令稳定性矩阵 |
-| OSWorld/桌面 GUI | `bench:osworld:readiness` | officialRunReady=false | 缺 OSWorld repo 和 Python 依赖；还没形成桌面 GUI score |
+| OSWorld/桌面 GUI | `bench:osworld:readiness`、`bench:osworld:ailis:test-small:wsl` | officialRunReady=true；生产 TaskAgent 干净链路首题官方 evaluator=1.0（8 个 GUI 动作） | 需要跑完 39 题 test_small，再扩展 361 题 Verified-compatible 本地集；本地结果不能冒充官方 verified leaderboard 分数 |
 | GAIA | `bench:gaia:official:*` | 已有脚本和历史报告 | 需要恢复 official/lite 固定小集，做日常 no-visual 与 visual 分层 |
 | SWE-bench Lite | `bench:swebench-lite:*` | 有本地 sample JSONL | 缺稳定 wheelhouse、隔离执行环境、持续跑小样本 |
 | 速度/成本 | `scripts/run-ailis-speed-bench.mjs` | 本轮 120s timeout；partial report 显示第 1 个任务 `max_steps_reached`，LLM wait 102s / tool 8.1s / max prompt 12.9k tokens | 需要拆成 smoke/standard/longrun 三档；当前默认任务太重，不适合作为日常回归门 |

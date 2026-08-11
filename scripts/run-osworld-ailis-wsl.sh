@@ -21,4 +21,4 @@ source "${OSWORLD_VENV}/bin/activate"
 export PYTHONPATH="${AILIS_ROOT}/scripts/osworld:${OSWORLD_DIR}:${PYTHONPATH:-}"
 
 cd "${OSWORLD_DIR}"
-python "${AILIS_ROOT}/scripts/osworld/run_ailis_osworld.py" "$@"
+python "${AILIS_ROOT}/scripts/osworld/run_clean_ailis_osworld.py" "$@"

@@ -71,6 +71,8 @@
     "bench:gaia:compare": "node scripts/compare-ailis-gaia-runs.mjs",
     "bench:osworld:quickstart:wsl": "node scripts/run-wsl-repo-script.mjs scripts/run-osworld-wsl-quickstart.sh",
     "bench:osworld:ailis:test-small:wsl": "node scripts/run-wsl-repo-script.mjs scripts/run-osworld-ailis-test-small-wsl.sh",
+    "bench:osworld:ailis:verified:smoke:wsl": "node scripts/run-wsl-repo-script.mjs scripts/run-osworld-ailis-wsl.sh --suite verified --provider-name docker --headless --limit 1",
+    "test:osworld:clean-adapter": "node --test tests/osworld-clean-adapter.test.mjs",
     "eval:ailis-humanlike": "node scripts/run-ailis-humanlike-eval.mjs",
     "eval:ailis-humanlike:validate": "node scripts/run-ailis-humanlike-eval.mjs --validate-only",
     "eval:ailis-humanlike:generate": "node scripts/generate-ailis-humanlike-scenarios.mjs",

@@ -41,6 +41,7 @@ AILIS is developed as an evaluated agent system, not only as a character demo. T
 | **GAIA Level 1 strict (2026-07)** | Run 1: **41 / 53, 77.36%** | First of two planned full runs | Earlier strict-memory-isolated result retained for comparison |
 | **GAIA Level 1 historical** | **85.85%** two-run mean; best run **90.57%** | 53 public validation tasks x 2 | Historical local diagnostic; task-memory isolation was missing |
 | **Longitudinal companion eval** | **78.46 / 100** weighted mean | 171 judged checkpoints from 30-day scenarios | Internal product evaluation |
+| **OSWorld clean TaskAgent smoke** | **1 / 1**, official evaluator score **1.0** | 1 Chrome task, 8 GUI actions; `gpt-5.6-luna`, medium | Production AILIS Gateway with generic computer transport; smoke only |
 | **OSWorld small run** | **2 / 4**, 50% | 4 historical desktop tasks | Early external-benchmark signal; sample is too small for a broad claim |
 | **Humanlike dataset validation** | **1000 / 1000** valid | 9 categories, 251 negative probes | Evaluation coverage, not model quality |
 
@@ -48,6 +49,8 @@ AILIS is developed as an evaluated agent system, not only as a character demo. T
 
 [Full benchmark scorecard](docs/ailis-demo-benchmark-scorecard.md) ·
 [GAIA methodology](docs/ailis-desktop-real-gaia-eval.md) ·
+[OSWorld / OSWorld-Verified methodology](docs/ailis-osworld-pc-eval.md) ·
+[BrowseComp-Plus fixed-corpus protocol](docs/ailis-browsecomp-plus-eval.md) ·
 [ToolSandbox protocol and gates](docs/ailis-toolsandbox-v4-optimization-plan.md)
 
 <p align="center">
@@ -181,6 +184,9 @@ pnpm bench:gaia:compare -- \
   --output eval-results/engineering/gaia-regression-gate.md
 pnpm eval:ailis-humanlike:longitudinal-agent:validate
 pnpm bench:osworld:readiness
+pnpm bench:osworld:ailis:test-small:wsl
+pnpm bench:osworld:ailis:verified:smoke:wsl
+pnpm bench:browsecomp-plus:preflight
 ```
 
 The default GAIA comparison gate rejects missing or replaced tasks, lower visible success, more timeouts, P95 latency increases above 15%, mean-token increases above 10%, and stable per-task regressions. Benchmark-specific answer routing is not an accepted optimization strategy.

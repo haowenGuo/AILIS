@@ -63,16 +63,22 @@
       "id": "osworld-readiness",
       "category": "desktop_gui_agent",
       "script": "pnpm bench:osworld:readiness",
-      "status": "blocked",
+      "status": "ready_clean_runner_smoke_passed",
       "latestLocalResult": {
-        "officialRunReady": false,
-        "blockers": [
-          "OSWorld repo is missing",
-          "OSWorld Python dependencies are not installed"
-        ]
+        "officialRunReady": true,
+        "route": "wsl-docker-kvm",
+        "sourceCommit": "091f5ef1d5544bc74953c77875d5feb5bed30108",
+        "cleanTaskAgentSmoke": {
+          "tasks": 1,
+          "officialEvaluatorScore": 1.0,
+          "guiActions": 8,
+          "model": "gpt-5.6-luna",
+          "reasoningEffort": "medium"
+        },
+        "blockers": []
       },
-      "measures": ["environment_readiness", "desktop_gui_dependencies"],
-      "gaps": ["OSWorld repo", "Python dependency setup", "deterministic smoke run"]
+      "measures": ["environment_readiness", "official_task_success", "desktop_gui_actions", "trajectory_quality"],
+      "gaps": ["complete test_small run", "larger OSWorld-Verified-compatible run", "official leaderboard verification"]
     },
     {
       "id": "gaia",

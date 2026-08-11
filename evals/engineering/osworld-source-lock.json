@@ -1,0 +1,20 @@
+{
+  "schema": "ailis.osworld.source_lock.v1",
+  "repository": "https://github.com/xlang-ai/OSWorld",
+  "commit": "091f5ef1d5544bc74953c77875d5feb5bed30108",
+  "archive": "https://codeload.github.com/xlang-ai/OSWorld/zip/091f5ef1d5544bc74953c77875d5feb5bed30108",
+  "commitDate": "2026-07-28",
+  "checkedAt": "2026-08-11",
+  "suites": {
+    "test_small.json": 39,
+    "test_all.json": 369,
+    "test_nogdrive.json": 361,
+    "test_infeasible.json": 26
+  },
+  "verified": {
+    "implementation": "in-place OSWorld upgrade",
+    "localSuite": "evaluation_examples/test_nogdrive.json",
+    "localLabel": "verified-compatible",
+    "officialVerificationRequiredForLeaderboardClaim": true
+  }
+}

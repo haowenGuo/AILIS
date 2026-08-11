@@ -1,0 +1,26 @@
+{
+  "schema": "ailis.osworld.smoke_result.v1",
+  "runDate": "2026-08-11",
+  "sourceCommit": "091f5ef1d5544bc74953c77875d5feb5bed30108",
+  "officialRunReady": true,
+  "route": "wsl-docker-kvm",
+  "agentProtocol": "production_ailis_gateway_clean_computer_transport",
+  "model": "gpt-5.6-luna",
+  "reasoningEffort": "medium",
+  "task": {
+    "suite": "test_small.json",
+    "domain": "chrome",
+    "exampleId": "bb5e4c0d-f964-439c-97b6-bdb9747de3f4",
+    "instruction": "Can you make Bing the main search engine when I look stuff up on the internet?",
+    "alsoPresentInTestNogdrive": true
+  },
+  "result": {
+    "officialEvaluatorScore": 1.0,
+    "guiActionCount": 8,
+    "durationSeconds": 205.214,
+    "taskAgentFinalAnswer": "Bing is now set as the default search engine in Chrome.",
+    "deadlineTriggered": false,
+    "runnerError": ""
+  },
+  "claimBoundary": "One-task clean smoke only. This is not a full OSWorld score and not an officially verified OSWorld-Verified leaderboard result."
+}

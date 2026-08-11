@@ -62,13 +62,14 @@ Observed results:
 | SWE-bench tiny selftest | `pnpm bench:swebench-lite:selftest` | Passed, 1 / 1 verified |
 | Agent runner tests | `pnpm test:ailis-agent` | Passed, 4 / 4 |
 | Harness validation | `pnpm ailis:validate-harness` | Passed, 27 contracts, 12 skills, 16 checked tools |
-| OSWorld readiness | `pnpm bench:osworld:readiness` | Script ran, but official run not ready |
+| OSWorld readiness | `pnpm bench:osworld:readiness` | Passed；WSL Docker/KVM、官方源码、Python、VM 镜像均 ready |
 | OpenClaw tool surface validation | `pnpm openclaw:validate-tools` | Failed due to missing upstream reference catalog |
 
-OSWorld blockers:
+OSWorld clean smoke:
 
-- `build-cache/OSWorld` is missing.
-- OSWorld Python dependencies are not installed in the active Windows Python or WSL Python environment.
+- 官方源码固定到 `091f5ef1d5544bc74953c77875d5feb5bed30108`。
+- 当前生产 AILIS TaskAgent 通过通用 computer bridge 完成首个 Chrome 任务，官方 evaluator 得分 1.0。
+- 下一步是完整 `test_small` 与更大的 Verified-compatible 本地运行，而不是增加题型专用提示或技能。
 
 OpenClaw validation blocker:
 
@@ -242,8 +243,7 @@ This makes long-term memory and personality regressions easier to run often.
 
 Before improving scores, make the environment reliable:
 
-- Clone OSWorld into `build-cache/OSWorld`.
-- Install OSWorld dependencies in WSL or a dedicated Python environment.
+- Keep the pinned OSWorld source, WSL Docker/KVM route, and `/root/ailis-osworld-venv` reproducible.
 - Restore or vendor the OpenClaw upstream reference catalog used by `openclaw:validate-tools`.
 - Keep GAIA dataset access and cache paths documented.
 
