@@ -39,8 +39,26 @@ SUPPORTED_ACTION_TYPES = {
 }
 
 
-class OSWorldSetupError(RuntimeError):
+class OSWorldInfrastructureError(RuntimeError):
+    """The official environment failed independently of TaskAgent behavior."""
+
+    def __init__(self, stage: str, message: str) -> None:
+        super().__init__(message)
+        self.stage = stage
+
+
+class OSWorldSetupError(OSWorldInfrastructureError):
     """Task initialization failed before TaskAgent received an observation."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__("setup", message)
+
+
+class OSWorldExecutionInfrastructureError(OSWorldInfrastructureError):
+    """The VM transport disappeared while TaskAgent was operating it."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__("execution", message)
 
 
 def parse_args() -> argparse.Namespace:
@@ -52,6 +70,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--headless", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--screen-width", type=int, default=1920)
     parser.add_argument("--screen-height", type=int, default=1080)
+    parser.add_argument(
+        "--observation-mode",
+        choices=["screenshot", "screenshot_a11y"],
+        default="screenshot_a11y",
+    )
     parser.add_argument("--suite", choices=["small", "verified", "all"], default="small")
     parser.add_argument("--test-meta", default="")
     parser.add_argument("--test-config-base-dir", default="evaluation_examples")
@@ -171,6 +194,7 @@ class OSWorldSession:
         self.action_pause = action_pause
         self.action_count = 0
         self.done = False
+        self.infrastructure_error = ""
         self.last_observation: Dict[str, Any] = {}
         self.lock = threading.Lock()
         self.traj_path = self.result_dir / "traj.jsonl"
@@ -227,15 +251,46 @@ class OSWorldSession:
                 if action_type not in SUPPORTED_ACTION_TYPES:
                     raise ValueError(f"Unsupported OSWorld action_type: {action_type}")
                 normalized = {**action, "action_type": action_type}
-                observation, reward, done, info = self.env.step(
-                    normalized, pause=self.action_pause
-                )
+                try:
+                    observation, reward, done, info = self.env.step(
+                        normalized, pause=self.action_pause
+                    )
+                except Exception as error:
+                    message = str(error)
+                    infrastructure_markers = (
+                        "HTTPConnectionPool",
+                        "Connection refused",
+                        "Failed to establish a new connection",
+                        "RemoteDisconnected",
+                    )
+                    if any(marker in message for marker in infrastructure_markers):
+                        self.infrastructure_error = message
+                        self.done = True
+                        return self.observation_payload(
+                            ok=False,
+                            status="infrastructure_unavailable",
+                            limit_reached=True,
+                            error=message,
+                        )
+                    raise
+                screenshot = observation.get("screenshot") if isinstance(observation, dict) else None
+                if not isinstance(screenshot, (bytes, bytearray)) or not screenshot:
+                    self.infrastructure_error = (
+                        "Official OSWorld VM returned no screenshot after a GUI action"
+                    )
+                    self.done = True
+                    return self.observation_payload(
+                        ok=False,
+                        status="infrastructure_unavailable",
+                        limit_reached=True,
+                        error=self.infrastructure_error,
+                    )
                 self.action_count += 1
                 self.done = bool(done)
                 self.last_observation = observation
                 timestamp = dt.datetime.now().strftime("%Y%m%d@%H%M%S%f")
                 screenshot_name = f"step_{self.action_count}_{timestamp}.png"
-                (self.result_dir / screenshot_name).write_bytes(observation["screenshot"])
+                (self.result_dir / screenshot_name).write_bytes(screenshot)
                 self._append_trajectory(
                     {
                         "record_type": "computer_action",
@@ -346,6 +401,56 @@ def build_node_command(
     ]
 
 
+def run_node_process(
+    command: List[str],
+    cwd: Path,
+    session: OSWorldSession,
+    timeout_seconds: float,
+) -> Tuple[subprocess.CompletedProcess[str], str]:
+    process = subprocess.Popen(  # pylint: disable=consider-using-with
+        command,
+        cwd=str(cwd),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        errors="replace",
+    )
+    deadline = time.monotonic() + timeout_seconds
+    runner_error = ""
+    while True:
+        try:
+            stdout, stderr = process.communicate(timeout=0.5)
+            return subprocess.CompletedProcess(
+                command,
+                process.returncode,
+                stdout=stdout or "",
+                stderr=stderr or "",
+            ), runner_error
+        except subprocess.TimeoutExpired:
+            if session.infrastructure_error:
+                runner_error = (
+                    "Official OSWorld VM transport became unavailable: "
+                    f"{session.infrastructure_error}"
+                )
+                process.terminate()
+            elif time.monotonic() >= deadline:
+                runner_error = f"AILIS TaskAgent exceeded {timeout_seconds:.0f}s"
+                process.terminate()
+            else:
+                continue
+            try:
+                stdout, stderr = process.communicate(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                stdout, stderr = process.communicate()
+            return subprocess.CompletedProcess(
+                command,
+                process.returncode,
+                stdout=stdout or "",
+                stderr=stderr or "",
+            ), runner_error
+
+
 def make_env(args: argparse.Namespace) -> DesktopEnv:
     return DesktopEnv(
         provider_name=args.provider_name,
@@ -354,7 +459,7 @@ def make_env(args: argparse.Namespace) -> DesktopEnv:
         screen_size=(args.screen_width, args.screen_height),
         headless=args.headless,
         os_type="Ubuntu",
-        require_a11y_tree=True,
+        require_a11y_tree=args.observation_mode == "screenshot_a11y",
         vm_secret_mounts=args.vm_secret_mount,
     )
 
@@ -439,28 +544,11 @@ def run_one(
     node_result: Optional[subprocess.CompletedProcess[str]] = None
     runner_error = ""
     try:
-        node_result = subprocess.run(
+        node_result, runner_error = run_node_process(
             node_command,
-            cwd=str(ailis_root),
-            capture_output=True,
-            text=True,
-            errors="replace",
-            timeout=args.task_timeout_seconds,
-            check=False,
-        )
-    except subprocess.TimeoutExpired as error:
-        runner_error = f"AILIS TaskAgent exceeded {args.task_timeout_seconds}s"
-        (example_dir / "node-timeout.json").write_text(
-            json.dumps(
-                {
-                    "error": runner_error,
-                    "stdout": error.stdout or "",
-                    "stderr": error.stderr or "",
-                },
-                ensure_ascii=False,
-                indent=2,
-            ),
-            encoding="utf-8",
+            ailis_root,
+            session,
+            args.task_timeout_seconds,
         )
     finally:
         server.shutdown()
@@ -471,7 +559,18 @@ def run_one(
         (example_dir / "node-stdout.log").write_text(node_result.stdout or "", encoding="utf-8")
         (example_dir / "node-stderr.log").write_text(node_result.stderr or "", encoding="utf-8")
         if node_result.returncode != 0:
-            runner_error = f"AILIS TaskAgent exited with code {node_result.returncode}"
+            runner_error = runner_error or f"AILIS TaskAgent exited with code {node_result.returncode}"
+
+    if session.infrastructure_error:
+        if recording_started:
+            try:
+                env.controller.end_recording(str(example_dir / "recording.mp4"))
+            except Exception as recording_error:  # pylint: disable=broad-except
+                LOGGER.warning("Unable to stop recording after VM transport failure: %s", recording_error)
+        raise OSWorldExecutionInfrastructureError(
+            f"Official OSWorld VM transport failed for {domain}/{example_id}: "
+            f"{session.infrastructure_error}"
+        )
 
     if not session.done:
         session.last_observation, _, session.done, _ = env.step("DONE", pause=0)
@@ -501,6 +600,7 @@ def run_one(
         "node_returncode": node_result.returncode if node_result else None,
         "model": args.codex_model,
         "reasoning_effort": args.codex_reasoning_effort,
+        "observation_mode": args.observation_mode,
         "agent_protocol": "production_ailis_gateway_clean_computer_transport",
     }
     (example_dir / "summary.json").write_text(
@@ -527,6 +627,7 @@ def summarize(args: argparse.Namespace, results: Iterable[Dict[str, Any]]) -> Di
         "reportable_score": reportable_score,
         "model": args.codex_model,
         "reasoning_effort": args.codex_reasoning_effort,
+        "observation_mode": args.observation_mode,
         "agent_protocol": "production_ailis_gateway_clean_computer_transport",
         "results": rows,
     }
@@ -579,10 +680,11 @@ def main() -> int:
                     row["setup_attempts"] = setup_attempt + 1
                     results.append(row)
                     break
-                except OSWorldSetupError as error:
+                except OSWorldInfrastructureError as error:
                     setup_attempt += 1
                     LOGGER.exception(
-                        "Infrastructure setup failure for %s/%s (attempt %d/%d): %s",
+                        "Infrastructure %s failure for %s/%s (attempt %d/%d): %s",
+                        error.stage,
                         domain,
                         example_id,
                         setup_attempt,
@@ -593,7 +695,7 @@ def main() -> int:
                         failure = {
                             "domain": domain,
                             "example_id": example_id,
-                            "status": "infrastructure_setup_failed",
+                            "status": f"infrastructure_{error.stage}_failed",
                             "score": None,
                             "infrastructure_failure": True,
                             "setup_attempts": setup_attempt,

@@ -49,11 +49,11 @@ function point(args = {}, prefix = '') {
 
 function normalizeKeys(value) {
     if (Array.isArray(value)) {
-        return value.map((key) => normalizeText(String(key))).filter(Boolean);
+        return value.map((key) => normalizeText(String(key)).toLowerCase()).filter(Boolean);
     }
     return normalizeText(String(value || ''))
         .split('+')
-        .map((key) => key.trim())
+        .map((key) => key.trim().toLowerCase())
         .filter(Boolean);
 }
 
@@ -114,9 +114,12 @@ function translateComputerAction(args = {}) {
         return { action, actions: [{ action_type: 'TYPING', parameters: { text } }] };
     }
     if (action === 'keyboard_press') {
-        const key = normalizeText(args.key);
-        if (!key) throw new Error('keyboard_press requires key');
-        return { action, actions: [{ action_type: 'PRESS', parameters: { key } }] };
+        const keys = normalizeKeys(args.key);
+        if (!keys.length) throw new Error('keyboard_press requires key');
+        if (keys.length > 1) {
+            return { action, actions: [{ action_type: 'HOTKEY', parameters: { keys } }] };
+        }
+        return { action, actions: [{ action_type: 'PRESS', parameters: { key: keys[0] } }] };
     }
     if (action === 'keyboard_hotkey') {
         const keys = normalizeKeys(args.keys || args.key);
@@ -169,7 +172,13 @@ class OSWorldComputerBridgeTool {
             `OSWorld GUI action: ${action}`,
             `status=${status}`,
             `step=${Number(payload.step || payload.action_count || 0)}`,
-            payload.limit_reached ? 'The GUI action budget is exhausted. Stop calling tools and return your final response.' : '',
+            payload.status === 'infrastructure_unavailable'
+                ? 'The benchmark VM transport is unavailable. Stop calling tools; the runner will restart or classify this attempt.'
+                : '',
+            payload.status !== 'infrastructure_unavailable' && payload.limit_reached
+                ? 'The GUI action budget is exhausted. Stop calling tools and return your final response.'
+                : '',
+            normalizeText(payload.error),
             accessibilityTree ? 'Accessibility tree (current screen):' : '',
             accessibilityTree ? accessibilityTree.slice(0, 18000) : ''
         ].filter(Boolean).join('\n');

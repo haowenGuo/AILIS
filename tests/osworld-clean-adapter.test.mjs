@@ -30,6 +30,10 @@ test('OSWorld bridge maps only generic computer actions to computer_13', () => {
         translateComputerAction({ action: 'keyboard_hotkey', keys: 'ctrl+shift+s' }).actions,
         [{ action_type: 'HOTKEY', parameters: { keys: ['ctrl', 'shift', 's'] } }]
     );
+    assert.deepEqual(
+        translateComputerAction({ action: 'keyboard_press', key: 'ALT+C' }).actions,
+        [{ action_type: 'HOTKEY', parameters: { keys: ['alt', 'c'] } }]
+    );
     assert.equal(translateComputerAction({ action: 'screen_screenshot' }).observeOnly, true);
     assert.throws(
         () => translateComputerAction({ action: 'exec_command', command: 'whoami' }),
