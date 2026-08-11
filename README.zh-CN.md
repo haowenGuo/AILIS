@@ -67,7 +67,9 @@ AILIS Assistant 是一个桌面优先的具身 AI 助手项目。它把 3D VRM �
 - OpenAI 兼容模型提供商配置，支持自定义 base URL 和本地模型工作流。
 - 桌面 TTS worker、云端语音路径和可选本地语音识别 worker。
 - 基于截图、窗口和区域捕获的权限感知视觉上下文。
-- 记忆块、项目上下文、关系状态和轻量反思机制。
+- 记忆块、项目上下文、关系状态和轻量反思机制；默认采用经过评测的
+  [`BM25 phrase v2 + MMR 0.2`](docs/ailis-memory-bm25-mmr-baseline.md) 本地检索基线，
+  默认路径不加载 dense 模型，也不调用检索时 Query Planner。
 - 文件、代码、电脑操作、邮件、MCP 技能、Web/Search 和本地运行时工具层。
 - 对文件、应用、账号或外部服务有影响的动作使用显式审批模型。
 - 在 Agent 执行链路中接入 EMBER-Harness 阶段门控，对不可信输入、工具调用、工具返回和最终输出进行检查。

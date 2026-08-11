@@ -357,8 +357,10 @@ test('web experience enables server TTS and unlocks audio from the send gesture'
     assert.match(source, /petUrl\.searchParams\.set\('assetVersion', WEB_ASSET_VERSION\)/);
     assert.match(source, /payload\.type === 'system-notice'/);
     assert.match(source, /showSystemNotice\(payload\.notice \|\| \{\}\)/);
-    assert.match(
-        source,
-        /await petWindow\.audioPlayer\?\.unlock\?\.\(\);\s+await petWindow\.chatSystem\.sendExternalMessage\(text\)/
+    const audioUnlockIndex = source.indexOf('await petWindow.audioPlayer?.unlock?.();');
+    const messageSendIndex = source.indexOf(
+        'const sendPromise = petWindow.chatSystem.sendExternalMessage(text, { attachments });'
     );
+    assert.ok(audioUnlockIndex >= 0, 'the send gesture should unlock audio');
+    assert.ok(messageSendIndex > audioUnlockIndex, 'audio should unlock before the message is sent');
 });

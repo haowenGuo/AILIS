@@ -6,7 +6,98 @@ import path from 'node:path';
 import test from 'node:test';
 
 const require = createRequire(import.meta.url);
-const { AILISMemoryRuntime } = require('../electron/ailis-memory-store.cjs');
+const {
+    AILISMemoryRuntime,
+    MEMORY_RETRIEVAL_STRATEGY_ID
+} = require('../electron/ailis-memory-store.cjs');
+const {
+    SESSION_REPEAT_PENALTY,
+    rankMemoryEvents,
+    selectWithSoftSessionDiversity
+} = require('../electron/ailis-memory-lexical-retriever.cjs');
+
+test('AILIS memory defaults to the frozen BM25 phrase v2 plus MMR 0.2 baseline', async () => {
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-memory-bm25-baseline-'));
+    const memory = new AILISMemoryRuntime({
+        rootDir: path.join(rootDir, 'memory'),
+        workspaceRoot: rootDir
+    });
+
+    const target = memory.recordTurn({
+        sessionId: 'food-preference',
+        userMessage: 'In 2026 I switched to Mediterranean seafood and octopus recipes.',
+        assistantMessage: 'I will remember the Mediterranean seafood preference.',
+        source: 'test'
+    }).event;
+    memory.recordTurn({
+        sessionId: 'garden-notes',
+        userMessage: 'I planted lavender beside the garden path.',
+        assistantMessage: 'The garden note is saved.',
+        source: 'test'
+    });
+
+    const result = memory.searchMemory('Mediterranean seafood 2026', { limit: 1 });
+
+    const status = memory.getStatus();
+    assert.equal(status.memoryStrategy, 'bm25_phrase_v2');
+    assert.equal(status.memoryStrategyDiagnostics.denseEnabled, false);
+    assert.equal(status.memoryStrategyDiagnostics.queryPlannerEnabled, false);
+    assert.equal(MEMORY_RETRIEVAL_STRATEGY_ID, 'bm25_phrase_v2');
+    assert.equal(result.strategy, 'bm25_phrase_v2');
+    assert.equal(result.events[0].id, target.id);
+    assert.equal(result.diagnostics.indexBackend, 'in_memory_bm25_mmr_v2');
+    assert.equal(result.diagnostics.sessionRepeatPenalty, 0.2);
+});
+
+test('AILIS BM25 baseline applies the evaluated soft session-diversity penalty', () => {
+    const ranked = [
+        { event: { id: 'a1', sessionId: 'a' }, index: 1, score: 100 },
+        { event: { id: 'a2', sessionId: 'a' }, index: 2, score: 99 },
+        { event: { id: 'b1', sessionId: 'b' }, index: 3, score: 90 }
+    ];
+
+    const selected = selectWithSoftSessionDiversity(ranked, 2);
+
+    assert.equal(SESSION_REPEAT_PENALTY, 0.2);
+    assert.deepEqual(selected.map((entry) => entry.event.id), ['a1', 'b1']);
+    assert.equal(selected[1].adjustedScore, 90);
+});
+
+test('AILIS BM25 baseline keeps exact phrases, numeric terms, and cross-session diversity', () => {
+    const result = rankMemoryEvents([
+        {
+            id: 'exact-current',
+            sessionId: 'travel-current',
+            userText: 'The Kyoto hotel booking changed to 2026 room 508.',
+            assistantText: 'Room 508 in Kyoto is the current booking.',
+            importance: 1
+        },
+        {
+            id: 'same-session-detail',
+            sessionId: 'travel-current',
+            userText: 'The Kyoto hotel has a quiet lobby and breakfast.',
+            assistantText: 'I saved the hotel details.',
+            importance: 1
+        },
+        {
+            id: 'other-session-confirmation',
+            sessionId: 'travel-confirmation',
+            userText: 'The 2026 confirmation email also lists Kyoto room 508.',
+            assistantText: 'The booking email confirms room 508.',
+            importance: 1
+        }
+    ], 'Kyoto room 508 in 2026', { limit: 2 });
+
+    assert.deepEqual(
+        new Set(result.events.map((event) => event.id)),
+        new Set(['exact-current', 'other-session-confirmation'])
+    );
+    assert.deepEqual(
+        new Set(result.events.map((event) => event.sessionId)),
+        new Set(['travel-current', 'travel-confirmation'])
+    );
+    assert.ok(result.diagnostics.queryPhraseCount > 0);
+});
 
 test('AILIS memory runtime persists events and redacted secret index without legacy rule extraction', async () => {
     const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-memory-'));

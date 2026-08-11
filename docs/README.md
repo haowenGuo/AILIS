@@ -8,6 +8,8 @@ This directory contains the design record, operating guides, evaluation plans, a
 - [System TaskAgent Architecture](ailis-system-taskagent-architecture.md) - Persona/TaskAgent responsibilities and handoff contract.
 - [Codex Multi-Agent Data-Flow Migration](ailis-codex-multi-agent-dataflow-migration.md) - current agent object and result flow.
 - [Memory Architecture V2](ailis-memory-architecture-v2.md) - current memory lanes and lifecycle.
+- [Memory BM25 + MMR Baseline](ailis-memory-bm25-mmr-baseline.md) - current production retrieval
+  parameters, BM25-only evaluation results, latency, and future comparison rules.
 - [Tool Ecosystem Driver Guide](tool-ecosystem-driver-guide.md) - tool, MCP, skill, and adapter entry points.
 - [Demo and Benchmark Scorecard](ailis-demo-benchmark-scorecard.md) - current evidence and benchmark status.
 
@@ -56,6 +58,7 @@ This directory contains the design record, operating guides, evaluation plans, a
 
 - [Memory Architecture V1](ailis-memory-architecture-v1.md)
 - [Memory Architecture V2](ailis-memory-architecture-v2.md)
+- [Memory BM25 + MMR Baseline](ailis-memory-bm25-mmr-baseline.md)
 - [User System Launch Plan](ailis-user-system-launch.md)
 - [Embodied Agent Architecture](ailis-embodied-agent-architecture.md)
 - [Realtime Voice And AIRI Research](realtime-voice-airi-research.md)

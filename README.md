@@ -9,7 +9,7 @@
   </p>
   <p>
     <img alt="ToolSandbox frozen holdout mean 71.51 percent" src="https://img.shields.io/badge/ToolSandbox_holdout-71.51%25-2563eb?style=for-the-badge">
-    <img alt="GAIA 165-task semantic score 73.33 percent" src="https://img.shields.io/badge/GAIA_165_semantic-73.33%25-059669?style=for-the-badge">
+    <img alt="AILIS-LUNA GAIA 165-task semantic score 72.12 percent" src="https://img.shields.io/badge/AILIS--LUNA_GAIA_165-72.12%25-059669?style=for-the-badge">
     <img alt="Internal longitudinal companion evaluation 78.46 out of 100" src="https://img.shields.io/badge/Humanlike_longitudinal-78.46%2F100-059669?style=for-the-badge">
   </p>
   <p>
@@ -21,7 +21,7 @@
     <a href="README.de.md">Deutsch</a>
   </p>
   <p>
-    <a href="https://101.133.239.56/">Homepage</a> ·
+    <a href="https://101.133.239.56/Test/">Homepage</a> ·
     <a href="https://github.com/haowenGuo/AILIS/releases/tag/v1.1.0">Download</a> ·
     <a href="docs/ailis-embodied-agent-architecture.md">Architecture</a> ·
     <a href="docs/ailis-demo-benchmark-scorecard.md">Benchmarks</a>
@@ -37,22 +37,18 @@ AILIS is developed as an evaluated agent system, not only as a character demo. T
 | Evaluation track | Result | Scale | Evidence status |
 | --- | ---: | ---: | --- |
 | **Apple ToolSandbox** | **71.51%** frozen holdout mean | 239 / 239 officially scored, 0 errors | Primary public task-quality result |
-| **GAIA full validation (current TaskAgent)** | **121 / 165, 73.33%** semantic correctness | Public L1-L3 validation; `gpt-5.6-luna`, medium | 9 tasks behind the historical native Codex audited reference; not an official leaderboard submission |
+| **GAIA full validation (AILIS-LUNA)** | **119 / 165, 72.12%** semantic correctness | Public L1-L3 validation; `gpt-5.6-luna`, medium | Same-model comparison: +12 tasks and +7.27 pp over Codex-LUNA; not an official leaderboard submission |
 | **GAIA Level 1 strict (2026-07)** | Run 1: **41 / 53, 77.36%** | First of two planned full runs | Earlier strict-memory-isolated result retained for comparison |
 | **GAIA Level 1 historical** | **85.85%** two-run mean; best run **90.57%** | 53 public validation tasks x 2 | Historical local diagnostic; task-memory isolation was missing |
 | **Longitudinal companion eval** | **78.46 / 100** weighted mean | 171 judged checkpoints from 30-day scenarios | Internal product evaluation |
 | **OSWorld small run** | **2 / 4**, 50% | 4 historical desktop tasks | Early external-benchmark signal; sample is too small for a broad claim |
 | **Humanlike dataset validation** | **1000 / 1000** valid | 9 categories, 251 negative probes | Evaluation coverage, not model quality |
 
-> **Primary headline:** the frozen Apple ToolSandbox holdout mean is **71.51%**. The current full-set GAIA diagnostic is **121 / 165 (73.33%)**, produced by the pure AILIS TaskAgent path and scored by semantic equivalence. The historical native Codex reference on the same 165-task manifest is **130 / 165 (78.79%)**, nine tasks higher, although the runs used different model versions. These are local public-validation results, not official private-test submissions.
+> **Primary headline:** the frozen Apple ToolSandbox holdout mean is **71.51%**. On the complete 165-task GAIA public validation set, AILIS-LUNA scores **119 / 165 (72.12%)** versus **107 / 165 (64.85%)** for Codex-LUNA. Both runs use `gpt-5.6-luna` at medium reasoning, the same task manifest, and semantic scoring over the complete user-visible answer. AILIS leads by **12 tasks**, or **7.27 percentage points**. These are local public-validation results, not official private-test submissions.
 
 [Full benchmark scorecard](docs/ailis-demo-benchmark-scorecard.md) ·
 [GAIA methodology](docs/ailis-desktop-real-gaia-eval.md) ·
 [ToolSandbox protocol and gates](docs/ailis-toolsandbox-v4-optimization-plan.md)
-
-<p align="center">
-  <img alt="AILIS evaluation snapshot: ToolSandbox 71.51 percent, GAIA strict Run 1 77.36 percent, longitudinal companion score 78.46, and OSWorld small run 2 of 4" src="docs/assets/benchmarks/ailis-evaluation-snapshot-20260720.svg">
-</p>
 
 <p align="center">
   <img alt="How people use AILIS as a desktop AI companion" src="docs/assets/ailis-zhihu/ailis-user-flow-image2.png">
@@ -86,7 +82,9 @@ AILIS brings three layers together:
 - Voice output through desktop TTS workers and cloud provider paths.
 - Optional local speech recognition worker for desktop voice input.
 - Permission-aware visual context through screenshot, window, and region capture flows.
-- Memory blocks, project context, relationship state, and lightweight reflection.
+- Memory blocks, project context, relationship state, and lightweight reflection, with the
+  evaluated [`BM25 phrase v2 + MMR 0.2`](docs/ailis-memory-bm25-mmr-baseline.md) local retrieval
+  baseline (no dense model or retrieval-time query planner on the default path).
 - Tool layer for file operations, code work, computer actions, email, MCP skills, web/search support, and local runtime utilities.
 - Approval-aware execution model for actions that can affect files, apps, accounts, or external services.
 - EMBER-Harness stage gates for checking untrusted inputs, tool calls, tool results, and final outputs during agent execution.
@@ -103,22 +101,20 @@ AILIS is not only an expressive avatar and not only an automation console. The i
 
 ## GAIA: General Agent Capability
 
-### Current 165-task pure TaskAgent baseline
+### Model-controlled 165-task comparison
 
-The current full public-validation diagnostic is frozen at commit `f14083e`. It runs the pure AILIS TaskAgent directly through the clean GAIA runner, using `gpt-5.6-luna` at medium reasoning effort. A semantic audit counted answers as correct when their meaning matched the reference answer, without requiring identical wording.
+The current comparison runs AILIS-LUNA and native Codex-LUNA on the complete GAIA public validation set. Both systems use `gpt-5.6-luna` at medium reasoning effort, the same 165-task list and manifest, and the same semantic judging policy over the complete answer visible to the user. This removes the model-version mismatch in the earlier comparison.
 
-| Level | Current TaskAgent | Re-scored A6 baseline | Native Codex reference | AILIS vs Codex |
-| --- | ---: | ---: | ---: | ---: |
-| L1 | **44 / 53, 83.02%** | 40 / 53, 75.47% | 46 / 53, 86.79% | -2 tasks |
-| L2 | **64 / 86, 74.42%** | 59 / 86, 68.60% | 64 / 86, 74.42% | **Tied** |
-| L3 | **13 / 26, 50.00%** | 15 / 26, 57.69% | 20 / 26, 76.92% | -7 tasks |
-| **All levels** | **121 / 165, 73.33%** | 114 / 165, 69.09% | 130 / 165, 78.79% | **-9 tasks** |
+| Level | AILIS-LUNA | Codex-LUNA | AILIS lead |
+| --- | ---: | ---: | ---: |
+| L1 | **43 / 53, 81.13%** | 41 / 53, 77.36% | **+2 tasks, +3.77 pp** |
+| L2 | **64 / 86, 74.42%** | 57 / 86, 66.28% | **+7 tasks, +8.14 pp** |
+| L3 | **12 / 26, 46.15%** | 9 / 26, 34.62% | **+3 tasks, +11.54 pp** |
+| **All levels** | **119 / 165, 72.12%** | **107 / 165, 64.85%** | **+12 tasks, +7.27 pp** |
 
-The Codex column is the audited actual-submission score from the earlier native Codex run over the same immutable 165-task manifest. It is the closest available system-level reference, but not a strict model-controlled A/B: the Codex run used `gpt-5.5` at medium reasoning, while the current AILIS run used `gpt-5.6-luna` at medium. The comparison therefore identifies likely orchestration and execution gaps; it does not isolate the agent harness from the underlying model. The next clean comparison must run both systems with the same model, reasoning effort, task manifest, inactivity watchdog, and semantic scorer.
+Semantic scoring evaluates whether the complete user-visible response matches the reference answer in meaning rather than requiring identical wording or relying only on a short-answer extractor. Under this controlled protocol, AILIS leads Codex at every difficulty level. L3 still has the lowest absolute accuracy and remains the main capability target.
 
-The semantic audit covers the complete user-visible responses. Three rows rejected by the controller actually contained complete, correct visible answers and are counted as correct; three genuine no-final-answer timeouts are counted as incorrect. The run also exposed evaluation-infrastructure faults: a fixed 12-minute process watchdog repeatedly killed active workers, and the short-answer extractor sometimes rejected valid prose or boxed numeric answers. These faults affected cost and completion, so the watchdog has since been changed to an inactivity timeout; they are not treated as TaskAgent accuracy failures in the semantic score.
-
-This result is intended as the new comparable development baseline, not a claim against the official private GAIA leaderboard. It shows gains on L1 and L2 over the semantically re-scored A6 baseline, while L3 remains the clearest regression target.
+This is a local diagnostic on the public validation split, not an official private-test leaderboard submission. It is intended as a reproducible system-level comparison under a shared model and evaluation protocol.
 
 ### Next evaluation policy
 
