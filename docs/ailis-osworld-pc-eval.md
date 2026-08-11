@@ -74,6 +74,21 @@ One clean `test_small` task:
 pnpm bench:osworld:ailis:test-small:wsl
 ```
 
+Frozen ten-domain development gate (one mechanically selected task per domain):
+
+```powershell
+wsl -d Ubuntu-22.04 -- bash /mnt/f/AILIS/main/scripts/run-osworld-ailis-development-gate-wsl.sh
+```
+
+The gate selects the lexicographically smallest task UUID in each domain of the
+pinned `test_small.json`. The selection rule is tested and committed before the
+run so failed or difficult tasks cannot be replaced after results are observed.
+Set `PASS_NAME=pass-2` for an independent second pass. Before starting the VM,
+the wrapper prefetches task inputs and evaluator fixtures into the official host
+cache through the Windows system proxy. Evaluator fixtures stay outside the VM
+and TaskAgent workspace and are never exposed to the model. This prevents local
+WSL access restrictions to Hugging Face from being miscounted as Agent failures.
+
 One clean local Verified-compatible task:
 
 ```powershell

@@ -85,15 +85,18 @@ test('Gateway can inject the OSWorld computer transport and isolate its tool reg
 });
 
 test('Clean OSWorld entrypoint does not import the legacy specialized agent', async () => {
-    const [pythonRunner, nodeRunner, shellRunner, packageJson] = await Promise.all([
+    const [pythonRunner, nodeRunner, shellRunner, gateRunner, packageJson] = await Promise.all([
         fs.readFile(path.join(PROJECT_ROOT, 'scripts', 'osworld', 'run_clean_ailis_osworld.py'), 'utf8'),
         fs.readFile(path.join(PROJECT_ROOT, 'scripts', 'run-osworld-task-agent.mjs'), 'utf8'),
         fs.readFile(path.join(PROJECT_ROOT, 'scripts', 'run-osworld-ailis-wsl.sh'), 'utf8'),
+        fs.readFile(path.join(PROJECT_ROOT, 'scripts', 'run-osworld-ailis-development-gate-wsl.sh'), 'utf8'),
         fs.readFile(path.join(PROJECT_ROOT, 'package.json'), 'utf8')
     ]);
     const cleanSources = `${pythonRunner}\n${nodeRunner}\n${shellRunner}`;
     assert.doesNotMatch(cleanSources, /from ailis_osworld_agent import|OS_SKILL_CATALOG/);
     assert.match(shellRunner, /run_clean_ailis_osworld\.py/);
+    assert.match(gateRunner, /prefetch-osworld-assets\.ps1/);
+    assert.match(gateRunner, /run_clean_ailis_osworld\.py/);
     assert.match(packageJson, /bench:osworld:ailis:verified:smoke:wsl/);
 });
 
@@ -112,6 +115,21 @@ test('Pinned OSWorld suite counts match the downloaded official source', async (
             0
         );
         assert.equal(actual, expected, fileName);
+    }
+});
+
+test('OSWorld development gate freezes one mechanically selected task per domain', async () => {
+    const [gate, small, verifiedCompatible] = await Promise.all([
+        fs.readFile(path.join(PROJECT_ROOT, 'evals', 'engineering', 'osworld-development-gate.json'), 'utf8').then(JSON.parse),
+        fs.readFile(path.join(PROJECT_ROOT, 'build-cache', 'OSWorld', 'evaluation_examples', 'test_small.json'), 'utf8').then(JSON.parse),
+        fs.readFile(path.join(PROJECT_ROOT, 'build-cache', 'OSWorld', 'evaluation_examples', 'test_nogdrive.json'), 'utf8').then(JSON.parse)
+    ]);
+    assert.deepEqual(Object.keys(gate), Object.keys(small));
+    for (const [domain, ids] of Object.entries(gate)) {
+        assert.equal(ids.length, 1, domain);
+        const mechanicallySelectedId = [...small[domain]].sort()[0];
+        assert.equal(ids[0], mechanicallySelectedId, domain);
+        assert.equal(verifiedCompatible[domain].includes(ids[0]), true, domain);
     }
 });
 

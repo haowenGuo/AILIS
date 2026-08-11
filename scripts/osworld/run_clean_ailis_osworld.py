@@ -39,6 +39,10 @@ SUPPORTED_ACTION_TYPES = {
 }
 
 
+class OSWorldSetupError(RuntimeError):
+    """Task initialization failed before TaskAgent received an observation."""
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Clean OSWorld runner using the current production AILIS TaskAgent"
@@ -60,6 +64,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--sleep-after-action", type=float, default=0.4)
     parser.add_argument("--settle-before-agent", type=float, default=15.0)
     parser.add_argument("--settle-before-eval", type=float, default=3.0)
+    parser.add_argument("--setup-retries", type=int, default=2)
+    parser.add_argument("--setup-retry-wait-seconds", type=float, default=10.0)
     parser.add_argument(
         "--result-dir",
         default="/mnt/f/AILIS/main/eval-results/engineering/osworld-clean-task-agent",
@@ -87,6 +93,8 @@ def parse_args() -> argparse.Namespace:
     args.limit = max(0, args.limit)
     args.max_actions = max(1, args.max_actions)
     args.task_timeout_seconds = max(60, args.task_timeout_seconds)
+    args.setup_retries = max(0, args.setup_retries)
+    args.setup_retry_wait_seconds = max(0.0, args.setup_retry_wait_seconds)
     return args
 
 
@@ -401,7 +409,12 @@ def run_one(
     instruction_path = example_dir / "instruction.txt"
     instruction_path.write_text(instruction + "\n", encoding="utf-8")
     LOGGER.info("Resetting %s/%s: %s", domain, example_id, instruction)
-    observation = env.reset(task_config=example)
+    try:
+        observation = env.reset(task_config=example)
+    except Exception as error:
+        raise OSWorldSetupError(
+            f"Official OSWorld setup failed for {domain}/{example_id}: {error}"
+        ) from error
     if args.settle_before_agent:
         time.sleep(args.settle_before_agent)
         observation = env._get_obs()  # Official DesktopEnv public observation payload.
@@ -499,6 +512,10 @@ def run_one(
 def summarize(args: argparse.Namespace, results: Iterable[Dict[str, Any]]) -> Dict[str, Any]:
     rows = list(results)
     scored = [float(row["score"]) for row in rows if row.get("score") is not None]
+    infrastructure_failures = [
+        row for row in rows if row.get("infrastructure_failure") is True
+    ]
+    reportable_score = len(rows) > 0 and len(scored) == len(rows) and not infrastructure_failures
     summary = {
         "schema": "ailis.osworld.run_summary.v1",
         "suite": args.suite,
@@ -506,6 +523,8 @@ def summarize(args: argparse.Namespace, results: Iterable[Dict[str, Any]]) -> Di
         "task_count": len(rows),
         "scored_count": len(scored),
         "average_score": sum(scored) / len(scored) if scored else 0.0,
+        "infrastructure_failure_count": len(infrastructure_failures),
+        "reportable_score": reportable_score,
         "model": args.codex_model,
         "reasoning_effort": args.codex_reasoning_effort,
         "agent_protocol": "production_ailis_gateway_clean_computer_transport",
@@ -553,19 +572,60 @@ def main() -> int:
     try:
         for index, (domain, example_id) in enumerate(tasks, start=1):
             LOGGER.info("[%d/%d] %s/%s", index, len(tasks), domain, example_id)
-            try:
-                results.append(run_one(args, ailis_root, env, domain, example_id))
-            except Exception as error:  # pylint: disable=broad-except
-                LOGGER.exception("Task %s/%s failed: %s", domain, example_id, error)
-                results.append(
-                    {
-                        "domain": domain,
-                        "example_id": example_id,
-                        "status": "runner_exception",
-                        "score": 0.0,
-                        "error": str(error),
-                    }
-                )
+            setup_attempt = 0
+            while True:
+                try:
+                    row = run_one(args, ailis_root, env, domain, example_id)
+                    row["setup_attempts"] = setup_attempt + 1
+                    results.append(row)
+                    break
+                except OSWorldSetupError as error:
+                    setup_attempt += 1
+                    LOGGER.exception(
+                        "Infrastructure setup failure for %s/%s (attempt %d/%d): %s",
+                        domain,
+                        example_id,
+                        setup_attempt,
+                        args.setup_retries + 1,
+                        error,
+                    )
+                    if setup_attempt > args.setup_retries:
+                        failure = {
+                            "domain": domain,
+                            "example_id": example_id,
+                            "status": "infrastructure_setup_failed",
+                            "score": None,
+                            "infrastructure_failure": True,
+                            "setup_attempts": setup_attempt,
+                            "error": str(error),
+                        }
+                        results.append(failure)
+                        example_dir = Path(args.result_dir) / args.suite / domain / example_id
+                        example_dir.mkdir(parents=True, exist_ok=True)
+                        (example_dir / "setup-error.json").write_text(
+                            json.dumps(failure, ensure_ascii=False, indent=2) + "\n",
+                            encoding="utf-8",
+                        )
+                        break
+                    try:
+                        env.close()
+                    except Exception as close_error:  # pylint: disable=broad-except
+                        LOGGER.warning("Failed to close VM before setup retry: %s", close_error)
+                    if args.setup_retry_wait_seconds:
+                        time.sleep(args.setup_retry_wait_seconds)
+                    env = make_env(args)
+                except Exception as error:  # pylint: disable=broad-except
+                    LOGGER.exception("Task %s/%s failed: %s", domain, example_id, error)
+                    results.append(
+                        {
+                            "domain": domain,
+                            "example_id": example_id,
+                            "status": "runner_exception",
+                            "score": 0.0,
+                            "error": str(error),
+                        }
+                    )
+                    break
     finally:
         env.close()
     print(json.dumps(summarize(args, results), ensure_ascii=False, indent=2))
