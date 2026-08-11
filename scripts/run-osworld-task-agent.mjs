@@ -186,6 +186,7 @@ async function main() {
             approvalPolicy: 'never',
             confirmationPolicy: 'never',
             visionPermissionPolicy: 'auto',
+            maxInputImages: 2,
             approved: true,
             executeExternal: false,
             allowOutsideWorkspace: false,

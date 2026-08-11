@@ -21,6 +21,7 @@ const DEFAULT_PINNED_COMPLETE_OUTPUTS = 2;
 const DEFAULT_STALE_TOOL_OUTPUT_CHARS = 900;
 const DEFAULT_COMPACTION_TRIGGER_OUTPUTS = 6;
 const DEFAULT_COMPACTION_TRIGGER_CHARS = 32000;
+const DEFAULT_MAX_INPUT_IMAGES = 8;
 const IMAGE_CONTENT_OMITTED_PLACEHOLDER = 'image content omitted because you do not support image input';
 
 function normalizeInputModalities(inputModalities = []) {
@@ -424,6 +425,7 @@ class ContextManager {
         const clone = this.clone();
         clone.normalizeHistory(inputModalities);
         clone.compactForBudget(options);
+        clone.limitInputImages(options.maxInputImages);
         return clone.rawItems();
     }
 
@@ -432,6 +434,7 @@ class ContextManager {
         const clone = this.clone();
         clone.normalizeHistory(inputModalities);
         clone.compactForBudget(options);
+        clone.limitInputImages(options.maxInputImages);
         return clone.buildContextPackage(options);
     }
 
@@ -682,6 +685,55 @@ class ContextManager {
         if (!supportsImages(inputModalities)) {
             this.stripImagesWhenUnsupported();
         }
+    }
+
+    limitInputImages(maxImages = DEFAULT_MAX_INPUT_IMAGES) {
+        const configured = Number(maxImages);
+        const limit = Number.isFinite(configured)
+            ? Math.max(0, Math.min(DEFAULT_MAX_INPUT_IMAGES, Math.trunc(configured)))
+            : DEFAULT_MAX_INPUT_IMAGES;
+        let kept = 0;
+        const keepNewestImages = (content = []) => {
+            const next = [];
+            for (let index = (Array.isArray(content) ? content.length : 0) - 1; index >= 0; index -= 1) {
+                const part = content[index];
+                if (part?.type !== 'input_image') {
+                    next.unshift(cloneJson(part));
+                    continue;
+                }
+                if (kept < limit) {
+                    kept += 1;
+                    next.unshift(cloneJson(part));
+                }
+            }
+            return next.filter(Boolean);
+        };
+        for (let index = this.items.length - 1; index >= 0; index -= 1) {
+            const item = this.items[index];
+            if (item?.type === 'function_call_output' || item?.type === 'custom_tool_call_output') {
+                const normalized = FunctionCallOutputPayload.normalize(item.output);
+                if (normalized.body?.kind === 'content_items') {
+                    this.items[index] = {
+                        ...cloneJson(item),
+                        output: FunctionCallOutputPayload.fromContentItems(
+                            keepNewestImages(normalized.body.value),
+                            { success: normalized.success }
+                        )
+                    };
+                }
+                continue;
+            }
+            if (item?.type === 'message' && Array.isArray(item.content)) {
+                const content = keepNewestImages(item.content);
+                this.items[index] = {
+                    ...cloneJson(item),
+                    content: content.length
+                        ? content
+                        : [ContentItem.inputText('older image omitted from the current model view')].filter(Boolean)
+                };
+            }
+        }
+        return kept;
     }
 
     compactStaleToolOutputs({ force = false, maxChars = DEFAULT_STALE_TOOL_OUTPUT_CHARS } = {}) {

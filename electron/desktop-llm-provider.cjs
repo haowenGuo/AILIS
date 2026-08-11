@@ -1851,7 +1851,8 @@ async function callGemini(settings, payload, messages) {
 
 async function callDesktopLlmProvider(settings = {}, payload = {}) {
     const resolvedSettings = getResolvedSettings(settings);
-    const responseInputMessages = Array.isArray(payload.input)
+    const responseInputMessages = Array.isArray(payload.input) &&
+        resolvedSettings.provider !== CODEX_MODEL_BRIDGE_PROVIDER
         ? responseItemsToChatMessages({
               instructions: payload.instructions,
               input: payload.input

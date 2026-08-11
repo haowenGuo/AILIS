@@ -27,8 +27,9 @@ const {
         buildTaskRunHandoffPackage,
         build_forked_context_checkpoint,
         buildToolObservationDigest,
-        detectInvalidDecisionNoProgress,
+    detectInvalidDecisionNoProgress,
     isAgentLlmSettingsMissing,
+    isTerminalAgentDecisionFailure,
     looksLikeLeakedAgentProtocol,
     resolveAgentDirectToolChoice,
     resolveMemoryPolicy,
@@ -251,15 +252,34 @@ test('TaskAgent keeps tool-returned image artifacts enabled on the next model tu
         );
         assert.ok(screenshotOutput);
         assert.ok(screenshotOutput.output.body.value.some((part) => part.type === 'input_image'));
+        const auditImage = next.messages.flatMap((message) =>
+            Array.isArray(message.content) ? message.content : []
+        ).find((part) => part.type === 'image_url');
+        assert.ok(auditImage);
+        assert.match(
+            auditImage.image_url?.url || '',
+            new RegExp(path.basename(imagePath).replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$')
+        );
         assert.ok(next.messages.some((message) =>
             message.role === 'user' &&
             Array.isArray(message.content) &&
             message.content.some((part) =>
                 part.type === 'image_url' &&
-                /^data:image\/png;base64,/.test(part.image_url?.url || '')
+                !/^data:image\//.test(part.image_url?.url || '')
             )
         ));
+        assert.ok(next.messages.every((message) =>
+            !JSON.stringify(message).includes('data:image/')
+        ));
     }).finally(() => fs.rm(imagePath, { force: true }));
+});
+
+test('TaskAgent treats invalid Codex bridge input as terminal instead of retrying forever', () => {
+    assert.equal(isTerminalAgentDecisionFailure({
+        ok: false,
+        status: 'invalid_codex_bridge_input',
+        error: 'Codex bridge image inputs exceed the 8-image limit.'
+    }), true);
 });
 
 test('explicit task execution forces Persona handoff without changing ordinary conversation', () => {

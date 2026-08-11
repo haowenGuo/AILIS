@@ -1224,36 +1224,29 @@ async function resolveCodexAuthSnapshot(settings = {}) {
 
 function runCodexResponsesInference(settings = {}, auth = {}, requestBody = {}, {
     timeoutMs = 120000,
-    signal = null
+    signal = null,
+    createAgent = createCodexResponsesAgent,
+    requestImpl = https.request
 } = {}) {
-    return new Promise(async (resolve) => {
-        let agentInfo;
-        try {
-            agentInfo = await createCodexResponsesAgent(settings, timeoutMs);
-        } catch (error) {
-            resolve({
-                ok: false,
-                code: 'codex_network_error',
-                error: error?.message || String(error)
-            });
-            return;
-        }
-        const body = JSON.stringify(requestBody);
-        const endpoint = new URL(CODEX_CHATGPT_BACKEND_URL);
+    const effectiveTimeoutMs = Math.max(1, Number(timeoutMs) || 120000);
+    return new Promise((resolve) => {
+        let agentInfo = null;
         let settled = false;
         let clientRequest = null;
+        let hardTimeout = null;
         const finish = (result) => {
             if (settled) {
                 return;
             }
             settled = true;
+            clearTimeout(hardTimeout);
             if (typeof signal?.removeEventListener === 'function') {
                 signal.removeEventListener('abort', onAbort);
             }
-            agentInfo.agent.destroy();
+            agentInfo?.agent?.destroy?.();
             resolve({
                 ...result,
-                proxyUsed: Boolean(agentInfo.proxy)
+                proxyUsed: Boolean(agentInfo?.proxy)
             });
         };
         const onAbort = () => {
@@ -1264,6 +1257,18 @@ function runCodexResponsesInference(settings = {}, auth = {}, requestBody = {}, 
                 error: 'Codex model request was aborted.'
             });
         };
+        const onHardTimeout = () => {
+            const error = new Error(
+                `Codex model request exceeded the absolute deadline of ${effectiveTimeoutMs}ms.`
+            );
+            clientRequest?.destroy(error);
+            finish({
+                ok: false,
+                code: 'timeout',
+                error: error.message
+            });
+        };
+        hardTimeout = setTimeout(onHardTimeout, effectiveTimeoutMs);
         if (signal?.aborted) {
             onAbort();
             return;
@@ -1271,92 +1276,116 @@ function runCodexResponsesInference(settings = {}, auth = {}, requestBody = {}, 
         if (typeof signal?.addEventListener === 'function') {
             signal.addEventListener('abort', onAbort, { once: true });
         }
-        clientRequest = https.request({
-            host: endpoint.hostname,
-            port: 443,
-            path: CODEX_RESPONSES_PATH,
-            method: 'POST',
-            agent: agentInfo.agent,
-            headers: {
-                Authorization: `Bearer ${auth.accessToken}`,
-                'ChatGPT-Account-Id': auth.accountId,
-                'Content-Type': 'application/json',
-                Accept: 'text/event-stream',
-                'User-Agent': 'codex_cli_rs/ailis-model-bridge',
-                'x-client-request-id': randomUUID(),
-                'Content-Length': Buffer.byteLength(body)
-            }
-        }, (response) => {
-            let raw = '';
-            response.setEncoding('utf8');
-            response.on('data', (chunk) => {
-                raw += chunk;
-                if (Buffer.byteLength(raw) > CODEX_RESPONSES_MAX_BYTES) {
-                    clientRequest.destroy(new Error('Codex Responses stream exceeded the bridge size limit.'));
-                }
-            });
-            response.on('end', () => {
-                const status = Number(response.statusCode) || 0;
-                if (status < 200 || status >= 300) {
-                    let message = '';
-                    try {
-                        const parsed = JSON.parse(raw);
-                        message = normalizeText(parsed?.error?.message || parsed?.message);
-                    } catch {}
-                    const authFailure = status === 401 || status === 403;
-                    const usageFailure = status === 429;
-                    finish({
-                        ok: false,
-                        code: authFailure
-                            ? 'codex_auth_required'
-                            : usageFailure
-                                ? 'codex_usage_limited'
-                                : status >= 500
-                                    ? 'codex_server_error'
-                                    : 'codex_responses_error',
-                        status,
-                        error: message || `Codex Responses request failed with status ${status}.`
-                    });
-                    return;
-                }
-                const parsed = parseCodexResponsesSse(raw);
-                if (parsed.failure) {
-                    finish({
-                        ok: false,
-                        code: 'codex_responses_failed',
-                        error: normalizeText(
-                            parsed.failure?.message,
-                            'Codex Responses stream reported a failed response.'
-                        ),
-                        details: parsed.failure
-                    });
-                    return;
-                }
+        (async () => {
+            try {
+                agentInfo = await createAgent(settings, effectiveTimeoutMs);
+            } catch (error) {
                 finish({
-                    ok: true,
-                    ...parsed
+                    ok: false,
+                    code: 'codex_network_error',
+                    error: error?.message || String(error)
                 });
-            });
-        });
-        clientRequest.setTimeout(timeoutMs, () => {
-            clientRequest.destroy(new Error(`Codex model request timed out after ${timeoutMs}ms.`));
-        });
-        clientRequest.once('error', (error) => {
-            if (settled) {
                 return;
             }
-            const aborted = signal?.aborted || /aborted/i.test(error?.message || '');
-            finish({
-                ok: false,
-                code: aborted
-                    ? 'aborted'
-                    : /timed out|timeout/i.test(error?.message || '')
-                        ? 'timeout'
-                        : 'codex_network_error',
-                error: error?.message || String(error)
+            if (settled) {
+                agentInfo?.agent?.destroy?.();
+                return;
+            }
+            const body = JSON.stringify(requestBody);
+            const endpoint = new URL(CODEX_CHATGPT_BACKEND_URL);
+            clientRequest = requestImpl({
+                host: endpoint.hostname,
+                port: 443,
+                path: CODEX_RESPONSES_PATH,
+                method: 'POST',
+                agent: agentInfo.agent,
+                headers: {
+                    Authorization: `Bearer ${auth.accessToken}`,
+                    'ChatGPT-Account-Id': auth.accountId,
+                    'Content-Type': 'application/json',
+                    Accept: 'text/event-stream',
+                    'User-Agent': 'codex_cli_rs/ailis-model-bridge',
+                    'x-client-request-id': randomUUID(),
+                    'Content-Length': Buffer.byteLength(body)
+                }
+            }, (response) => {
+                let raw = '';
+                response.setEncoding('utf8');
+                response.on('data', (chunk) => {
+                    raw += chunk;
+                    if (Buffer.byteLength(raw) > CODEX_RESPONSES_MAX_BYTES) {
+                        clientRequest.destroy(new Error('Codex Responses stream exceeded the bridge size limit.'));
+                    }
+                });
+                response.on('end', () => {
+                    const status = Number(response.statusCode) || 0;
+                    if (status < 200 || status >= 300) {
+                        let message = '';
+                        try {
+                            const parsed = JSON.parse(raw);
+                            message = normalizeText(parsed?.error?.message || parsed?.message);
+                        } catch {}
+                        const authFailure = status === 401 || status === 403;
+                        const usageFailure = status === 429;
+                        finish({
+                            ok: false,
+                            code: authFailure
+                                ? 'codex_auth_required'
+                                : usageFailure
+                                    ? 'codex_usage_limited'
+                                    : status >= 500
+                                        ? 'codex_server_error'
+                                        : 'codex_responses_error',
+                            status,
+                            error: message || `Codex Responses request failed with status ${status}.`
+                        });
+                        return;
+                    }
+                    const parsed = parseCodexResponsesSse(raw);
+                    if (parsed.failure) {
+                        finish({
+                            ok: false,
+                            code: 'codex_responses_failed',
+                            error: normalizeText(
+                                parsed.failure?.message,
+                                'Codex Responses stream reported a failed response.'
+                            ),
+                            details: parsed.failure
+                        });
+                        return;
+                    }
+                    finish({
+                        ok: true,
+                        ...parsed
+                    });
+                });
             });
-        });
-        clientRequest.end(body);
+            clientRequest.setTimeout(effectiveTimeoutMs, () => {
+                clientRequest.destroy(
+                    new Error(`Codex model request was idle for ${effectiveTimeoutMs}ms.`)
+                );
+            });
+            clientRequest.once('error', (error) => {
+                if (settled) {
+                    return;
+                }
+                const aborted = signal?.aborted || /aborted/i.test(error?.message || '');
+                finish({
+                    ok: false,
+                    code: aborted
+                        ? 'aborted'
+                        : /timed out|timeout|deadline|idle/i.test(error?.message || '')
+                            ? 'timeout'
+                            : 'codex_network_error',
+                    error: error?.message || String(error)
+                });
+            });
+            clientRequest.end(body);
+        })().catch((error) => finish({
+            ok: false,
+            code: 'codex_network_error',
+            error: error?.message || String(error)
+        }));
     });
 }
 
@@ -2131,6 +2160,7 @@ module.exports = {
     parseCodexJsonlEvents,
     parseCodexResponsesSse,
     parseWindowsProxyServer,
+    runCodexResponsesInference,
     resolveCodexBridgeMaxAttempts,
     resolveCodexEntrypoint,
     resolveCodexProxyUrl,

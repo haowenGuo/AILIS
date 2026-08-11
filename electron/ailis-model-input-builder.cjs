@@ -62,7 +62,7 @@ function modelInputImageUrl(value = '') {
     return `data:${mimeType};base64,${fs.readFileSync(resolved).toString('base64')}`;
 }
 
-function responseItemOutputImages(item = {}) {
+function responseItemOutputImages(item = {}, { materializeLocalImages = true } = {}) {
     if (item?.type !== 'function_call_output' && item?.type !== 'custom_tool_call_output') {
         return [];
     }
@@ -75,7 +75,9 @@ function responseItemOutputImages(item = {}) {
         .map((part) => ({
             type: 'image_url',
             image_url: {
-                url: modelInputImageUrl(part.image_url || part.url)
+                url: materializeLocalImages
+                    ? modelInputImageUrl(part.image_url || part.url)
+                    : normalizeText(part.image_url || part.url)
             },
             detail: normalizeText(part.detail) || 'original'
         }))
@@ -369,7 +371,11 @@ function restoreModelInputContextManagerFromCheckpoint(checkpoint = null, option
     return ContextManager.fromCheckpoint(checkpoint, options);
 }
 
-function responseItemsToChatMessages({ instructions = '', input = [] } = {}) {
+function responseItemsToChatMessages({
+    instructions = '',
+    input = [],
+    materializeLocalImages = true
+} = {}) {
     const messages = [];
     if (normalizeText(instructions)) {
         messages.push({ role: 'system', content: instructions });
@@ -379,7 +385,10 @@ function responseItemsToChatMessages({ instructions = '', input = [] } = {}) {
             const contentParts = (Array.isArray(item.content) ? item.content : [])
                 .map((part) => {
                     if (part?.type === 'input_image') {
-                        const imageUrl = normalizeText(part.image_url || part.url);
+                        const source = normalizeText(part.image_url || part.url);
+                        const imageUrl = materializeLocalImages
+                            ? modelInputImageUrl(source)
+                            : source;
                         return imageUrl ? {
                             type: 'image_url',
                             image_url: { url: imageUrl },
@@ -442,7 +451,7 @@ function responseItemsToChatMessages({ instructions = '', input = [] } = {}) {
                 tool_call_id: item.call_id,
                 content: responseItemOutputToText(item)
             });
-            const outputImages = responseItemOutputImages(item);
+            const outputImages = responseItemOutputImages(item, { materializeLocalImages });
             if (outputImages.length) {
                 messages.push({
                     role: 'user',

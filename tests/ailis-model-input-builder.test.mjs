@@ -88,6 +88,54 @@ test('native provider calls stay canonical and receive exactly one AILIS-owned o
     );
 });
 
+test('ContextManager keeps only the newest bounded image states in a model projection', () => {
+    const history = new ContextManager();
+    for (let index = 0; index < 10; index += 1) {
+        const callId = `computer-${index}`;
+        history.recordItems([
+            ResponseItem.functionCall({
+                name: 'computer',
+                arguments: { action: 'screen_screenshot' },
+                call_id: callId
+            }),
+            ResponseItem.functionCallOutput({
+                call_id: callId,
+                output: FunctionCallOutputPayload.fromContentItems([
+                    ContentItem.inputText(`screen ${index}`),
+                    ContentItem.inputImage({ image_url: `C:\\screens\\screen-${index}.png` })
+                ], { success: true })
+            })
+        ]);
+    }
+
+    const projected = history.forPrompt({
+        inputModalities: ['input_image'],
+        maxInputImages: 2
+    });
+    const images = [];
+    const collectImages = (value) => {
+        if (!value || typeof value !== 'object') return;
+        if (value.type === 'input_image') images.push(value.image_url);
+        if (Array.isArray(value)) value.forEach(collectImages);
+        else Object.values(value).forEach(collectImages);
+    };
+    collectImages(projected);
+
+    assert.deepEqual(images, [
+        'C:\\screens\\screen-8.png',
+        'C:\\screens\\screen-9.png'
+    ]);
+    const rawImages = [];
+    const collectRawImages = (value) => {
+        if (!value || typeof value !== 'object') return;
+        if (value.type === 'input_image') rawImages.push(value.image_url);
+        if (Array.isArray(value)) value.forEach(collectRawImages);
+        else Object.values(value).forEach(collectRawImages);
+    };
+    collectRawImages(history.rawItems());
+    assert.equal(rawImages.length, 10, 'projection must not destroy the durable checkpoint');
+});
+
 test('tool-returned visual artifacts become image input for the next main-model turn', () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ailis-tool-image-'));
     const imagePath = path.join(tempDir, 'page.png');

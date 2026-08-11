@@ -48,12 +48,22 @@ function point(args = {}, prefix = '') {
 }
 
 function normalizeKeys(value) {
+    const aliases = new Map([
+        ['meta', 'win'],
+        ['super', 'win'],
+        ['cmd', 'win'],
+        ['control', 'ctrl']
+    ]);
     if (Array.isArray(value)) {
-        return value.map((key) => normalizeText(String(key)).toLowerCase()).filter(Boolean);
+        return value
+            .map((key) => normalizeText(String(key)).toLowerCase())
+            .map((key) => aliases.get(key) || key)
+            .filter(Boolean);
     }
     return normalizeText(String(value || ''))
         .split('+')
         .map((key) => key.trim().toLowerCase())
+        .map((key) => aliases.get(key) || key)
         .filter(Boolean);
 }
 

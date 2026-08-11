@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
+import { EventEmitter } from 'node:events';
 import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
@@ -20,6 +21,7 @@ const {
     parseCodexJsonlEvents,
     parseCodexResponsesSse,
     parseWindowsProxyServer,
+    runCodexResponsesInference,
     resolveCodexBridgeMaxAttempts,
     resolveCodexEntrypoint,
     shouldRetryCodexBridgeFailure
@@ -58,6 +60,56 @@ const visibleTools = [
 ];
 
 describe('Codex model bridge process lifecycle', () => {
+    it('enforces an absolute model deadline even while the SSE connection stays active', async () => {
+        const response = new EventEmitter();
+        response.statusCode = 200;
+        response.setEncoding = () => {};
+        const request = new EventEmitter();
+        let responseHandler = null;
+        let activityTimer = null;
+        let requestDestroyed = false;
+        let agentDestroyed = false;
+        let idleTimeoutMs = 0;
+        request.setTimeout = (value) => {
+            idleTimeoutMs = value;
+        };
+        request.destroy = (error) => {
+            requestDestroyed = true;
+            request.emit('error', error);
+        };
+        request.end = () => {
+            responseHandler(response);
+            activityTimer = setInterval(() => response.emit('data', 'event: ping\ndata: {}\n\n'), 5);
+        };
+
+        const startedAt = Date.now();
+        const result = await runCodexResponsesInference(
+            {},
+            { accessToken: 'test-token', accountId: 'test-account' },
+            { model: 'test-model', input: [] },
+            {
+                timeoutMs: 40,
+                createAgent: async () => ({
+                    agent: { destroy: () => { agentDestroyed = true; } },
+                    proxy: ''
+                }),
+                requestImpl: (_options, callback) => {
+                    responseHandler = callback;
+                    return request;
+                }
+            }
+        );
+        clearInterval(activityTimer);
+
+        assert.equal(result.ok, false);
+        assert.equal(result.code, 'timeout');
+        assert.match(result.error, /absolute deadline/i);
+        assert.equal(idleTimeoutMs, 40);
+        assert.equal(requestDestroyed, true);
+        assert.equal(agentDestroyed, true);
+        assert.ok(Date.now() - startedAt < 500, 'absolute deadline should not wait for stream inactivity');
+    });
+
     it('terminates the full Windows process tree for ephemeral app-server inference', () => {
         assert.deepEqual(buildProcessTreeTerminationPlan(4242, 'win32'), {
             command: 'taskkill.exe',

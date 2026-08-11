@@ -1365,6 +1365,12 @@ function buildAgentContextBudgetConfig(settings = {}, requestContext = {}, token
             tokenInfo?.inputTokens,
             tokenInfo?.input_tokens
         ]),
+        maxInputImages: Math.max(1, Math.min(8, Math.trunc(firstPositiveNumber([
+            requestContext.maxInputImages,
+            requestContext.max_input_images,
+            settings.maxInputImages,
+            settings.max_input_images
+        ], 8)))),
         contextWindowSource: contextWindow.source
     };
 }
@@ -5348,7 +5354,13 @@ function isTerminalAgentDecisionFailure(decision = {}) {
     if (isTerminalProviderDecisionError(decision)) {
         return true;
     }
-    if (status === 'timeout' || status === 'aborted' || status === 'network_error' || status === 'transient_network_error') {
+    if (
+        status === 'timeout' ||
+        status === 'aborted' ||
+        status === 'network_error' ||
+        status === 'transient_network_error' ||
+        status === 'invalid_codex_bridge_input'
+    ) {
         return true;
     }
     if (status !== 'provider_error') {
@@ -6771,7 +6783,7 @@ function buildLlmAgentDirectToolPrompt({
             item?.type === 'message' &&
             Array.isArray(item.content) &&
             item.content.some((part) => part?.type === 'input_image')
-        ) || responseItemOutputImages(item).length > 0);
+        ) || responseItemOutputImages(item, { materializeLocalImages: false }).length > 0);
     const contextPackageOptions = {
         instructions,
         staticPrefix: instructions,
@@ -6789,7 +6801,8 @@ function buildLlmAgentDirectToolPrompt({
         inputModalities: contextHasImageInput ? ['text', 'input_image'] : ['text'],
         toolSummary,
         toolSchemas: tools,
-        budgetConfig: contextBudgetConfig
+        budgetConfig: contextBudgetConfig,
+        maxInputImages: contextBudgetConfig.maxInputImages
     };
     let contextPackage = activeContextManager.forPromptPackage(contextPackageOptions);
     let semanticCompaction = null;
@@ -6830,7 +6843,8 @@ function buildLlmAgentDirectToolPrompt({
         semanticCompaction,
         messages: responseItemsToChatMessages({
             instructions: requestPayload.instructions,
-            input: requestPayload.input
+            input: requestPayload.input,
+            materializeLocalImages: false
         }),
         promptProfile: {
             id: activePromptProfile.id,
@@ -11648,6 +11662,7 @@ module.exports = {
     validateNativeDirectToolCall,
     isAgentDecisionDeepThinkingMode,
     isDeepThinkingAgentDecisionModel,
+    isTerminalAgentDecisionFailure,
     resolveAgentDecisionTimeoutMs,
     stageFileAttachmentsForWorkspace
 };
