@@ -24,6 +24,10 @@ AILIS Assistant は、デスクトップを中心に設計された具身 AI ア
 
 AILIS は単なる Web チャットボットではありません。ユーザーと自然に会話し、許可された範囲で画面コンテキストを理解し、有用な好みを記憶し、明示的に承認されたツールを通じて実作業を支援することを目指しています。
 
+<p align="center">
+  <img alt="AILIS をデスクトップ AI パートナーとして使う流れ" src="docs/assets/readme-localized/ja/ailis-user-flow.png">
+</p>
+
 ## プロジェクトの方向性
 
 多くのアシスタントは、表現力のあるアバターだが実行能力が弱いもの、または強力だが開発者コンソールのように感じるものに分かれがちです。AILIS はその両方をつなぐことを目指します。
@@ -45,6 +49,10 @@ AILIS は単なる Web チャットボットではありません。ユーザー
 - 人間らしさの評価、ツール契約テスト、Gateway チェック、Agent 実行 smoke test。
 
 ## アーキテクチャ
+
+<p align="center">
+  <img alt="AILIS デスクトップ AI の実行アーキテクチャ" src="docs/assets/readme-localized/ja/ailis-architecture.png">
+</p>
 
 ```text
 ユーザー / 音声 / 画面

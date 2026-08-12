@@ -24,6 +24,10 @@ AILIS Assistant는 데스크톱 우선으로 설계된 체화형 AI 어시스턴
 
 AILIS는 단순한 웹 챗봇이 아닙니다. 사용자의 허가를 받아 화면 맥락을 이해하고, 유용한 선호를 기억하며, 명시적으로 승인된 도구를 통해 실제 작업을 돕는 개인 데스크톱 어시스턴트를 목표로 합니다.
 
+<p align="center">
+  <img alt="AILIS를 데스크톱 AI 동반자로 사용하는 흐름" src="docs/assets/readme-localized/ko/ailis-user-flow.png">
+</p>
+
 ## 프로젝트 방향
 
 AILIS는 표현력 있는 캐릭터 경험과 신뢰할 수 있는 작업 실행 능력을 함께 추구합니다.
@@ -45,6 +49,10 @@ AILIS는 표현력 있는 캐릭터 경험과 신뢰할 수 있는 작업 실행
 - 인간다운 경험 평가, 도구 계약 테스트, Gateway 검사, Agent 실행 smoke test.
 
 ## 아키텍처
+
+<p align="center">
+  <img alt="AILIS 데스크톱 AI 실행 아키텍처" src="docs/assets/readme-localized/ko/ailis-architecture.png">
+</p>
 
 ```text
 사용자 / 음성 / 화면

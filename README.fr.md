@@ -24,6 +24,10 @@ AILIS Assistant est un assistant IA incarné conçu d'abord pour le desktop. Il 
 
 AILIS n'est pas un simple chatbot web. Le projet vise un assistant personnel de bureau capable de parler avec l'utilisateur, de comprendre le contexte de l'écran avec permission, de retenir les préférences utiles et d'exécuter des tâches via des outils explicites et auditables.
 
+<p align="center">
+  <img alt="Comment utiliser AILIS comme compagnon IA de bureau" src="docs/assets/readme-localized/fr/ailis-user-flow.png">
+</p>
+
 ## Direction du projet
 
 AILIS cherche à combiner l'expressivité d'un personnage et la fiabilité d'un système d'exécution.
@@ -45,6 +49,10 @@ AILIS cherche à combiner l'expressivité d'un personnage et la fiabilité d'un 
 - Évaluations d'expérience humaine, tests de contrats d'outils, vérifications Gateway et smoke tests d'agent.
 
 ## Architecture
+
+<p align="center">
+  <img alt="Architecture d'exécution de l'assistant IA desktop AILIS" src="docs/assets/readme-localized/fr/ailis-architecture.png">
+</p>
 
 ```text
 Utilisateur / Voix / Écran

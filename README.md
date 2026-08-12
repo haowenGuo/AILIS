@@ -54,7 +54,7 @@ AILIS is developed as an evaluated agent system, not only as a character demo. T
 [ToolSandbox protocol and gates](docs/ailis-toolsandbox-v4-optimization-plan.md)
 
 <p align="center">
-  <img alt="How people use AILIS as a desktop AI companion" src="docs/assets/ailis-zhihu/ailis-user-flow-image2.png">
+  <img alt="How people use AILIS as a desktop AI companion" src="docs/assets/readme-localized/en/ailis-user-flow.png">
 </p>
 
 ## Meet AILIS
@@ -194,7 +194,7 @@ The default GAIA comparison gate rejects missing or replaced tasks, lower visibl
 ## Architecture
 
 <p align="center">
-  <img alt="AILIS desktop AI runtime architecture" src="docs/assets/ailis-zhihu/ailis-architecture-image2.png">
+  <img alt="AILIS desktop AI runtime architecture" src="docs/assets/readme-localized/en/ailis-architecture.png">
 </p>
 
 ```text
