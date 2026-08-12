@@ -92,6 +92,10 @@ const PERSONA_TASK_PROGRESS_MIN_INTERVAL_MS = Math.max(
     15000,
     Number(process.env.AILIS_PERSONA_TASK_PROGRESS_MIN_INTERVAL_MS || 45000) || 45000
 );
+const PERSONA_STREAM_FLUSH_INTERVAL_MS = Math.max(
+    16,
+    Number(process.env.AILIS_PERSONA_STREAM_FLUSH_INTERVAL_MS || 40) || 40
+);
 const PERSONA_DRAFT_DEVELOPER_PACKET = [
     'Prepare one private candidate FinalAnswer for this user Turn while TaskAgent independently decides whether the Turn is conversation or execution.',
     'Your candidate is published only if TaskAgent chooses chat. Do not acknowledge, promise, or narrate task execution, because TaskAgent owns Commentary and task results.',
@@ -3071,7 +3075,9 @@ class AILISGateway extends EventEmitter {
         outerRunId = '',
         revision = 0,
         turnEnvelope = {},
-        llmSettings = null
+        llmSettings = null,
+        onTextDelta = null,
+        onTextStreamEvent = null
     } = {}) {
         const revisionSuffix = revision > 0 ? `_r${revision}` : '';
         return this.runPrivatePersonaTurn({
@@ -3084,7 +3090,9 @@ class AILISGateway extends EventEmitter {
             sessionId,
             runId: `persona_actor_${outerRunId}${revisionSuffix}`,
             purpose: 'draft',
-            developerPacket: PERSONA_DRAFT_DEVELOPER_PACKET
+            developerPacket: PERSONA_DRAFT_DEVELOPER_PACKET,
+            onTextDelta,
+            onTextStreamEvent
         }).catch(() => null);
     }
 
@@ -3121,7 +3129,7 @@ class AILISGateway extends EventEmitter {
             activePersonaTurn.latestMessage = message;
             activePersonaTurn.latestTurnEnvelope = steerTurnEnvelope;
             if (activePersonaTurn.taskRoute !== 'execute') {
-                activePersonaTurn.personaPromise = this.startPrivatePersonaDraft({
+                const draftRequest = {
                     input,
                     context,
                     sessionId,
@@ -3129,7 +3137,10 @@ class AILISGateway extends EventEmitter {
                     revision: activePersonaTurn.revision,
                     turnEnvelope: steerTurnEnvelope,
                     llmSettings
-                });
+                };
+                activePersonaTurn.personaPromise = typeof activePersonaTurn.startPersonaDraft === 'function'
+                    ? activePersonaTurn.startPersonaDraft(draftRequest)
+                    : this.startPrivatePersonaDraft(draftRequest);
             }
             const steered = await this.taskAgentHarness.dispatchTurn({
                 ...context,
@@ -3206,9 +3217,203 @@ class AILISGateway extends EventEmitter {
             latestContext: context,
             latestMessage: message,
             latestTurnEnvelope: turnEnvelope,
-            personaPromise: null
+            personaPromise: null,
+            personaStream: null,
+            startPersonaDraft: null,
+            openPersonaStream: null,
+            discardPersonaStream: null
         };
-        activeState.personaPromise = this.startPrivatePersonaDraft({
+        const requestedPersonaTextDelta = typeof input.onTextDelta === 'function'
+            ? input.onTextDelta
+            : null;
+        const requestedPersonaStreamEvent = typeof input.onTextStreamEvent === 'function'
+            ? input.onTextStreamEvent
+            : null;
+        const publishPersonaStreamEvent = (stream, streamState, deltaText = '', reason = '') => {
+            if (!stream || activeState.personaStream !== stream) {
+                return;
+            }
+            if (streamState === 'started') {
+                if (stream.publishedStarted) {
+                    return;
+                }
+                stream.publishedStarted = true;
+            } else if (streamState === 'delta') {
+                if (!deltaText) {
+                    return;
+                }
+            } else if (streamState === 'committed') {
+                if (stream.publishedCommitted) {
+                    return;
+                }
+                stream.publishedCommitted = true;
+            } else if (streamState === 'discarded') {
+                if (stream.publishedDiscarded || !stream.publishedStarted) {
+                    return;
+                }
+                stream.publishedDiscarded = true;
+            }
+            const eventType = `response.output_text.${streamState}`;
+            const eventPayload = {
+                runId: outerRunId,
+                sessionId,
+                turnId: activeState.turnId,
+                status: streamState === 'discarded' ? 'cancelled' : 'streaming',
+                text: streamState === 'discarded' ? '' : stream.text,
+                speechText: '',
+                deltaText: streamState === 'delta' ? deltaText : '',
+                kind: 'stream',
+                phase: 'final_answer_stream',
+                messagePhase: 'final_answer_stream',
+                streamState,
+                streamId: stream.streamId,
+                revision: stream.revision,
+                source: 'persona_actor',
+                ...(reason ? { reason } : {})
+            };
+            this.emitGatewayEvent('persona.background.message', eventPayload);
+            try {
+                if (streamState === 'delta') {
+                    const pending = requestedPersonaTextDelta?.(deltaText, {
+                        runId: outerRunId,
+                        sessionId,
+                        streamId: stream.streamId,
+                        phase: 'final_answer_stream',
+                        source: 'persona_actor'
+                    });
+                    pending?.catch?.(() => {});
+                } else {
+                    const pending = requestedPersonaStreamEvent?.({
+                        type: eventType,
+                        runId: outerRunId,
+                        sessionId,
+                        streamId: stream.streamId,
+                        phase: 'final_answer_stream',
+                        source: 'persona_actor',
+                        ...(reason ? { reason } : {})
+                    });
+                    pending?.catch?.(() => {});
+                }
+            } catch {}
+        };
+        const flushPersonaStreamDelta = (stream) => {
+            if (!stream) {
+                return;
+            }
+            if (stream.flushTimer) {
+                clearTimeout(stream.flushTimer);
+                stream.flushTimer = null;
+            }
+            const deltaText = stream.pendingDelta;
+            stream.pendingDelta = '';
+            if (deltaText && stream.opened) {
+                publishPersonaStreamEvent(stream, 'delta', deltaText);
+            }
+        };
+        const schedulePersonaStreamDelta = (stream, deltaText) => {
+            if (!stream || !deltaText || !stream.opened) {
+                return;
+            }
+            stream.pendingDelta += deltaText;
+            if (stream.flushTimer) {
+                return;
+            }
+            stream.flushTimer = setTimeout(() => {
+                flushPersonaStreamDelta(stream);
+            }, PERSONA_STREAM_FLUSH_INTERVAL_MS);
+            stream.flushTimer.unref?.();
+        };
+        activeState.openPersonaStream = () => {
+            const stream = activeState.personaStream;
+            if (!stream || stream.opened || activeState.taskRoute !== 'chat') {
+                return;
+            }
+            stream.opened = true;
+            publishPersonaStreamEvent(stream, 'started');
+            if (stream.text) {
+                publishPersonaStreamEvent(stream, 'delta', stream.text);
+            }
+            if (stream.sourceState === 'committed') {
+                publishPersonaStreamEvent(stream, 'committed');
+            } else if (stream.sourceState === 'discarded') {
+                publishPersonaStreamEvent(stream, 'discarded', '', 'persona_source_discarded');
+            }
+        };
+        activeState.discardPersonaStream = (reason = 'persona_stream_discarded') => {
+            const stream = activeState.personaStream;
+            if (!stream) {
+                return;
+            }
+            if (stream.flushTimer) {
+                clearTimeout(stream.flushTimer);
+                stream.flushTimer = null;
+            }
+            stream.pendingDelta = '';
+            stream.opened = false;
+            publishPersonaStreamEvent(stream, 'discarded', '', reason);
+        };
+        activeState.startPersonaDraft = (draftRequest = {}) => {
+            activeState.discardPersonaStream?.('persona_revision_superseded');
+            const revision = Math.max(0, Number(draftRequest.revision) || 0);
+            const stream = {
+                revision,
+                streamId: `${outerRunId}:persona:${revision}`,
+                text: '',
+                sourceState: 'pending',
+                opened: false,
+                publishedStarted: false,
+                publishedCommitted: false,
+                publishedDiscarded: false,
+                pendingDelta: '',
+                flushTimer: null
+            };
+            activeState.personaStream = stream;
+            return this.startPrivatePersonaDraft({
+                ...draftRequest,
+                onTextDelta: (delta) => {
+                    if (activeState.personaStream !== stream || typeof delta !== 'string' || !delta) {
+                        return;
+                    }
+                    stream.text += delta;
+                    if (stream.opened) {
+                        schedulePersonaStreamDelta(stream, delta);
+                    }
+                },
+                onTextStreamEvent: (event = {}) => {
+                    if (activeState.personaStream !== stream) {
+                        return;
+                    }
+                    const type = normalizeString(event.type);
+                    if (type === 'response.output_text.started') {
+                        stream.sourceState = 'started';
+                        if (stream.opened) {
+                            publishPersonaStreamEvent(stream, 'started');
+                        }
+                        return;
+                    }
+                    if (type === 'response.output_text.committed') {
+                        stream.sourceState = 'committed';
+                        if (stream.opened) {
+                            flushPersonaStreamDelta(stream);
+                            publishPersonaStreamEvent(stream, 'committed');
+                        }
+                        return;
+                    }
+                    if (type === 'response.output_text.discarded') {
+                        stream.sourceState = 'discarded';
+                        if (stream.opened) {
+                            if (stream.flushTimer) {
+                                clearTimeout(stream.flushTimer);
+                                stream.flushTimer = null;
+                            }
+                            stream.pendingDelta = '';
+                            publishPersonaStreamEvent(stream, 'discarded', '', 'persona_source_discarded');
+                        }
+                    }
+                }
+            });
+        };
+        activeState.personaPromise = activeState.startPersonaDraft({
             input,
             context,
             sessionId,
@@ -3230,6 +3435,11 @@ class AILISGateway extends EventEmitter {
             }
             if (type === 'task_agent.route.decided') {
                 activeState.taskRoute = normalizeString(event.payload?.mode, activeState.taskRoute).toLowerCase();
+                if (activeState.taskRoute === 'chat') {
+                    activeState.openPersonaStream?.();
+                } else if (activeState.taskRoute === 'execute') {
+                    activeState.discardPersonaStream?.('task_agent_route_execute');
+                }
             }
             const isProgress = type === 'agent.progress.note' && messageText;
             const now = Date.now();
@@ -3307,6 +3517,9 @@ class AILISGateway extends EventEmitter {
                 phase: 'final_answer',
                 messagePhase: 'final_answer',
                 source,
+                ...(activeState.personaStream?.streamId
+                    ? { streamId: activeState.personaStream.streamId, streamState: 'committed' }
+                    : {}),
                 ...(taskResult ? { taskResult } : {})
             });
             this.emitGatewayEvent('agent.message.completed', {
@@ -3349,6 +3562,7 @@ class AILISGateway extends EventEmitter {
                 });
             } catch (error) {
                 backgroundTaskStatus = 'failed';
+                activeState.discardPersonaStream?.('task_agent_failed');
                 if (progressRenderInFlight) {
                     await progressRenderInFlight;
                 }
@@ -3373,6 +3587,11 @@ class AILISGateway extends EventEmitter {
 
             activeState.turnId = normalizeString(taskResult?.turn_id, activeState.turnId);
             activeState.taskRoute = normalizeString(taskResult?.route, activeState.taskRoute).toLowerCase();
+            if (activeState.taskRoute === 'chat') {
+                activeState.openPersonaStream?.();
+            } else {
+                activeState.discardPersonaStream?.('task_agent_route_not_chat');
+            }
             const taskStatus = normalizeString(taskResult?.status, 'completed').toLowerCase();
             if (!['completed', 'completed_with_warnings', 'success', 'succeeded'].includes(taskStatus)) {
                 backgroundTaskStatus = taskStatus || 'failed';
@@ -3398,6 +3617,7 @@ class AILISGateway extends EventEmitter {
                     commitFinalAnswer(personaText, taskResult, 'persona_actor');
                 } else {
                     backgroundTaskStatus = 'failed';
+                    activeState.discardPersonaStream?.('persona_final_unavailable');
                     this.emitGatewayEvent('agent.system.notice', {
                         runId: outerRunId,
                         sessionId,

@@ -778,21 +778,64 @@ export class AILISDesktopChatService {
         if (type !== 'persona.background.message') {
             return;
         }
-        const message = toAssistantPayload(
-            normalizeMarkdownSource(eventPayload.text || eventPayload.displayText || ''),
-            {
-                speechText: eventPayload.speechText || eventPayload.speech_text || '',
-                bubbleText: eventPayload.bubbleText || eventPayload.bubble_text || '',
-                surface: eventPayload.surface || null,
-                backgroundTaskMessage: true,
-                backgroundTaskKind: normalizeText(eventPayload.kind, 'progress'),
-                backgroundRunId: runId,
-                backgroundEventId: normalizeText(event.id || eventPayload.eventId),
-                backgroundStatus: normalizeText(eventPayload.status),
-                source: normalizeText(eventPayload.source, 'task_result_persona_actor'),
-                taskResult: eventPayload.taskResult || null
-            }
-        );
+        const backgroundTaskKind = normalizeText(eventPayload.kind, 'progress');
+        const commonMessageFields = {
+            backgroundTaskMessage: true,
+            backgroundTaskKind,
+            backgroundRunId: runId,
+            backgroundEventId: normalizeText(event.id || eventPayload.eventId),
+            backgroundStatus: normalizeText(eventPayload.status),
+            backgroundStreamId: normalizeText(eventPayload.streamId),
+            backgroundStreamState: normalizeText(eventPayload.streamState),
+            source: normalizeText(eventPayload.source, 'task_result_persona_actor'),
+            taskResult: eventPayload.taskResult || null
+        };
+        let message;
+        if (backgroundTaskKind === 'stream') {
+            const streamText = normalizeMarkdownSource(eventPayload.text || eventPayload.displayText || '');
+            const streamDeltaText = typeof eventPayload.deltaText === 'string'
+                ? eventPayload.deltaText
+                : '';
+            message = streamText
+                ? toAssistantPayload(streamText, {
+                      ...commonMessageFields,
+                      speechText: '',
+                      bubbleText: streamText,
+                      streamMode: true,
+                      stream_delta_text: streamDeltaText,
+                      stream_delta_speech_text: '',
+                      answerStream: true
+                  })
+                : {
+                      ...commonMessageFields,
+                      raw_text: '',
+                      display_text: '',
+                      display_format: 'markdown',
+                      contentFormat: 'markdown',
+                      speech_text: '',
+                      bubble_text: '',
+                      action: null,
+                      expression: null,
+                      surface: null,
+                      fallbackMode: false,
+                      streamMode: true,
+                      streamReset: commonMessageFields.backgroundStreamState === 'discarded',
+                      stream_delta_text: streamDeltaText,
+                      stream_delta_speech_text: '',
+                      answerStream: true,
+                      demoMode: false
+                  };
+        } else {
+            message = toAssistantPayload(
+                normalizeMarkdownSource(eventPayload.text || eventPayload.displayText || ''),
+                {
+                    ...commonMessageFields,
+                    speechText: eventPayload.speechText || eventPayload.speech_text || '',
+                    bubbleText: eventPayload.bubbleText || eventPayload.bubble_text || '',
+                    surface: eventPayload.surface || null
+                }
+            );
+        }
         const expectedSessionId = this.backgroundRunSessions.get(runId);
         if (!expectedSessionId) {
             const pending = this.pendingBackgroundMessages.get(runId) || [];

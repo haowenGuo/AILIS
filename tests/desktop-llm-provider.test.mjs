@@ -48,6 +48,16 @@ describe('desktop LLM provider', () => {
             };
 
             if (request.url === '/v1/chat/completions' && parsedBody.stream === true) {
+                if (Array.isArray(parsedBody.tools) && parsedBody.tools.length) {
+                    response.writeHead(200, {
+                        'content-type': 'text/event-stream; charset=utf-8',
+                        'cache-control': 'no-cache'
+                    });
+                    response.write('data: {"choices":[{"delta":{"role":"assistant","tool_calls":[{"index":0,"id":"call-stream-tool","function":{"name":"task_","arguments":"{\\\"mode\\\":"}}]}}]}\n\n');
+                    response.write('data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"name":"route","arguments":"\\\"chat\\\"}"}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":5,"completion_tokens":3,"total_tokens":8}}\n\n');
+                    response.end('data: [DONE]\n\n');
+                    return;
+                }
                 response.writeHead(200, {
                     'content-type': 'text/event-stream; charset=utf-8',
                     'cache-control': 'no-cache'
@@ -272,6 +282,35 @@ describe('desktop LLM provider', () => {
         assert.equal(result.usage.total_tokens, 7);
         assert.equal(receivedRequest.body.stream, true);
         assert.deepEqual(receivedRequest.body.stream_options, { include_usage: true });
+    });
+
+    it('assembles OpenAI-compatible native tool calls from streamed deltas', async () => {
+        const result = await callDesktopLlmProvider({
+            provider: 'deepseek',
+            baseUrl: `${serverUrl}/v1`,
+            apiKey: 'deepseek-secret',
+            model: 'deepseek-chat',
+            timeoutMs: 5000
+        }, {
+            messages: [{ role: 'user', content: 'route this turn' }],
+            tools: [{
+                name: 'task_route',
+                description: 'Route this turn.',
+                parameters: {
+                    type: 'object',
+                    required: ['mode'],
+                    properties: { mode: { type: 'string', enum: ['chat', 'execute'] } }
+                }
+            }],
+            toolChoice: { name: 'task_route' },
+            onTextDelta: () => {}
+        });
+
+        assert.equal(result.ok, true);
+        assert.equal(result.toolCalls.length, 1);
+        assert.equal(result.toolCalls[0].name, 'task_route');
+        assert.deepEqual(result.toolCalls[0].arguments, { mode: 'chat' });
+        assert.equal(receivedRequest.body.stream, true);
     });
 
     it('round-trips DeepSeek reasoning_content for native tool-call history', async () => {

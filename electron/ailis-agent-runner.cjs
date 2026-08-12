@@ -111,6 +111,10 @@ const DIRECT_TOOL_PROGRESS_NOTE_FIELD = 'progress_note';
 const AGENT_DECISION_REASONING_EFFORT_VALUES = new Set(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
 const DEEP_AGENT_DECISION_REASONING_EFFORT_VALUES = new Set(['medium', 'high', 'xhigh', 'max']);
 const DEFAULT_AGENT_DECISION_REASONING_EFFORT = '';
+const TASK_ROUTE_PROMPT_PROFILE_ID = 'task_route_compact_v1';
+const TASK_ROUTE_HISTORY_ITEMS = 8;
+const TASK_ROUTE_HISTORY_ITEM_CHARS = 600;
+const TASK_ROUTE_MAX_OUTPUT_TOKENS = 128;
 
 const AILIS_SYSTEM_PROMPT = `你是可爱的虚拟助手，名字固定为AILIS，身份是普通女孩子，具备人工智能（AI）、编程（coding）、网络搜索、信息查询、邮件管理、命令行控制等专业能力，可以以普通女生的视角与用户轻松互动，也可以完成任务执行和计算机管理的功能。
 性格设定：活泼亲切、软萌可爱，说话语气轻快自然，自带俏皮感，和生活化语气拉近与用户的距离，偶尔会有小撒娇、小俏皮的表达，但不夸张、不刻意。
@@ -1202,20 +1206,32 @@ function looksLikeSpecificToolChoiceUnsupported(response = {}) {
 
 function buildAgentDecisionLowLatencyPayload(payload = {}, { settings = {}, requestContext = {} } = {}) {
     const reasoningEffort = resolveExplicitAgentDecisionReasoningEffort(settings, requestContext);
-    const thinking = resolveExplicitAgentDecisionThinking(settings, requestContext);
     const localConstrainedProvider = isConstrainedLocalAgentProvider(settings.provider);
-    const defaultMaxTokens = localConstrainedProvider ? 320 : 0;
+    const taskRoutePending = requestContext.taskAgentRoutePending === true;
+    const thinking = resolveExplicitAgentDecisionThinking(settings, requestContext) || (
+        taskRoutePending && isDeepSeekAgentDecisionProvider(settings)
+            ? { type: 'disabled' }
+            : null
+    );
+    const defaultMaxTokens = taskRoutePending
+        ? TASK_ROUTE_MAX_OUTPUT_TOKENS
+        : localConstrainedProvider
+            ? 320
+            : 0;
     const maxTokens = Number(
-        requestContext.agentDecisionMaxTokens ||
-            settings.agentDecisionMaxTokens ||
+        (taskRoutePending
+            ? requestContext.taskRouteDecisionMaxTokens || settings.taskRouteDecisionMaxTokens
+            : requestContext.agentDecisionMaxTokens || settings.agentDecisionMaxTokens) ||
             defaultMaxTokens
     );
     const nextPayload = {
         ...payload,
         temperature: 0,
         preferNativeToolCalls: true,
-        parallel_tool_calls: resolveParallelToolCalls(settings, requestContext),
-        latencyProfile: 'agent_decision_fast'
+        parallel_tool_calls: taskRoutePending
+            ? false
+            : resolveParallelToolCalls(settings, requestContext),
+        latencyProfile: taskRoutePending ? 'task_route_fast' : 'agent_decision_fast'
     };
     if (reasoningEffort) {
         nextPayload.reasoning_effort = reasoningEffort;
@@ -1224,8 +1240,8 @@ function buildAgentDecisionLowLatencyPayload(payload = {}, { settings = {}, requ
         nextPayload.thinking = thinking;
     }
     if (Number.isFinite(maxTokens) && maxTokens > 0) {
-        const minTokens = localConstrainedProvider ? 64 : 256;
-        const maxTokenLimit = localConstrainedProvider ? 1024 : 8192;
+        const minTokens = taskRoutePending ? 64 : localConstrainedProvider ? 64 : 256;
+        const maxTokenLimit = taskRoutePending ? 256 : localConstrainedProvider ? 1024 : 8192;
         nextPayload.max_tokens = Math.round(Math.min(Math.max(maxTokens, minTokens), maxTokenLimit));
     }
     return nextPayload;
@@ -2994,7 +3010,25 @@ function isConstrainedLocalAgentProvider(provider = '') {
     return normalizedProvider === 'ollama';
 }
 
+function isDeepSeekAgentDecisionProvider(settings = {}) {
+    return [settings.provider, settings.baseUrl, settings.model]
+        .map((value) => normalizeText(value).toLowerCase())
+        .some((value) => value.includes('deepseek'));
+}
+
 function resolveAgentPromptProfile(settings = {}, requestContext = {}) {
+    if (requestContext.taskAgentRoutePending === true) {
+        return {
+            id: TASK_ROUTE_PROMPT_PROFILE_ID,
+            compact: true,
+            reason: 'task_route_first_decision',
+            memoryChars: 0,
+            historyItems: TASK_ROUTE_HISTORY_ITEMS,
+            historyChars: TASK_ROUTE_HISTORY_ITEM_CHARS,
+            turnItems: 1,
+            externalToolExposureLimit: 0
+        };
+    }
     const explicitProfile = normalizeText(
         requestContext.agentPromptProfile ||
             requestContext.promptProfile ||
@@ -6864,6 +6898,115 @@ function buildLlmAgentDirectToolPrompt({
     };
 }
 
+function buildTaskRouteDirectToolPrompt({
+    message = '',
+    taskState = null,
+    fileAttachments = [],
+    runtimeEnvironment = null,
+    tools = []
+} = {}) {
+    const currentRequest = normalizeText(message);
+    const sessionLedger = taskState?.session_ledger && typeof taskState.session_ledger === 'object'
+        ? taskState.session_ledger
+        : {};
+    const visibleHistory = (Array.isArray(sessionLedger.visible_history)
+        ? sessionLedger.visible_history
+        : [])
+        .slice(-TASK_ROUTE_HISTORY_ITEMS)
+        .map((entry) => ({
+            role: normalizeText(entry?.role),
+            content: summarizeForModel(entry?.content || '', TASK_ROUTE_HISTORY_ITEM_CHARS),
+            authority: normalizeText(entry?.authority)
+        }))
+        .filter((entry) => entry.role && entry.content);
+    const recentCompletedTurns = (Array.isArray(sessionLedger.completed_turns)
+        ? sessionLedger.completed_turns
+        : [])
+        .slice(-4)
+        .map((turn) => ({
+            request: summarizeForModel(turn?.latest_request || turn?.request || '', 400),
+            status: normalizeText(turn?.status),
+            final_answer: summarizeForModel(turn?.final_answer || '', 500)
+        }))
+        .filter((turn) => turn.request);
+    const attachments = normalizeFileAttachments(fileAttachments).map((attachment) => ({
+        name: attachment.name,
+        kind: attachment.kind,
+        mimeType: attachment.mimeType,
+        extension: attachment.extension,
+        size: attachment.size
+    }));
+    const routeContext = {
+        schema: 'ailis.task_route_context.v1',
+        current_request: currentRequest,
+        active_goal: taskState?.active_goal || sessionLedger.active_goal || null,
+        unresolved_fields: Array.isArray(sessionLedger.unresolved_fields)
+            ? sessionLedger.unresolved_fields.slice(-12)
+            : [],
+        recent_completed_turns: recentCompletedTurns,
+        visible_history: visibleHistory,
+        attachments,
+        runtime_clock: runtimeEnvironment
+            ? {
+                  current_date: runtimeEnvironment.current_date,
+                  current_time: runtimeEnvironment.current_time,
+                  timezone: runtimeEnvironment.timezone,
+                  utc_offset: runtimeEnvironment.utc_offset
+              }
+            : null
+    };
+    const instructions = [
+        'You are the semantic first-route controller for one persistent AILIS TaskAgent Turn.',
+        'Read the current request in the supplied route context and call task_route exactly once.',
+        'Choose chat when Persona can fully answer now from ordinary conversation, general model knowledge, and the supplied context. This includes emotional support, casual conversation, advice, explanation, brainstorming, and drafting or rewriting text when no external action or verification is needed.',
+        'Choose execute only when AILIS must actually perform work beyond producing an answer: use a tool, inspect or change files/data, handle an attachment, fetch current or external information, verify a claim, operate another system, or continue/correct an active execution task.',
+        'A user asking for an answer, recommendation, explanation, or piece of text is not by itself task execution. If Persona can answer it completely in the chat response, choose chat.',
+        'For chat, progress_note must be empty. For execute, progress_note is one short user-safe sentence describing what was accepted and what will be checked first.',
+        'Do not answer the user, plan the task, or call any tool except task_route.'
+    ].join('\n');
+    const input = [
+        responseMessage('developer', [
+            '<task_route_context>',
+            JSON.stringify(routeContext),
+            '</task_route_context>'
+        ].join('\n')),
+        responseMessage('user', currentRequest)
+    ];
+    const prompt = Prompt.create({
+        input,
+        tools,
+        parallel_tool_calls: false,
+        base_instructions: { text: instructions }
+    });
+    const requestPayload = Prompt.toRequestPayload(prompt);
+    return {
+        instructions: requestPayload.instructions,
+        input: requestPayload.input,
+        tools: requestPayload.tools,
+        prompt,
+        contextPackage: null,
+        semanticCompaction: null,
+        messages: responseItemsToChatMessages({
+            instructions: requestPayload.instructions,
+            input: requestPayload.input,
+            materializeLocalImages: false
+        }),
+        promptProfile: {
+            id: TASK_ROUTE_PROMPT_PROFILE_ID,
+            compact: true,
+            reason: 'task_route_first_decision'
+        },
+        toolOutputChars: 0,
+        stats: {
+            input_items: requestPayload.input.length,
+            context_history_items: visibleHistory.length,
+            function_call_outputs: 0,
+            tool_search_outputs: 0,
+            legacy_events: 0
+        }
+    };
+}
+
 function appendUserInputToContextManager(contextManager, text = '') {
     const normalized = normalizeText(text);
     if (!contextManager || !normalized || typeof contextManager.recordItems !== 'function') {
@@ -9054,7 +9197,10 @@ class AILISAgentRunner {
                         ? `Native direct tools exposed: ${directToolSpecs.map((tool) => tool.name).slice(0, 16).join(', ')}${directToolSpecs.length > 16 ? ', ...' : ''}.`
                         : 'No native tools are exposed in this turn; answer directly if possible.'
             };
-            const parallelToolCalls = resolveParallelToolCalls(decisionSettings, requestContext);
+            const taskRoutePending = requestContext.taskAgentRoutePending === true;
+            const parallelToolCalls = taskRoutePending
+                ? false
+                : resolveParallelToolCalls(decisionSettings, requestContext);
             const directToolChoice = resolveAgentDirectToolChoice({
                 agentRuntimeRole,
                 request,
@@ -9062,12 +9208,20 @@ class AILISAgentRunner {
                 directToolSpecs,
                 stepResults
             });
-            const directModelInputPrompt = buildLlmAgentDirectToolPrompt({
-                ...commonPromptArgs,
-                unrestrictedToolExecution:
-                    requestContext.taskAgentPermissionMode === 'unrestricted',
-                parallelToolCalls
-            });
+            const directModelInputPrompt = taskRoutePending
+                ? buildTaskRouteDirectToolPrompt({
+                      message: currentTurnRequest,
+                      taskState,
+                      fileAttachments,
+                      runtimeEnvironment,
+                      tools: directToolSpecs
+                  })
+                : buildLlmAgentDirectToolPrompt({
+                      ...commonPromptArgs,
+                      unrestrictedToolExecution:
+                          requestContext.taskAgentPermissionMode === 'unrestricted',
+                      parallelToolCalls
+                  });
             modelInputContextManager = directModelInputPrompt.contextManager || modelInputContextManager;
             if (directModelInputPrompt.semanticCompaction?.compacted) {
                 await appendRuntimeItem({
@@ -9170,7 +9324,9 @@ class AILISAgentRunner {
                 timeoutMs: decisionTimeoutMs,
                 messages: decisionMessages,
                 abortSignal,
-                onTextDelta: typeof request.onTextDelta === 'function'
+                onTextDelta: taskRoutePending
+                    ? () => {}
+                    : typeof request.onTextDelta === 'function'
                     ? (delta, metadata = {}) => request.onTextDelta(delta, {
                           ...metadata,
                           runId,
@@ -11642,6 +11798,7 @@ module.exports = {
     buildToolExecutionGroups,
     buildAgentPromptCacheKey,
     buildLlmAgentDirectToolPrompt,
+    buildTaskRouteDirectToolPrompt,
     buildTaskRunHandoffPackage,
     buildResearchProgressState,
     buildDirectModelImageAttachments,

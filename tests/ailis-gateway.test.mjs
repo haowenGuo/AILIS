@@ -1210,6 +1210,20 @@ test('AILIS Gateway opens one background Turn and publishes Persona only after T
         assert.equal(publicEvents.filter((event) => event.type === 'agent.turn.steered').length, 1);
         releaseTaskRoute();
         await gateway.waitForBackgroundTaskRuns();
+        assert.deepEqual(textDeltas.map((entry) => entry.delta), ['夏日清风']);
+        assert.deepEqual(streamEvents.map((event) => event.type), [
+            'response.output_text.started',
+            'response.output_text.committed'
+        ]);
+        const personaStreamMessages = publicEvents.filter((event) => (
+            event.type === 'persona.background.message' && event.payload?.kind === 'stream'
+        ));
+        assert.deepEqual(personaStreamMessages.map((event) => event.payload.streamState), [
+            'started',
+            'delta',
+            'committed'
+        ]);
+        assert.equal(personaStreamMessages[1].payload.text, '夏日清风');
         assert.equal(personaOutputs.length, 1);
         assert.equal(memoryCalls.length, 1);
         const finalMessages = publicEvents.filter((event) => (
@@ -1288,6 +1302,9 @@ test('AILIS Gateway keeps task execution private until one Persona FinalAnswer i
         assert.equal(result.deferAssistantCommit, true);
         assert.equal(textDeltas.length, 0);
         await gateway.waitForBackgroundTaskRuns();
+        assert.equal(gateway.eventLog.some((event) => (
+            event.type === 'persona.background.message' && event.payload?.kind === 'stream'
+        )), false);
         const renderCalls = runnerCalls.filter((request) => request.context?.personaRenderOnly === true);
         assert.equal(renderCalls.length, 1);
         assert.ok(renderCalls.every((request) => request.memoryPolicy === 'read_only'));

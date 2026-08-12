@@ -1003,6 +1003,22 @@ async function fetchSseWithTimeout(
                 error: errorText || `模型接口请求失败，状态码：${response.status}`
             };
         }
+        const contentType = normalizeString(response.headers.get('content-type')).toLowerCase();
+        if (contentType.includes('application/json')) {
+            const rawJson = await response.text();
+            const parsedJson = safeJsonParse(rawJson);
+            if (!parsedJson) {
+                return {
+                    ok: false,
+                    code: 'invalid_json_response',
+                    error: '模型接口返回了无法解析的 JSON。'
+                };
+            }
+            if (typeof onData === 'function') {
+                await onData(JSON.stringify(parsedJson));
+            }
+            return { ok: true, compatibilityMode: 'json' };
+        }
         if (!response.body) {
             return {
                 ok: false,
@@ -1210,7 +1226,7 @@ async function callOpenAiCompatible(settings, payload, messages) {
                 }
                 usage = chunk.usage || usage;
                 const choice = chunk.choices?.[0] || {};
-                const delta = choice.delta || {};
+                const delta = choice.delta || choice.message || {};
                 finishReason = choice.finish_reason || finishReason;
                 const textDelta = extractContentDeltaTextFromOpenAiMessage(delta);
                 if (textDelta) {

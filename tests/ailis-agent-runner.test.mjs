@@ -17,10 +17,12 @@ const {
 const {
     AILISAgentRunner,
         buildAgentDirectToolSpecs,
+        buildAgentDecisionLowLatencyPayload,
         buildAgentPromptCacheKey,
         buildDirectModelImageAttachments,
         buildInvalidDecisionProgressRecord,
         buildLlmAgentDirectToolPrompt,
+    buildTaskRouteDirectToolPrompt,
     buildToolExecutionGroups,
     buildResearchProgressState,
         buildStagedAttachmentFilename,
@@ -38,6 +40,56 @@ const {
     stripControlTags,
     validateNativeDirectToolCall
 } = require('../electron/ailis-agent-runner.cjs');
+
+test('TaskAgent first route uses a compact semantic context lane without the full coding prompt', () => {
+    const prompt = buildTaskRouteDirectToolPrompt({
+        message: '不用列清单，直接告诉我：今晚该继续硬撑，还是早点休息？',
+        taskState: {
+            active_goal: null,
+            session_ledger: {
+                visible_history: [
+                    { role: 'user', content: '我今天有点累，陪我简单聊两句。', authority: 'user_instruction' },
+                    { role: 'assistant', content: '那就在聊天里歇一会儿吧。', authority: 'display_only' }
+                ],
+                completed_turns: [],
+                unresolved_fields: []
+            }
+        },
+        tools: [{
+            name: 'task_route',
+            description: 'Route this turn.',
+            parameters: {
+                type: 'object',
+                required: ['mode'],
+                properties: { mode: { type: 'string', enum: ['chat', 'execute'] } }
+            }
+        }]
+    });
+
+    assert.equal(prompt.promptProfile.id, 'task_route_compact_v1');
+    assert.deepEqual(prompt.tools.map((tool) => tool.name), ['task_route']);
+    assert.match(prompt.instructions, /emotional support, casual conversation, advice/);
+    assert.match(prompt.instructions, /not by itself task execution/);
+    assert.doesNotMatch(prompt.instructions, /## Task execution|Validating your work|coding guidelines/);
+    assert.match(JSON.stringify(prompt.input), /今晚该继续硬撑/);
+    assert.match(JSON.stringify(prompt.input), /我今天有点累/);
+});
+
+test('DeepSeek first route disables thinking while preserving native model routing', () => {
+    const payload = buildAgentDecisionLowLatencyPayload({}, {
+        settings: {
+            provider: 'openai-compatible',
+            baseUrl: 'https://api.deepseek.com',
+            model: 'deepseek-v4-flash'
+        },
+        requestContext: { taskAgentRoutePending: true }
+    });
+
+    assert.deepEqual(payload.thinking, { type: 'disabled' });
+    assert.equal(payload.max_tokens, 128);
+    assert.equal(payload.parallel_tool_calls, false);
+    assert.equal(payload.latencyProfile, 'task_route_fast');
+});
 
 test('native tool scheduler preserves every call while mixing parallel-safe and serial groups', () => {
     const calls = [

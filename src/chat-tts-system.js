@@ -116,6 +116,7 @@ export class ChatTTSSystem {
         this.activeTurn = null;
         this.cancelledTurnIds = new Set();
         this.backgroundMessageIds = new Set();
+        this.backgroundStreams = new Map();
         this.backgroundMessageChain = Promise.resolve();
         this.backgroundMessageUnsubscribe = null;
         this.systemNoticeUnsubscribe = null;
@@ -772,10 +773,7 @@ export class ChatTTSSystem {
 
     async commitBackgroundAssistantMessage(payload = {}) {
         await this.historyReady;
-        const displayText = payload.display_text || payload.speech_text || '';
-        if (!displayText) {
-            return;
-        }
+        const backgroundTaskKind = String(payload.backgroundTaskKind || 'progress').trim().toLowerCase();
         const eventId = String(payload.backgroundEventId || '').trim();
         if (eventId && this.backgroundMessageIds.has(eventId)) {
             return;
@@ -787,7 +785,25 @@ export class ChatTTSSystem {
             }
         }
 
-        const aiMessageDiv = this.createAIMessage();
+        if (backgroundTaskKind === 'stream') {
+            this.commitBackgroundAssistantStream(payload);
+            return;
+        }
+
+        const displayText = payload.display_text || payload.speech_text || '';
+        if (!displayText) {
+            return;
+        }
+
+        this.backgroundStreams ||= new Map();
+        const backgroundRunId = String(payload.backgroundRunId || '').trim();
+        const streamEntry = backgroundRunId
+            ? this.backgroundStreams.get(backgroundRunId)
+            : null;
+        const aiMessageDiv = streamEntry?.aiMessageDiv || this.createAIMessage();
+        if (backgroundRunId) {
+            this.backgroundStreams.delete(backgroundRunId);
+        }
         this.executeAvatarCue(payload, aiMessageDiv);
         this.updateMessageContent(aiMessageDiv, displayText);
         this.scrollToBottom();
@@ -805,6 +821,47 @@ export class ChatTTSSystem {
         this.startAutoChatTimer(
             payload.backgroundTaskKind === 'result' ? 'task_result' : 'task_progress'
         );
+    }
+
+    commitBackgroundAssistantStream(payload = {}) {
+        this.backgroundStreams ||= new Map();
+        const runId = String(payload.backgroundRunId || '').trim();
+        const streamId = String(payload.backgroundStreamId || '').trim();
+        const streamState = String(payload.backgroundStreamState || 'delta').trim().toLowerCase();
+        if (!runId) {
+            return;
+        }
+
+        const existing = this.backgroundStreams.get(runId);
+        if (streamState === 'discarded') {
+            if (existing && (!streamId || existing.streamId === streamId)) {
+                this.removeMessageElement(existing.aiMessageDiv);
+                this.backgroundStreams.delete(runId);
+            }
+            return;
+        }
+
+        const displayText = payload.display_text || '';
+        if (!displayText) {
+            return;
+        }
+
+        let entry = existing;
+        if (entry && streamId && entry.streamId !== streamId) {
+            this.removeMessageElement(entry.aiMessageDiv);
+            this.backgroundStreams.delete(runId);
+            entry = null;
+        }
+        if (!entry) {
+            entry = {
+                streamId,
+                aiMessageDiv: this.createAIMessage()
+            };
+            this.backgroundStreams.set(runId, entry);
+        }
+        this.executeAvatarCue(payload, entry.aiMessageDiv);
+        this.updateMessageContent(entry.aiMessageDiv, displayText);
+        this.scrollToBottom();
     }
 
     async triggerAutoChat(opportunity = null) {

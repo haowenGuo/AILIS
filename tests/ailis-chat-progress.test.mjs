@@ -160,6 +160,92 @@ test('chat service returns a deferred Turn without fabricating an assistant bubb
     assert.equal(backgroundMessages[0].backgroundEventId, 'event-task-result');
 });
 
+test('chat service forwards gated Persona stream snapshots before the final background result', async () => {
+    const listeners = new Set();
+    const gateway = {
+        isSupported: true,
+        onEvent(listener) {
+            listeners.add(listener);
+            return () => listeners.delete(listener);
+        },
+        async getStatus() {
+            return { running: true, workspaceRoot: 'F:/AILIS/main' };
+        },
+        async runAgent() {
+            const emit = (event) => {
+                for (const listener of [...listeners]) listener(event);
+            };
+            emit({
+                id: 'stream-start',
+                type: 'persona.background.message',
+                payload: {
+                    runId: 'background-stream-run',
+                    sessionId: 'main',
+                    kind: 'stream',
+                    streamId: 'persona-stream-1',
+                    streamState: 'started',
+                    text: ''
+                }
+            });
+            emit({
+                id: 'stream-delta-1',
+                type: 'persona.background.message',
+                payload: {
+                    runId: 'background-stream-run',
+                    sessionId: 'main',
+                    kind: 'stream',
+                    streamId: 'persona-stream-1',
+                    streamState: 'delta',
+                    deltaText: '你好',
+                    text: '你好'
+                }
+            });
+            emit({
+                id: 'stream-delta-2',
+                type: 'persona.background.message',
+                payload: {
+                    runId: 'background-stream-run',
+                    sessionId: 'main',
+                    kind: 'stream',
+                    streamId: 'persona-stream-1',
+                    streamState: 'delta',
+                    deltaText: '呀',
+                    text: '你好呀'
+                }
+            });
+            return {
+                ok: true,
+                status: 'running',
+                displayText: '',
+                deferAssistantCommit: true,
+                backgroundTask: {
+                    runId: 'background-stream-run',
+                    sessionId: 'main',
+                    status: 'running'
+                }
+            };
+        }
+    };
+    const service = new AILISDesktopChatService({ gateway, runtimeKind: 'hosted' });
+    const backgroundMessages = [];
+    service.onBackgroundAssistantMessage((message) => backgroundMessages.push(message));
+
+    await service.fetchAssistantTurn({
+        sessionId: 'main',
+        messageHistory: [{ role: 'user', content: '你好' }],
+        replyMode: 'text_only'
+    });
+
+    assert.equal(backgroundMessages.length, 3);
+    assert.equal(backgroundMessages[0].backgroundStreamState, 'started');
+    assert.equal(backgroundMessages[0].display_text, '');
+    assert.equal(backgroundMessages[1].display_text, '你好');
+    assert.equal(backgroundMessages[1].stream_delta_text, '你好');
+    assert.equal(backgroundMessages[2].display_text, '你好呀');
+    assert.equal(backgroundMessages[2].backgroundStreamId, 'persona-stream-1');
+    assert.equal(backgroundMessages.every((message) => message.streamMode), true);
+});
+
 test('background runtime failures use the system notice channel instead of chat', () => {
     const listeners = new Set();
     const gateway = {

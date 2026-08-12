@@ -346,6 +346,111 @@ test('background TaskResult appends a new Persona bubble without locking the act
     ]);
 });
 
+test('background Persona stream updates one bubble and persists only the committed answer', async () => {
+    const calls = [];
+    const bubble = { id: 'persona-stream-bubble', dataset: {} };
+    const system = Object.create(ChatTTSSystem.prototype);
+    system.historyReady = Promise.resolve();
+    system.backgroundMessageIds = new Set();
+    system.backgroundStreams = new Map();
+    system.messageHistory = [];
+    system.proactiveCompanion = { noteAssistantTurn() {} };
+    system.createAIMessage = () => {
+        calls.push('create');
+        return bubble;
+    };
+    system.removeMessageElement = (element) => calls.push(`remove:${element.id}`);
+    system.executeAvatarCue = () => {};
+    system.updateMessageContent = (_element, text) => calls.push(`text:${text}`);
+    system.scrollToBottom = () => {};
+    system.persistConversation = async () => calls.push('persist');
+    system.stopLingeringSpeech = () => {};
+    system.startCommittedBubbleSpeech = (payload, element) => {
+        calls.push(`speech:${payload.display_text}:${element.id}`);
+    };
+    system.startAutoChatTimer = () => {};
+
+    await system.commitBackgroundAssistantMessage({
+        display_text: '你',
+        backgroundTaskKind: 'stream',
+        backgroundRunId: 'run-stream',
+        backgroundStreamId: 'stream-1',
+        backgroundStreamState: 'delta',
+        backgroundEventId: 'stream-event-1',
+        streamMode: true
+    });
+    await system.commitBackgroundAssistantMessage({
+        display_text: '你好呀',
+        backgroundTaskKind: 'stream',
+        backgroundRunId: 'run-stream',
+        backgroundStreamId: 'stream-1',
+        backgroundStreamState: 'delta',
+        backgroundEventId: 'stream-event-2',
+        streamMode: true
+    });
+
+    assert.equal(system.messageHistory.length, 0);
+    assert.equal(system.backgroundStreams.size, 1);
+
+    await system.commitBackgroundAssistantMessage({
+        display_text: '你好呀。',
+        speech_text: '你好呀。',
+        backgroundTaskKind: 'result',
+        backgroundRunId: 'run-stream',
+        backgroundStreamId: 'stream-1',
+        backgroundEventId: 'stream-final',
+        source: 'persona_actor'
+    });
+
+    assert.equal(system.backgroundStreams.size, 0);
+    assert.equal(system.messageHistory.length, 1);
+    assert.equal(system.messageHistory[0].content, '你好呀。');
+    assert.deepEqual(calls, [
+        'create',
+        'text:你',
+        'text:你好呀',
+        'text:你好呀。',
+        'persist',
+        'speech:你好呀。:persona-stream-bubble'
+    ]);
+});
+
+test('discarded background Persona stream removes its uncommitted bubble', async () => {
+    const calls = [];
+    const bubble = { id: 'discarded-stream', dataset: {} };
+    const system = Object.create(ChatTTSSystem.prototype);
+    system.historyReady = Promise.resolve();
+    system.backgroundMessageIds = new Set();
+    system.backgroundStreams = new Map();
+    system.messageHistory = [];
+    system.createAIMessage = () => bubble;
+    system.removeMessageElement = (element) => calls.push(`remove:${element.id}`);
+    system.executeAvatarCue = () => {};
+    system.updateMessageContent = () => {};
+    system.scrollToBottom = () => {};
+
+    await system.commitBackgroundAssistantMessage({
+        display_text: '尚未提交',
+        backgroundTaskKind: 'stream',
+        backgroundRunId: 'run-discard',
+        backgroundStreamId: 'stream-discard',
+        backgroundStreamState: 'delta',
+        backgroundEventId: 'discard-delta'
+    });
+    await system.commitBackgroundAssistantMessage({
+        display_text: '',
+        backgroundTaskKind: 'stream',
+        backgroundRunId: 'run-discard',
+        backgroundStreamId: 'stream-discard',
+        backgroundStreamState: 'discarded',
+        backgroundEventId: 'discard-final'
+    });
+
+    assert.equal(system.backgroundStreams.size, 0);
+    assert.deepEqual(calls, ['remove:discarded-stream']);
+    assert.equal(system.messageHistory.length, 0);
+});
+
 test('web experience enables server TTS and unlocks audio from the send gesture', async () => {
     const source = await readFile(new URL('../Test/app.js', import.meta.url), 'utf8');
     const html = await readFile(new URL('../Test/index.html', import.meta.url), 'utf8');
