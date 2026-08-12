@@ -441,15 +441,9 @@ class AILISHostedRuntimeManager {
             10 * 60 * 1000
         );
         let routeMode = '';
-        let backgroundFinished = false;
-        let finishRunId = '';
         let resolveRoute;
-        let resolveFinished;
         const routePromise = new Promise((resolve) => {
             resolveRoute = resolve;
-        });
-        const finishedPromise = new Promise((resolve) => {
-            resolveFinished = resolve;
         });
         const onEvent = (event = {}) => {
             const eventSessionId = normalizeString(
@@ -465,11 +459,6 @@ class AILISHostedRuntimeManager {
                     resolveRoute(mode);
                 }
                 return;
-            }
-            if (event.type === 'task.background.finished') {
-                backgroundFinished = true;
-                finishRunId = normalizeString(event.payload?.runId);
-                resolveFinished(event);
             }
         };
         const waitFor = (promise, timeoutMs) => new Promise((resolve) => {
@@ -497,10 +486,7 @@ class AILISHostedRuntimeManager {
                     ...(decidedRoute ? { taskRoute: decidedRoute } : {})
                 };
             }
-            const outerRunId = normalizeString(result.runId || result.backgroundTask?.runId);
-            if (!backgroundFinished || (outerRunId && finishRunId && finishRunId !== outerRunId)) {
-                await waitFor(finishedPromise, chatTimeoutMs);
-            }
+            await waitFor(record.gateway.waitForBackgroundTaskRuns(), chatTimeoutMs);
             return {
                 ...result,
                 taskRoute: 'chat'
