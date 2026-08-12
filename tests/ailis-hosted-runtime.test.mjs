@@ -78,6 +78,10 @@ class DeferredPersonaGateway extends EventEmitter {
                 type: 'task_agent.route.decided',
                 payload: { runId: `task-${runId}`, sessionId: request.sessionId, mode: this.route }
             });
+            await request.onTaskRoute?.(this.route, {
+                runId,
+                sessionId: request.sessionId
+            });
             if (this.route === 'chat') {
                 await request.onTextStreamEvent?.({
                     type: 'response.output_text.started',

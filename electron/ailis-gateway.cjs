@@ -3435,6 +3435,14 @@ class AILISGateway extends EventEmitter {
             }
             if (type === 'task_agent.route.decided') {
                 activeState.taskRoute = normalizeString(event.payload?.mode, activeState.taskRoute).toLowerCase();
+                try {
+                    const pending = input.onTaskRoute?.(activeState.taskRoute, {
+                        runId: outerRunId,
+                        sessionId,
+                        turnId: activeState.turnId
+                    });
+                    pending?.catch?.(() => {});
+                } catch {}
                 if (activeState.taskRoute === 'chat') {
                     activeState.openPersonaStream?.();
                 } else if (activeState.taskRoute === 'execute') {

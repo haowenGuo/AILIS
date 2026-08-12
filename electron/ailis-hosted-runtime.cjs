@@ -415,6 +415,9 @@ class AILISHostedRuntimeManager {
             if (typeof options.onTextStreamEvent === 'function') {
                 request.onTextStreamEvent = options.onTextStreamEvent;
             }
+            if (typeof options.onTaskRoute === 'function') {
+                request.onTaskRoute = options.onTaskRoute;
+            }
             return await record.gateway.runAgent(request);
         } finally {
             record.activeRuns = Math.max(0, record.activeRuns - 1);
@@ -490,7 +493,16 @@ class AILISHostedRuntimeManager {
 
         record.gateway.on?.('event', onEvent);
         try {
-            const result = await this.runAgent(tenantId, payload, options);
+            const result = await this.runAgent(tenantId, payload, {
+                ...options,
+                onTaskRoute: (mode) => {
+                    const normalizedMode = normalizeString(mode).toLowerCase();
+                    if (['chat', 'execute'].includes(normalizedMode) && !routeMode) {
+                        routeMode = normalizedMode;
+                        resolveRoute(normalizedMode);
+                    }
+                }
+            });
             if (result?.deferAssistantCommit !== true || result?.backgroundTask?.status !== 'running') {
                 return result;
             }
