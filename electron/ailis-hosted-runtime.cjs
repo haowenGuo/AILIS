@@ -422,6 +422,94 @@ class AILISHostedRuntimeManager {
         }
     }
 
+    async runAgentEventStream(tenantId, payload = {}, options = {}) {
+        const record = await this.getRuntime(tenantId);
+        const sessionId = normalizeString(
+            payload.sessionId || payload.sessionKey,
+            'main'
+        ).slice(0, 160);
+        const routeTimeoutMs = boundedInteger(
+            options.routeTimeoutMs,
+            180000,
+            1000,
+            10 * 60 * 1000
+        );
+        const chatTimeoutMs = boundedInteger(
+            options.chatTimeoutMs,
+            180000,
+            1000,
+            10 * 60 * 1000
+        );
+        let routeMode = '';
+        let backgroundFinished = false;
+        let finishRunId = '';
+        let resolveRoute;
+        let resolveFinished;
+        const routePromise = new Promise((resolve) => {
+            resolveRoute = resolve;
+        });
+        const finishedPromise = new Promise((resolve) => {
+            resolveFinished = resolve;
+        });
+        const onEvent = (event = {}) => {
+            const eventSessionId = normalizeString(
+                event.payload?.sessionId || event.sessionId
+            );
+            if (eventSessionId && eventSessionId !== sessionId) {
+                return;
+            }
+            if (event.type === 'task_agent.route.decided') {
+                const mode = normalizeString(event.payload?.mode).toLowerCase();
+                if (['chat', 'execute'].includes(mode) && !routeMode) {
+                    routeMode = mode;
+                    resolveRoute(mode);
+                }
+                return;
+            }
+            if (event.type === 'task.background.finished') {
+                backgroundFinished = true;
+                finishRunId = normalizeString(event.payload?.runId);
+                resolveFinished(event);
+            }
+        };
+        const waitFor = (promise, timeoutMs) => new Promise((resolve) => {
+            const timer = setTimeout(() => resolve(null), timeoutMs);
+            timer.unref?.();
+            promise.then((value) => {
+                clearTimeout(timer);
+                resolve(value);
+            }, () => {
+                clearTimeout(timer);
+                resolve(null);
+            });
+        });
+
+        record.gateway.on?.('event', onEvent);
+        try {
+            const result = await this.runAgent(tenantId, payload, options);
+            if (result?.deferAssistantCommit !== true || result?.backgroundTask?.status !== 'running') {
+                return result;
+            }
+            const decidedRoute = routeMode || await waitFor(routePromise, routeTimeoutMs);
+            if (decidedRoute !== 'chat') {
+                return {
+                    ...result,
+                    ...(decidedRoute ? { taskRoute: decidedRoute } : {})
+                };
+            }
+            const outerRunId = normalizeString(result.runId || result.backgroundTask?.runId);
+            if (!backgroundFinished || (outerRunId && finishRunId && finishRunId !== outerRunId)) {
+                await waitFor(finishedPromise, chatTimeoutMs);
+            }
+            return {
+                ...result,
+                taskRoute: 'chat'
+            };
+        } finally {
+            record.gateway.off?.('event', onEvent);
+        }
+    }
+
     async interruptAgentRun(tenantId, payload = {}) {
         const record = await this.getRuntime(tenantId);
         return await record.gateway.interruptAgentRun({

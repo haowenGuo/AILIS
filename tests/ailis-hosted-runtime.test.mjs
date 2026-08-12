@@ -60,6 +60,108 @@ class FakeGateway extends EventEmitter {
     }
 }
 
+class DeferredPersonaGateway extends EventEmitter {
+    constructor(options, route = 'chat') {
+        super();
+        this.options = options;
+        this.route = route;
+        this.backgroundRuns = new Set();
+    }
+
+    startProfileCurationScheduler() {}
+
+    async runAgent(request) {
+        const runId = `outer-${this.route}`;
+        const background = (async () => {
+            await new Promise((resolve) => setTimeout(resolve, 10));
+            this.emit('event', {
+                type: 'task_agent.route.decided',
+                payload: { runId: `task-${runId}`, sessionId: request.sessionId, mode: this.route }
+            });
+            if (this.route === 'chat') {
+                await request.onTextStreamEvent?.({
+                    type: 'response.output_text.started',
+                    streamId: `${runId}:persona:0`
+                });
+                await request.onTextDelta?.('在线回复', { streamId: `${runId}:persona:0` });
+                await request.onTextStreamEvent?.({
+                    type: 'response.output_text.committed',
+                    streamId: `${runId}:persona:0`
+                });
+            }
+            this.emit('event', {
+                type: 'task.background.finished',
+                payload: { runId, sessionId: request.sessionId, status: 'completed' }
+            });
+        })();
+        this.backgroundRuns.add(background);
+        void background.finally(() => this.backgroundRuns.delete(background));
+        return {
+            ok: true,
+            runId,
+            sessionId: request.sessionId,
+            status: 'running',
+            taskRoute: 'pending',
+            displayText: '',
+            deferAssistantCommit: true,
+            backgroundTask: { runId, status: 'running' }
+        };
+    }
+
+    hasBackgroundTaskRuns() {
+        return this.backgroundRuns.size > 0;
+    }
+
+    async waitForBackgroundTaskRuns() {
+        await Promise.allSettled([...this.backgroundRuns]);
+    }
+
+    async stop() {
+        await this.waitForBackgroundTaskRuns();
+    }
+}
+
+test('hosted event stream stays open for chat Persona but releases execute routes', async () => {
+    const dataRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-hosted-stream-lifecycle-'));
+    const deltas = [];
+    const streamEvents = [];
+    let nextRoute = 'chat';
+    const manager = new AILISHostedRuntimeManager({
+        dataRoot,
+        gatewayFactory: (options) => new DeferredPersonaGateway(options, nextRoute)
+    });
+
+    try {
+        const chatResult = await manager.runAgentEventStream('web:stream-chat', {
+            sessionId: 'chat-session',
+            message: '陪我聊一句'
+        }, {
+            onTextDelta: (delta) => deltas.push(delta),
+            onTextStreamEvent: (event) => streamEvents.push(event.type),
+            routeTimeoutMs: 1000,
+            chatTimeoutMs: 1000
+        });
+        assert.equal(chatResult.taskRoute, 'chat');
+        assert.deepEqual(deltas, ['在线回复']);
+        assert.deepEqual(streamEvents, [
+            'response.output_text.started',
+            'response.output_text.committed'
+        ]);
+
+        nextRoute = 'execute';
+        const executeResult = await manager.runAgentEventStream('web:stream-execute', {
+            sessionId: 'execute-session',
+            message: '执行任务'
+        }, {
+            routeTimeoutMs: 1000,
+            chatTimeoutMs: 1000
+        });
+        assert.equal(executeResult.taskRoute, 'execute');
+    } finally {
+        await manager.close();
+    }
+});
+
 test('hosted runtime isolates memory and workspace roots per signed tenant', async () => {
     const dataRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-hosted-runtime-'));
     const projectRoot = path.resolve('.');
@@ -574,7 +676,8 @@ test('hosted TaskAgent Turn receives the complete shared Session conversation', 
             (request.tools || []).some((tool) => (tool?.function?.name || tool?.name) === 'task_route')
         );
         assert.ok(resumedTaskRequest, JSON.stringify(requests.slice(requestCountBeforeResume)));
-        assert.match(JSON.stringify(resumedTaskRequest), /shared_session_context/);
+        assert.match(JSON.stringify(resumedTaskRequest), /ailis\.task_route_context\.v1/);
+        assert.match(JSON.stringify(resumedTaskRequest), /visible_history/);
         assert.match(JSON.stringify(resumedTaskRequest), /帮我查木偶攻略/);
         assert.match(JSON.stringify(resumedTaskRequest), /继续/);
 

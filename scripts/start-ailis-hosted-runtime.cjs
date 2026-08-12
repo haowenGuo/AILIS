@@ -126,7 +126,7 @@ const server = http.createServer(async (req, res) => {
             }, 15000);
             keepAlive.unref?.();
             try {
-                const result = await manager.runAgent(
+                const result = await manager.runAgentEventStream(
                     body.tenantId,
                     body.payload || {},
                     {
