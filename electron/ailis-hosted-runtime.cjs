@@ -441,9 +441,15 @@ class AILISHostedRuntimeManager {
             10 * 60 * 1000
         );
         let routeMode = '';
+        let outerRunId = '';
+        const finishedRunIds = new Set();
         let resolveRoute;
+        let resolveFinished;
         const routePromise = new Promise((resolve) => {
             resolveRoute = resolve;
+        });
+        const finishedPromise = new Promise((resolve) => {
+            resolveFinished = resolve;
         });
         const onEvent = (event = {}) => {
             const eventSessionId = normalizeString(
@@ -459,6 +465,15 @@ class AILISHostedRuntimeManager {
                     resolveRoute(mode);
                 }
                 return;
+            }
+            if (event.type === 'task.background.finished') {
+                const eventRunId = normalizeString(event.payload?.runId);
+                if (eventRunId) {
+                    finishedRunIds.add(eventRunId);
+                }
+                if (outerRunId && eventRunId === outerRunId) {
+                    resolveFinished(event);
+                }
             }
         };
         const waitFor = (promise, timeoutMs) => new Promise((resolve) => {
@@ -479,6 +494,7 @@ class AILISHostedRuntimeManager {
             if (result?.deferAssistantCommit !== true || result?.backgroundTask?.status !== 'running') {
                 return result;
             }
+            outerRunId = normalizeString(result.runId || result.backgroundTask?.runId);
             const decidedRoute = routeMode || await waitFor(routePromise, routeTimeoutMs);
             if (decidedRoute !== 'chat') {
                 return {
@@ -486,7 +502,9 @@ class AILISHostedRuntimeManager {
                     ...(decidedRoute ? { taskRoute: decidedRoute } : {})
                 };
             }
-            await waitFor(record.gateway.waitForBackgroundTaskRuns(), chatTimeoutMs);
+            if (!finishedRunIds.has(outerRunId)) {
+                await waitFor(finishedPromise, chatTimeoutMs);
+            }
             return {
                 ...result,
                 taskRoute: 'chat'
