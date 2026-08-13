@@ -12,6 +12,7 @@ This directory contains the design record, operating guides, evaluation plans, a
   parameters, BM25-only evaluation results, latency, and future comparison rules.
 - [Tool Ecosystem Driver Guide](tool-ecosystem-driver-guide.md) - tool, MCP, skill, and adapter entry points.
 - [Demo and Benchmark Scorecard](ailis-demo-benchmark-scorecard.md) - current evidence and benchmark status.
+- [TaskAgent A7 Context Baseline](ailis-a7-taskagent-context-baseline.md) - current mainline context profile, frozen Terminal-Bench evidence, and the next promotion gate.
 
 ## Agent Runtime And Harness
 
@@ -28,6 +29,7 @@ This directory contains the design record, operating guides, evaluation plans, a
 - [Runtime Alignment Verification](ailis-runtime-codex-openclaw-verification.md)
 - [Codex Runtime Optimization Reference](codex-runtime-optimization-reference.md)
 - [AILIS vs Codex Execution Benchmark](ailis-vs-codex-execution-benchmark.md)
+- [TaskAgent A7 Context Baseline](ailis-a7-taskagent-context-baseline.md)
 
 ## Tools, Artifacts, And Integrations
 

@@ -142,7 +142,7 @@ function toolOutputToModelInputItems(toolOutputLike = {}, index = 0, options = {
         return [];
     }
     return toolOutputToResponseItems(toolOutput, {
-        toolOutputChars: options.toolOutputChars || 24000
+        toolOutputChars: options.toolOutputChars ?? 24000
     }).filter(Boolean);
 }
 

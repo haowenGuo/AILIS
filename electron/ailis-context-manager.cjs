@@ -16,13 +16,16 @@ const {
 } = require('./ailis-runtime-budget.cjs');
 
 const DEFAULT_TOOL_OUTPUT_CHARS = 24000;
-const DEFAULT_RECENT_TOOL_OUTPUTS = 4;
-const DEFAULT_PINNED_COMPLETE_OUTPUTS = 2;
-const DEFAULT_STALE_TOOL_OUTPUT_CHARS = 900;
-const DEFAULT_COMPACTION_TRIGGER_OUTPUTS = 6;
-const DEFAULT_COMPACTION_TRIGGER_CHARS = 32000;
 const DEFAULT_MAX_INPUT_IMAGES = 8;
 const IMAGE_CONTENT_OMITTED_PLACEHOLDER = 'image content omitted because you do not support image input';
+
+function resolveToolOutputChars(value, fallback = DEFAULT_TOOL_OUTPUT_CHARS) {
+    if (value === null || value === undefined || value === '') {
+        return fallback;
+    }
+    const parsed = Number(value);
+    return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+}
 
 function normalizeInputModalities(inputModalities = []) {
     return new Set((Array.isArray(inputModalities) ? inputModalities : [])
@@ -164,21 +167,6 @@ function collectRecentCallOutputPairs(items = [], pairLimit = 4) {
     return pairs.reverse().flat();
 }
 
-function isPinnedCompleteObservationText(text = '') {
-    return /reasoning[_-]?ready\s*[:=]\s*true/i.test(text) ||
-        /\bcomplete\s*[:=]\s*true\b/i.test(text) && /\btruncated\s*[:=]\s*false\b/i.test(text);
-}
-
-function extractObservationHeaderLines(text = '') {
-    return String(text || '')
-        .split(/\r?\n/)
-        .map((line) => line.trim())
-        .filter((line) => /^(Status|Error|DurationMs|OutputArtifact|OutputArtifactTools|OutputArtifactHint|exitCode|outputId|bytes|modelHint)\b/i.test(line) ||
-            /^<truncated\b/i.test(line) ||
-            /\b(reasoning[_-]?ready|complete|truncated)\s*[:=]/i.test(line))
-        .slice(0, 18);
-}
-
 function extractOutputRefsFromText(text = '') {
     const refs = [];
     const seen = new Set();
@@ -263,28 +251,6 @@ function normalizeContextPackageValue(value, maxChars = 4000) {
     return summarizeForModel(value, maxChars);
 }
 
-function compactToolOutputPayload(payload = '', maxChars = DEFAULT_STALE_TOOL_OUTPUT_CHARS) {
-    const normalized = FunctionCallOutputPayload.normalize(payload);
-    const text = FunctionCallOutputPayload.toText(normalized);
-    if (!text || text.includes('OLDER_TOOL_OBSERVATION_COMPACTED') || text.length <= maxChars) {
-        return normalized;
-    }
-    const headerLines = extractObservationHeaderLines(text);
-    const compactedText = [
-        'OLDER_TOOL_OBSERVATION_COMPACTED:',
-        `originalTextChars=${text.length}`,
-        'Reason: older exploratory tool output was compacted to keep the active task context focused.',
-        'Use newer complete observations first; if this output exposes outputId, use output_read/output_tail/output_search for a focused slice.',
-        headerLines.length ? '--- retained status lines ---' : '',
-        ...headerLines,
-        '--- compact preview ---',
-        summarizeForModel(text, maxChars)
-    ].filter(Boolean).join('\n');
-    return FunctionCallOutputPayload.fromText(compactedText, {
-        success: FunctionCallOutputPayload.success(normalized)
-    });
-}
-
 function defaultOutputForCall(call = {}) {
     const callId = callIdOf(call);
     if (!callId) {
@@ -331,7 +297,7 @@ class ContextManager {
         this.history_version = Number(historyVersion || 0);
         this.token_info = tokenInfo;
         this.reference_context_item = referenceContextItem;
-        this.toolOutputChars = Number(toolOutputChars || DEFAULT_TOOL_OUTPUT_CHARS);
+        this.toolOutputChars = resolveToolOutputChars(toolOutputChars);
         this.recordItems(items);
     }
 
@@ -384,7 +350,7 @@ class ContextManager {
     }
 
     recordItems(items = [], policy = {}) {
-        const maxChars = Number(policy.toolOutputChars || this.toolOutputChars || DEFAULT_TOOL_OUTPUT_CHARS);
+        const maxChars = resolveToolOutputChars(policy.toolOutputChars, this.toolOutputChars);
         for (const item of Array.isArray(items) ? items : []) {
             if (!item || typeof item !== 'object') {
                 continue;
@@ -394,7 +360,7 @@ class ContextManager {
     }
 
     processItem(item = {}, policy = {}) {
-        const maxChars = Number(policy.toolOutputChars || this.toolOutputChars || DEFAULT_TOOL_OUTPUT_CHARS);
+        const maxChars = resolveToolOutputChars(policy.toolOutputChars, this.toolOutputChars);
         if (item.type === 'function_call_output') {
             return {
                 ...cloneJson(item),
@@ -455,18 +421,7 @@ class ContextManager {
     }
 
     compactForBudget(options = {}) {
-        let report = this.contextBudgetReport(options);
-        if (report.level === 'soft' || report.level === 'hard' || report.level === 'stop') {
-            this.compactStaleToolOutputs({ force: true });
-            report = this.contextBudgetReport(options);
-        }
-        if (report.level === 'stop') {
-            this.compactStaleToolOutputs({
-                force: true,
-                maxChars: Math.max(300, Math.floor(DEFAULT_STALE_TOOL_OUTPUT_CHARS / 2))
-            });
-            report = this.contextBudgetReport(options);
-        }
+        const report = this.contextBudgetReport(options);
         this.last_context_budget_report = report;
         return report;
     }
@@ -681,7 +636,6 @@ class ContextManager {
     normalizeHistory(inputModalities = []) {
         this.ensureCallOutputsPresent();
         this.removeOrphanOutputs();
-        this.compactStaleToolOutputs();
         if (!supportsImages(inputModalities)) {
             this.stripImagesWhenUnsupported();
         }
@@ -734,46 +688,6 @@ class ContextManager {
             }
         }
         return kept;
-    }
-
-    compactStaleToolOutputs({ force = false, maxChars = DEFAULT_STALE_TOOL_OUTPUT_CHARS } = {}) {
-        const outputIndices = this.items
-            .map((item, index) => (isToolOutputItem(item) ? index : -1))
-            .filter((index) => index >= 0);
-        if (!force &&
-            outputIndices.length <= DEFAULT_COMPACTION_TRIGGER_OUTPUTS &&
-            this.totalModelVisibleChars() <= DEFAULT_COMPACTION_TRIGGER_CHARS) {
-            return;
-        }
-        const recent = new Set(outputIndices.slice(-DEFAULT_RECENT_TOOL_OUTPUTS));
-        const pinned = new Set();
-        for (const index of outputIndices.slice().reverse()) {
-            if (pinned.size >= DEFAULT_PINNED_COMPLETE_OUTPUTS) {
-                break;
-            }
-            if (recent.has(index)) {
-                continue;
-            }
-            const text = FunctionCallOutputPayload.toText(this.items[index]?.output || '');
-            if (isPinnedCompleteObservationText(text)) {
-                pinned.add(index);
-            }
-        }
-        this.items = this.items.map((item, index) => {
-            if (!isToolOutputItem(item) || recent.has(index) || pinned.has(index)) {
-                return cloneJson(item);
-            }
-            if (item.type === 'tool_search_output') {
-                return {
-                    ...cloneJson(item),
-                    tools: (Array.isArray(item.tools) ? item.tools : []).slice(0, 5)
-                };
-            }
-            return {
-                ...cloneJson(item),
-                output: compactToolOutputPayload(item.output, maxChars)
-            };
-        });
     }
 
     ensureCallOutputsPresent() {
@@ -881,6 +795,7 @@ class ContextManager {
             history_version: this.history_version,
             token_info: this.token_info ? cloneJson(this.token_info) : null,
             reference_context_item: this.reference_context_item ? cloneJson(this.reference_context_item) : null,
+            tool_output_chars: this.toolOutputChars,
             items: this.rawItems()
         };
     }
@@ -895,7 +810,13 @@ class ContextManager {
             history_version: checkpoint.history_version,
             token_info: checkpoint.token_info,
             reference_context_item: checkpoint.reference_context_item,
-            toolOutputChars: options.toolOutputChars || checkpoint.tool_output_chars || checkpoint.toolOutputChars || DEFAULT_TOOL_OUTPUT_CHARS
+            toolOutputChars: resolveToolOutputChars(
+                options.toolOutputChars,
+                resolveToolOutputChars(
+                    checkpoint.tool_output_chars,
+                    resolveToolOutputChars(checkpoint.toolOutputChars)
+                )
+            )
         });
     }
 }

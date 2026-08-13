@@ -86,6 +86,12 @@ const {
 
 const DEFAULT_RUN_TIMEOUT_MS = 90000;
 const DEFAULT_TASK_HANDOFF_TIMEOUT_MS = 15 * 60 * 1000;
+const A7_LUNA_CONTEXT_PROFILE = Object.freeze({
+    inputLimitTokens: 272000,
+    softTokenLimit: 220000,
+    hardTokenLimit: 244800,
+    stopTokenLimit: 258400
+});
 const MAX_RESULT_PREVIEW_CHARS = 2600;
 const STRUCTURED_TOOL_RESULT_PREVIEW_CHARS = 12000;
 const MAX_PROMPT_PROGRESS_CHARS = 700;
@@ -1314,6 +1320,24 @@ function firstPositiveNumber(values = [], fallback = 0) {
     return fallback;
 }
 
+function resolveBuiltInContextBudgetProfile(settings = {}, requestContext = {}) {
+    const model = normalizeText(
+        requestContext.model ||
+        requestContext.modelId ||
+        requestContext.model_id ||
+        settings.model ||
+        settings.modelId ||
+        settings.model_id
+    ).toLowerCase();
+    if (model === 'gpt-5.6-luna') {
+        return {
+            ...A7_LUNA_CONTEXT_PROFILE,
+            source: 'builtin_model_profile:gpt-5.6-luna'
+        };
+    }
+    return null;
+}
+
 function resolveModelContextWindowTokens(settings = {}, requestContext = {}, tokenInfo = null) {
     const capabilities = settings.capabilities && typeof settings.capabilities === 'object'
         ? settings.capabilities
@@ -1353,6 +1377,13 @@ function resolveModelContextWindowTokens(settings = {}, requestContext = {}, tok
             source: 'environment_configuration'
         };
     }
+    const builtInProfile = resolveBuiltInContextBudgetProfile(settings, requestContext);
+    if (builtInProfile) {
+        return {
+            tokens: builtInProfile.inputLimitTokens,
+            source: builtInProfile.source
+        };
+    }
     return {
         tokens: DEFAULT_CONTEXT_INPUT_LIMIT_TOKENS,
         source: 'conservative_runtime_fallback'
@@ -1361,6 +1392,11 @@ function resolveModelContextWindowTokens(settings = {}, requestContext = {}, tok
 
 function buildAgentContextBudgetConfig(settings = {}, requestContext = {}, tokenInfo = null) {
     const contextWindow = resolveModelContextWindowTokens(settings, requestContext, tokenInfo);
+    const builtInProfile = resolveBuiltInContextBudgetProfile(settings, requestContext);
+    const builtInAbsoluteLimits = builtInProfile &&
+        contextWindow.tokens >= builtInProfile.stopTokenLimit
+        ? builtInProfile
+        : null;
     return {
         inputLimitTokens: contextWindow.tokens,
         reservedOutputTokens: firstPositiveNumber([
@@ -1375,6 +1411,37 @@ function buildAgentContextBudgetConfig(settings = {}, requestContext = {}, token
         softRatio: Number(requestContext.contextSoftRatio ?? settings.contextSoftRatio ?? 0.55),
         hardRatio: Number(requestContext.contextHardRatio ?? settings.contextHardRatio ?? 0.70),
         stopRatio: Number(requestContext.contextStopRatio ?? settings.contextStopRatio ?? 0.86),
+        softTokenLimit: firstPositiveNumber([
+            requestContext.contextSoftTokenLimit,
+            requestContext.context_soft_token_limit,
+            settings.contextSoftTokenLimit,
+            settings.context_soft_token_limit,
+            process.env.AILIS_LLM_CONTEXT_SOFT_TOKEN_LIMIT,
+            process.env.AILIS_AGENT_CONTEXT_SOFT_TOKEN_LIMIT,
+            builtInAbsoluteLimits?.softTokenLimit
+        ]),
+        hardTokenLimit: firstPositiveNumber([
+            requestContext.contextHardTokenLimit,
+            requestContext.context_hard_token_limit,
+            requestContext.autoCompactTokenLimit,
+            settings.contextHardTokenLimit,
+            settings.context_hard_token_limit,
+            settings.autoCompactTokenLimit,
+            process.env.AILIS_LLM_AUTO_COMPACT_TOKEN_LIMIT,
+            process.env.AILIS_AGENT_AUTO_COMPACT_TOKEN_LIMIT,
+            builtInAbsoluteLimits?.hardTokenLimit
+        ]),
+        stopTokenLimit: firstPositiveNumber([
+            requestContext.contextStopTokenLimit,
+            requestContext.context_stop_token_limit,
+            requestContext.emergencyContextTokenLimit,
+            settings.contextStopTokenLimit,
+            settings.context_stop_token_limit,
+            settings.emergencyContextTokenLimit,
+            process.env.AILIS_LLM_EMERGENCY_CONTEXT_TOKEN_LIMIT,
+            process.env.AILIS_AGENT_EMERGENCY_CONTEXT_TOKEN_LIMIT,
+            builtInAbsoluteLimits?.stopTokenLimit
+        ]),
         providerInputTokens: firstPositiveNumber([
             tokenInfo?.promptTokens,
             tokenInfo?.prompt_tokens,
@@ -6702,7 +6769,9 @@ function buildLlmAgentDirectToolPrompt({
         return /\bcurrent\b.{0,40}\b(?:time|date|datetime|timestamp|posix)\b/i.test(semanticText) ||
             /\b(?:time|date|datetime|timestamp|posix)\b.{0,40}\bcurrent\b/i.test(semanticText);
     });
-    const toolOutputChars = activePromptProfile.compact ? 12000 : 24000;
+    const toolOutputChars = taskAgentMode && !activePromptProfile.compact
+        ? 0
+        : (activePromptProfile.compact ? 12000 : 24000);
     const responseProtocolInstruction = 'Use assistant messages for user-visible text and native function calls for tools. Never print a custom JSON decision object, tool-call markup, DSML, or other internal protocol as user-visible text.';
     const personaRuntimeInstructions = [
         responseProtocolInstruction,
@@ -11795,6 +11864,7 @@ module.exports = {
     sanitizeAgentToolCall,
     isAgentLlmSettingsMissing,
     buildAgentDecisionLowLatencyPayload,
+    buildAgentContextBudgetConfig,
     buildToolExecutionGroups,
     buildAgentPromptCacheKey,
     buildLlmAgentDirectToolPrompt,

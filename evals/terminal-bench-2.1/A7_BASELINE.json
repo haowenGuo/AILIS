@@ -1,0 +1,58 @@
+{
+  "schemaVersion": "ailis.taskagent.context-baseline.v1",
+  "baseline": "A7",
+  "name": "canonical-tool-history",
+  "mainlinePromotionDate": "2026-08-13",
+  "mainlineBaseCommit": "68c4d82a432ea437312287b9ba3e1979eb5d0e3e",
+  "evaluationSource": {
+    "ref": "taskagent-a7-terminal-20260812",
+    "commit": "e3c7e7d93767df8978487b84f4219119d39726e5",
+    "dataset": "terminal-bench-2.1",
+    "datasetCommit": "5c8eadf",
+    "taskCount": 89,
+    "model": "gpt-5.6-luna",
+    "reasoningEffort": "max",
+    "harborVersion": "0.20.0"
+  },
+  "contextProfile": {
+    "contextWindowTokens": 272000,
+    "softMonitorTokens": 220000,
+    "semanticCompactTokens": 244800,
+    "operationalStopTokens": 258400,
+    "preserveToolLayerBoundedOutputs": true,
+    "countBasedToolOutputCompaction": false,
+    "blanketStaleOutputCharacterLimit": null
+  },
+  "result": {
+    "correct": 60,
+    "total": 89,
+    "scorePercent": 67.42,
+    "infrastructureInvalid": 0,
+    "completePasses": 1,
+    "releaseStable": false
+  },
+  "pairedAgainstA6": {
+    "a6Correct": 53,
+    "fixed": 18,
+    "regressed": 11,
+    "stableCorrect": 42,
+    "stableWrong": 18,
+    "netCorrectDelta": 7,
+    "twoSidedSignTestPApprox": 0.265
+  },
+  "resources": {
+    "modelCalls": 4273,
+    "toolCalls": 4306,
+    "logicalInputTokens": 228631588,
+    "cachedInputTokens": 113024512,
+    "uncachedInputTokens": 115607076,
+    "outputTokens": 2131366,
+    "cacheRatePercent": 49.44,
+    "semanticCompactions": 4,
+    "peakPromptTokens": 245017,
+    "agentMeanSeconds": 934.103,
+    "agentP50Seconds": 662.647,
+    "agentP95Seconds": 2617.937
+  },
+  "claimBoundary": "The score belongs to the frozen evaluation source. The minimal mainline context integration requires a new complete run before publishing a new score."
+}

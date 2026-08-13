@@ -77,6 +77,19 @@ AILIS Assistant 是一个桌面优先的具身 AI 助手项目。它把 3D VRM �
 
 ## GAIA：通用 Agent 能力
 
+### TaskAgent A7 上下文基线
+
+TaskAgent A7 现已成为 `main` 上的上下文管理基线。其冻结的
+Terminal-Bench 2.1 来源运行取得 **60 / 89（67.42%）**，A6 对照为
+**53 / 89（59.55%）**。本次主线落地只保留通用机制：工具层已经控制
+边界的结果继续留在 canonical history 中；Luna 使用 272k 输入窗口；
+语义压缩在 244.8k 才启动，而不是由少量工具结果触发。
+
+这是开发基线，不是稳定发布声明。来源运行修正了 18 道 A6 失败题，
+同时回退了 11 道 A6 正确题，而且目前只有一轮完整结果。详见
+[A7 上下文基线](docs/ailis-a7-taskagent-context-baseline.md)和
+[机器可读来源](evals/terminal-bench-2.1/A7_BASELINE.json)。
+
 当前严格逐题记忆隔离协议冻结在提交 `6afc0ae`。第一轮完整成绩为 **41 / 53（77.36%）**；规定的第二轮尚未计入最终均值和稳定率。第一轮在完成 46 行后遇到 Windows 非正常重启，恢复过程沿用同一个 run ID，跳过全部已完成题目，只执行剩余 7 题；没有重试、替换或重新计分任何失败题。
 
 <p align="center">

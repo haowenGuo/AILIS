@@ -247,10 +247,44 @@ function buildContextBudgetReport(parts = {}, config = {}) {
     const effectiveInputLimitTokens = Math.max(1, Number(config.effectiveInputLimitTokens || (
         inputLimitTokens - reservedOutputTokens - systemReserveTokens
     )));
-    const thresholds = {
+    const configuredThresholds = {
         soft: Number(config.softRatio ?? DEFAULT_CONTEXT_SOFT_RATIO),
         hard: Number(config.hardRatio ?? DEFAULT_CONTEXT_HARD_RATIO),
         stop: Number(config.stopRatio ?? DEFAULT_CONTEXT_STOP_RATIO)
+    };
+    const configuredSoftTokenLimit = Number(config.softTokenLimit || 0);
+    const configuredHardTokenLimit = Number(config.hardTokenLimit || 0);
+    const configuredStopTokenLimit = Number(config.stopTokenLimit || 0);
+    const hardTokenLimit = Math.min(
+        effectiveInputLimitTokens,
+        Number.isFinite(configuredHardTokenLimit) && configuredHardTokenLimit > 0
+            ? Math.round(configuredHardTokenLimit)
+            : Math.ceil(effectiveInputLimitTokens * configuredThresholds.hard)
+    );
+    const stopTokenLimit = Math.min(
+        effectiveInputLimitTokens,
+        Math.max(
+            hardTokenLimit,
+            Number.isFinite(configuredStopTokenLimit) && configuredStopTokenLimit > 0
+                ? Math.round(configuredStopTokenLimit)
+                : Math.ceil(effectiveInputLimitTokens * configuredThresholds.stop)
+        )
+    );
+    const softTokenLimit = Math.min(
+        hardTokenLimit,
+        Number.isFinite(configuredSoftTokenLimit) && configuredSoftTokenLimit > 0
+            ? Math.round(configuredSoftTokenLimit)
+            : Math.ceil(effectiveInputLimitTokens * configuredThresholds.soft)
+    );
+    const thresholdTokens = {
+        soft: softTokenLimit,
+        hard: hardTokenLimit,
+        stop: stopTokenLimit
+    };
+    const thresholds = {
+        soft: softTokenLimit / effectiveInputLimitTokens,
+        hard: hardTokenLimit / effectiveInputLimitTokens,
+        stop: stopTokenLimit / effectiveInputLimitTokens
     };
     const measuredParts = normalizeBudgetParts(parts).map((part) => measureBudgetPart(part.name, part.value));
     const estimatedPromptTokens = measuredParts.reduce((sum, part) => sum + part.approxTokens, 0);
@@ -288,17 +322,31 @@ function buildContextBudgetReport(parts = {}, config = {}) {
         effectivePromptTokens,
         ratio,
         level,
-        shouldCompact: level === 'soft' || level === 'hard' || level === 'stop',
+        shouldCompact: level === 'hard' || level === 'stop',
+        approachingCompaction: level === 'soft' || level === 'hard' || level === 'stop',
         mustStopAndCheckpoint: level === 'stop',
         thresholds,
+        configuredThresholds,
+        thresholdTokens,
+        thresholdSources: {
+            soft: Number.isFinite(configuredSoftTokenLimit) && configuredSoftTokenLimit > 0
+                ? 'absolute_tokens'
+                : 'ratio',
+            hard: Number.isFinite(configuredHardTokenLimit) && configuredHardTokenLimit > 0
+                ? 'absolute_tokens'
+                : 'ratio',
+            stop: Number.isFinite(configuredStopTokenLimit) && configuredStopTokenLimit > 0
+                ? 'absolute_tokens'
+                : 'ratio'
+        },
         parts: measuredParts,
         largestParts,
         action: level === 'stop'
             ? 'checkpoint_or_drop_nonessential_context_before_next_model_call'
             : level === 'hard'
-                ? 'compact_tool_outputs_and_refresh_evidence_manifest'
+                ? 'semantic_compaction_checkpoint'
                 : level === 'soft'
-                    ? 'prefer_refs_and_head_tail_previews_for_new_tool_outputs'
+                    ? 'continue_while_monitoring_absolute_context_budget'
                     : 'continue'
     };
 }

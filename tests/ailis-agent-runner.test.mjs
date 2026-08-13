@@ -18,6 +18,7 @@ const {
     AILISAgentRunner,
         buildAgentDirectToolSpecs,
         buildAgentDecisionLowLatencyPayload,
+        buildAgentContextBudgetConfig,
         buildAgentPromptCacheKey,
         buildDirectModelImageAttachments,
         buildInvalidDecisionProgressRecord,
@@ -40,6 +41,87 @@ const {
     stripControlTags,
     validateNativeDirectToolCall
 } = require('../electron/ailis-agent-runner.cjs');
+
+test('agent context budget accepts Codex-aligned absolute limits from environment', () => {
+    const names = [
+        'AILIS_LLM_CONTEXT_WINDOW_TOKENS',
+        'AILIS_LLM_CONTEXT_SOFT_TOKEN_LIMIT',
+        'AILIS_LLM_AUTO_COMPACT_TOKEN_LIMIT',
+        'AILIS_LLM_EMERGENCY_CONTEXT_TOKEN_LIMIT'
+    ];
+    const previous = Object.fromEntries(names.map((name) => [name, process.env[name]]));
+    try {
+        process.env.AILIS_LLM_CONTEXT_WINDOW_TOKENS = '272000';
+        process.env.AILIS_LLM_CONTEXT_SOFT_TOKEN_LIMIT = '220000';
+        process.env.AILIS_LLM_AUTO_COMPACT_TOKEN_LIMIT = '244800';
+        process.env.AILIS_LLM_EMERGENCY_CONTEXT_TOKEN_LIMIT = '258400';
+        const config = buildAgentContextBudgetConfig({}, {}, null);
+        assert.equal(config.inputLimitTokens, 272000);
+        assert.equal(config.softTokenLimit, 220000);
+        assert.equal(config.hardTokenLimit, 244800);
+        assert.equal(config.stopTokenLimit, 258400);
+        assert.equal(config.contextWindowSource, 'environment_configuration');
+    } finally {
+        for (const name of names) {
+            if (previous[name] === undefined) delete process.env[name];
+            else process.env[name] = previous[name];
+        }
+    }
+});
+
+test('Luna uses the A7 context profile without benchmark adapter configuration', () => {
+    const names = [
+        'AILIS_LLM_CONTEXT_WINDOW_TOKENS',
+        'AILIS_AGENT_CONTEXT_WINDOW_TOKENS',
+        'AILIS_LLM_CONTEXT_SOFT_TOKEN_LIMIT',
+        'AILIS_AGENT_CONTEXT_SOFT_TOKEN_LIMIT',
+        'AILIS_LLM_AUTO_COMPACT_TOKEN_LIMIT',
+        'AILIS_AGENT_AUTO_COMPACT_TOKEN_LIMIT',
+        'AILIS_LLM_EMERGENCY_CONTEXT_TOKEN_LIMIT',
+        'AILIS_AGENT_EMERGENCY_CONTEXT_TOKEN_LIMIT'
+    ];
+    const previous = Object.fromEntries(names.map((name) => [name, process.env[name]]));
+    try {
+        for (const name of names) delete process.env[name];
+        const config = buildAgentContextBudgetConfig({ model: 'gpt-5.6-luna' }, {}, null);
+        assert.equal(config.inputLimitTokens, 272000);
+        assert.equal(config.softTokenLimit, 220000);
+        assert.equal(config.hardTokenLimit, 244800);
+        assert.equal(config.stopTokenLimit, 258400);
+        assert.equal(config.contextWindowSource, 'builtin_model_profile:gpt-5.6-luna');
+    } finally {
+        for (const name of names) {
+            if (previous[name] === undefined) delete process.env[name];
+            else process.env[name] = previous[name];
+        }
+    }
+});
+
+test('explicit Luna context settings override the built-in A7 profile', () => {
+    const config = buildAgentContextBudgetConfig({
+        model: 'gpt-5.6-luna',
+        contextWindowTokens: 300000,
+        contextSoftTokenLimit: 230000,
+        contextHardTokenLimit: 260000,
+        contextStopTokenLimit: 280000
+    }, {}, null);
+    assert.equal(config.inputLimitTokens, 300000);
+    assert.equal(config.softTokenLimit, 230000);
+    assert.equal(config.hardTokenLimit, 260000);
+    assert.equal(config.stopTokenLimit, 280000);
+    assert.equal(config.contextWindowSource, 'provider_or_model_configuration');
+});
+
+test('a smaller explicit Luna window keeps ratio thresholds instead of collapsing A7 limits', () => {
+    const config = buildAgentContextBudgetConfig({
+        model: 'gpt-5.6-luna',
+        contextWindowTokens: 128000
+    }, {}, null);
+    assert.equal(config.inputLimitTokens, 128000);
+    assert.equal(config.softTokenLimit, 0);
+    assert.equal(config.hardTokenLimit, 0);
+    assert.equal(config.stopTokenLimit, 0);
+});
 
 test('TaskAgent first route uses a compact semantic context lane without the full coding prompt', () => {
     const prompt = buildTaskRouteDirectToolPrompt({
@@ -236,6 +318,39 @@ test('TaskAgent leaves verification strategy to the model instead of prescribing
         Array.isArray(message.content) &&
         message.content.some((part) => part.type === 'image_url')
     ));
+});
+
+test('full TaskAgent retains tool-layer bounded outputs in canonical context', () => {
+    const prompt = buildLlmAgentDirectToolPrompt({
+        message: 'Continue the terminal task.',
+        contextMode: 'task_agent',
+        tools: []
+    });
+
+    assert.equal(prompt.toolOutputChars, 0);
+    assert.equal(prompt.contextManager.toolOutputChars, 0);
+
+    recordToolOutputToContextManager(prompt.contextManager, {
+        id: 'bounded-exec-result',
+        tool: 'exec',
+        args: { command: 'generate-output' },
+        response: {
+            ok: true,
+            status: 'completed',
+            result: {
+                text: `bounded-head\n${'0123456789'.repeat(3200)}\nbounded-critical-tail`
+            }
+        }
+    }, 0, { toolOutputChars: prompt.toolOutputChars });
+    const next = buildLlmAgentDirectToolPrompt({
+        message: 'Continue the terminal task.',
+        contextMode: 'task_agent',
+        contextManager: prompt.contextManager,
+        tools: []
+    });
+
+    assert.match(JSON.stringify(next.input), /bounded-critical-tail/);
+    assert.doesNotMatch(JSON.stringify(next.input), /OLDER_TOOL_OBSERVATION_COMPACTED/);
 });
 
 test('TaskAgent preserves user-requested ordering and duplicates without a benchmark recipe', () => {

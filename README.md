@@ -125,6 +125,20 @@ AILIS will keep GAIA as the primary general-assistant diagnostic, with the immed
 
 GAIA alone is not a promotion gate. Candidate releases should also pass fixed, versioned subsets of [Terminal-Bench](https://github.com/harbor-framework/terminal-bench) for end-to-end terminal work, [OSWorld](https://github.com/xlang-ai/OSWorld) for real desktop operation, and [tau2-bench](https://github.com/sierra-research/tau2-bench) or an equivalent frozen tool-agent-user interaction suite for multi-turn collaboration. In short: use GAIA L3 to locate the next mechanisms to improve, but use a mixed benchmark portfolio to decide whether the system actually got better.
 
+## TaskAgent A7 Context Baseline
+
+TaskAgent A7 is the current context-management baseline on `main`. Its frozen
+Terminal-Bench 2.1 source run scored **60 / 89 (67.42%)**, compared with the A6
+control at **53 / 89 (59.55%)**. The mainline integration keeps the general
+mechanism: tool-layer-bounded observations remain in canonical history, Luna
+uses a 272k input profile, and semantic compaction starts at 244.8k rather than
+on a small tool-result count.
+
+This is a development baseline, not a stable release claim. The source run fixed
+18 A6 failures but regressed 11 A6 successes and has only one complete pass. See
+the [A7 context baseline](docs/ailis-a7-taskagent-context-baseline.md) and
+[machine-readable provenance](evals/terminal-bench-2.1/A7_BASELINE.json).
+
 ### Earlier Level 1 runs
 
 The earlier strict-memory-isolated protocol was frozen at commit `6afc0ae`. Its first complete run scored **41 / 53 (77.36%)**; the planned second run was not incorporated into a final mean or stability score. An unexpected Windows reboot interrupted the first run after 46 completed rows. Recovery reused the same run ID, skipped every completed task, and executed only the seven unfinished tasks; no failed task was retried, replaced, or re-scored.

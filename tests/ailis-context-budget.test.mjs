@@ -64,6 +64,33 @@ test('buildContextBudgetReport treats provider input usage as authoritative', ()
     assert.ok(report.estimatedPromptTokens < report.providerInputTokens);
 });
 
+test('buildContextBudgetReport honors absolute soft, hard, and stop token limits', () => {
+    const config = {
+        effectiveInputLimitTokens: 1000,
+        reservedOutputTokens: 0,
+        systemReserveTokens: 0,
+        softRatio: 0.5,
+        hardRatio: 0.7,
+        stopRatio: 0.9,
+        softTokenLimit: 600,
+        hardTokenLimit: 800,
+        stopTokenLimit: 950
+    };
+    const soft = buildContextBudgetReport({ tokenInfo: { promptTokens: 760 } }, config);
+    const hard = buildContextBudgetReport({ tokenInfo: { promptTokens: 820 } }, config);
+    const stop = buildContextBudgetReport({ tokenInfo: { promptTokens: 960 } }, config);
+
+    assert.equal(soft.level, 'soft');
+    assert.equal(hard.level, 'hard');
+    assert.equal(stop.level, 'stop');
+    assert.deepEqual(hard.thresholdTokens, { soft: 600, hard: 800, stop: 950 });
+    assert.equal(soft.shouldCompact, false);
+    assert.equal(soft.approachingCompaction, true);
+    assert.equal(hard.thresholdSources.soft, 'absolute_tokens');
+    assert.equal(hard.thresholdSources.hard, 'absolute_tokens');
+    assert.equal(hard.thresholdSources.stop, 'absolute_tokens');
+});
+
 test('normalizeAilisToolOutput turns large text into a model-visible preview with output ref metadata', () => {
     const result = normalizeAilisToolOutput({
         content: [{
@@ -90,7 +117,7 @@ test('normalizeAilisToolOutput turns large text into a model-visible preview wit
     assert.doesNotMatch(result.content[0].text, deprecatedPreviewFields);
 });
 
-test('ContextManager can build an auditable context package and compact stale tool outputs', () => {
+test('ContextManager keeps all tool-layer bounded outputs canonical below semantic compaction', () => {
     const items = [];
     for (let index = 0; index < 8; index += 1) {
         const callId = `call-${index}`;
@@ -113,26 +140,54 @@ test('ContextManager can build an auditable context package and compact stale to
 
     const manager = new ContextManager({
         items,
-        toolOutputChars: 50000
+        toolOutputChars: 0
     });
     const pkg = manager.forPromptPackage({
         goal: 'answer with cited evidence',
         budgetConfig: {
-            effectiveInputLimitTokens: 1500,
+            effectiveInputLimitTokens: 50000,
             reservedOutputTokens: 0,
             systemReserveTokens: 0,
-            softRatio: 0.1,
-            hardRatio: 0.2,
-            stopRatio: 0.95
+            softTokenLimit: 22000,
+            hardTokenLimit: 24480,
+            stopTokenLimit: 30000
         }
     });
 
     assert.equal(pkg.schema, 'ailis.context_package.v1');
     assert.equal(pkg.budgetReport.schema, 'ailis.context_budget_report.v1');
-    assert.ok(pkg.budgetReport.shouldCompact);
-    assert.ok(pkg.droppedItemsManifest.compactedToolObservations > 0);
+    assert.equal(pkg.budgetReport.shouldCompact, false);
+    assert.equal(pkg.droppedItemsManifest.compactedToolObservations, 0);
     assert.ok(pkg.availableOutputRefs.some((ref) => ref.outputId === 'ref-0'));
     assert.equal(pkg.recentResponseItems.filter((item) => item.type === 'function_call_output').length, 8);
+    const firstOutput = pkg.recentResponseItems.find((item) =>
+        item.type === 'function_call_output' && item.call_id === 'call-0'
+    );
+    assert.match(JSON.stringify(firstOutput), /large observation/);
+    assert.doesNotMatch(JSON.stringify(pkg.recentResponseItems), /OLDER_TOOL_OBSERVATION_COMPACTED/);
+});
+
+test('ContextManager preserves a tool-layer bounded output larger than 24k characters', () => {
+    const boundedOutput = `bounded-visible-result\n${'0123456789'.repeat(3200)}\ncritical-tail`;
+    const manager = new ContextManager({ toolOutputChars: 0 });
+    manager.recordItems([{
+        type: 'function_call',
+        call_id: 'bounded-call',
+        name: 'exec',
+        arguments: '{}'
+    }, {
+        type: 'function_call_output',
+        call_id: 'bounded-call',
+        output: boundedOutput
+    }]);
+
+    const promptOutput = manager.forPrompt()
+        .find((item) => item.type === 'function_call_output');
+    const visibleText = contextRuntime.truncateFunctionOutputPayload(promptOutput.output, 0);
+
+    assert.equal(contextRuntime.truncateFunctionOutputPayload(boundedOutput, 0).body.value, boundedOutput);
+    assert.equal(visibleText.body.value, boundedOutput);
+    assert.ok(boundedOutput.length > 24000);
 });
 
 test('TaskAgent semantic compaction preserves active Goal, current Turn, and refs without a fixed first Goal', () => {

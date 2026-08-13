@@ -1146,7 +1146,8 @@ test('ContextManager checkpoint round-trips Codex ContextManager history', () =>
         'history_version',
         'items',
         'reference_context_item',
-        'token_info'
+        'token_info',
+        'tool_output_chars'
     ]);
     assert.equal(promptItems.length, 2);
     assert.deepEqual(promptItems.map((item) => item.type), ['function_call', 'function_call_output']);
@@ -1154,8 +1155,8 @@ test('ContextManager checkpoint round-trips Codex ContextManager history', () =>
     assert.match(FunctionCallOutputPayload.toText(promptItems[1].output), /START/);
 });
 
-test('ContextManager compacts stale tool observations but keeps recent and complete evidence', () => {
-    const history = new ContextManager();
+test('ContextManager preserves old tool observations instead of applying count-based compaction', () => {
+    const history = new ContextManager({ toolOutputChars: 0 });
     history.recordItems([ResponseItem.message({ role: 'user', text: 'solve the data task' })]);
     for (let index = 0; index < 8; index += 1) {
         const callId = `call_${index}`;
@@ -1179,11 +1180,17 @@ test('ContextManager compacts stale tool observations but keeps recent and compl
         .filter((item) => item.type === 'function_call_output')
         .map((item) => FunctionCallOutputPayload.toText(item.output));
 
-    assert.match(outputs[0], /OLDER_TOOL_OBSERVATION_COMPACTED/);
-    assert.match(outputs[0], /originalTextChars=/);
+    assert.doesNotMatch(outputs[0], /OLDER_TOOL_OBSERVATION_COMPACTED/);
+    assert.match(outputs[0], /old-observation/);
     assert.doesNotMatch(outputs[2], /OLDER_TOOL_OBSERVATION_COMPACTED/);
     assert.match(outputs[2], /PINNED_COMPLETE_EVIDENCE/);
     assert.doesNotMatch(outputs[7], /OLDER_TOOL_OBSERVATION_COMPACTED/);
+    assert.equal(outputs.length, 8);
+    assert.equal(history.toCheckpoint().tool_output_chars, 0);
+    assert.equal(
+        restoreModelInputContextManagerFromCheckpoint(history.toCheckpoint()).toolOutputChars,
+        0
+    );
 });
 
 test('ToolRouter keeps final_answer last while applying model visible limit', () => {
