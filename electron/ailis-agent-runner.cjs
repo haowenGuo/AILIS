@@ -5460,6 +5460,12 @@ function isTerminalAgentDecisionFailure(decision = {}) {
         status === 'aborted' ||
         status === 'network_error' ||
         status === 'transient_network_error' ||
+        status === 'codex_network_error' ||
+        status === 'codex_server_error' ||
+        status === 'codex_auth_required' ||
+        status === 'codex_usage_limited' ||
+        status === 'codex_app_server_exited' ||
+        status === 'codex_app_server_protocol_error' ||
         status === 'invalid_codex_bridge_input'
     ) {
         return true;
@@ -5495,7 +5501,14 @@ function describeTerminalAgentDecisionFailure(decision = {}) {
             displayText: error || '模型决策调用已被中断。'
         };
     }
-    if (status === 'network_error' || status === 'transient_network_error') {
+    if (
+        status === 'network_error' ||
+        status === 'transient_network_error' ||
+        status === 'codex_network_error' ||
+        status === 'codex_server_error' ||
+        status === 'codex_app_server_exited' ||
+        status === 'codex_app_server_protocol_error'
+    ) {
         return {
             status,
             intent: 'llm_provider_unavailable',

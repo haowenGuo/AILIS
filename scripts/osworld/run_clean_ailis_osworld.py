@@ -61,6 +61,40 @@ class OSWorldExecutionInfrastructureError(OSWorldInfrastructureError):
         super().__init__("execution", message)
 
 
+TASK_AGENT_INFRASTRUCTURE_STATUSES = {
+    "aborted",
+    "codex_app_server_exited",
+    "codex_app_server_protocol_error",
+    "codex_auth_required",
+    "codex_network_error",
+    "codex_server_error",
+    "codex_usage_limited",
+    "network_error",
+    "timeout",
+    "transient_network_error",
+}
+
+
+def load_task_agent_result(example_dir: Path) -> Dict[str, Any]:
+    result_path = example_dir / "agent-result.json"
+    if not result_path.exists():
+        return {}
+    try:
+        return json.loads(result_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def task_agent_infrastructure_failure(result: Dict[str, Any]) -> str:
+    if result.get("deadlineTriggered") is True:
+        return "TaskAgent configured deadline triggered"
+    response = result.get("response") or {}
+    status = str(response.get("status") or result.get("status") or "").strip().lower()
+    if status in TASK_AGENT_INFRASTRUCTURE_STATUSES:
+        return str(response.get("error") or result.get("error") or status)
+    return ""
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Clean OSWorld runner using the current production AILIS TaskAgent"
@@ -560,6 +594,14 @@ def run_one(
         (example_dir / "node-stderr.log").write_text(node_result.stderr or "", encoding="utf-8")
         if node_result.returncode != 0:
             runner_error = runner_error or f"AILIS TaskAgent exited with code {node_result.returncode}"
+
+    task_agent_result = load_task_agent_result(example_dir)
+    task_agent_infrastructure_error = task_agent_infrastructure_failure(task_agent_result)
+    if runner_error or task_agent_infrastructure_error:
+        raise OSWorldExecutionInfrastructureError(
+            f"AILIS TaskAgent runtime failed for {domain}/{example_id}: "
+            f"{task_agent_infrastructure_error or runner_error}"
+        )
 
     if session.infrastructure_error:
         if recording_started:

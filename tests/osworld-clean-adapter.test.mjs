@@ -102,6 +102,8 @@ test('Clean OSWorld entrypoint does not import the legacy specialized agent', as
     ]);
     const cleanSources = `${pythonRunner}\n${nodeRunner}\n${shellRunner}`;
     assert.doesNotMatch(cleanSources, /from ailis_osworld_agent import|OS_SKILL_CATALOG/);
+    assert.match(pythonRunner, /task_agent_infrastructure_failure/);
+    assert.match(pythonRunner, /raise OSWorldExecutionInfrastructureError/);
     assert.match(shellRunner, /run_clean_ailis_osworld\.py/);
     assert.match(gateRunner, /prefetch-osworld-assets\.ps1/);
     assert.match(gateRunner, /run_clean_ailis_osworld\.py/);

@@ -447,6 +447,16 @@ test('TaskAgent treats invalid Codex bridge input as terminal instead of retryin
         status: 'invalid_codex_bridge_input',
         error: 'Codex bridge image inputs exceed the 8-image limit.'
     }), true);
+    assert.equal(isTerminalAgentDecisionFailure({
+        ok: false,
+        status: 'codex_network_error',
+        error: 'getaddrinfo ENOTFOUND chatgpt.com'
+    }), true);
+    assert.equal(isTerminalAgentDecisionFailure({
+        ok: false,
+        status: 'codex_server_error',
+        error: 'Codex responses endpoint returned HTTP 503.'
+    }), true);
 });
 
 test('explicit task execution forces Persona handoff without changing ordinary conversation', () => {
