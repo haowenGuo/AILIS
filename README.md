@@ -34,17 +34,39 @@
 
 AILIS is developed as an evaluated agent system, not only as a character demo. The public summary below only includes complete runs or evaluation sets large enough to support a useful claim. Small smoke tests, partial desktop batches, harness self-tests, and infrastructure-invalid attempts are deliberately omitted.
 
+### Same-model comparison with Codex
+
+| Benchmark | Shared model and protocol | AILIS | Codex | AILIS delta |
+| --- | --- | ---: | ---: | ---: |
+| **GAIA public validation** | `gpt-5.6-luna`, medium; same 165 tasks and semantic scorer | **119 / 165, 72.12%** | 107 / 165, 64.85% | **+12 tasks, +7.27 pp** |
+| **Terminal-Bench 2.1** | `gpt-5.6-luna`, max; same 89-task benchmark | **60 / 89, 67.42%** | **75.73% +/- 1.32%** official aggregate | **-8.31 pp** |
+
+The GAIA comparison is a direct local controlled run: the task manifest, model, reasoning effort, answer visibility, and scorer are matched. The Terminal-Bench model and task set are matched, but the statistical protocol is not identical: AILIS reports one complete 89-task pass, while the official Codex result aggregates five passes (`445` trials).
+
+| Terminal-Bench efficiency | AILIS A7 | Codex-Luna Max |
+| --- | ---: | ---: |
+| Mean trial time | **1,088.0 s** | **457.3 s** |
+| Logical input per task | 2.569M | 3.183M |
+| Uncached input per task | **1.299M** | **89.9K** |
+| Output per task | 23.95K | 23.89K |
+| Input cache rate | **49.44%** | **97.17%** |
+| Capability timeouts | 21 / 89 | 15 / 445 |
+
+The similar output volume but much higher uncached input and wall time show that AILIS's largest measured Terminal-Bench gap is execution and context efficiency, not simply a smaller reasoning budget.
+
+### Other sufficiently sized evaluations
+
+These tracks do not currently have a Codex result under the same frozen model and protocol, so they are reported without an artificial comparison.
+
 | Evaluation track | Result | Scale and protocol | Evidence status |
 | --- | ---: | ---: | --- |
-| **Apple ToolSandbox** | **71.51%** frozen holdout mean | 239 / 239 officially scored, 0 errors | Primary public task-quality result |
-| **GAIA full validation (AILIS-LUNA)** | **119 / 165, 72.12%** semantic correctness | Public L1-L3 validation; `gpt-5.6-luna`, medium | Same-model comparison: +12 tasks and +7.27 pp over Codex-LUNA; not an official leaderboard submission |
-| **Terminal-Bench 2.1 (TaskAgent A7)** | **60 / 89, 67.42%** pass@1 | Complete 89-task source run; `gpt-5.6-luna`, max | One complete pass; Codex-Luna Max official aggregate is 75.73% +/- 1.32% |
+| **Apple ToolSandbox** | **71.51%** frozen holdout mean | 239 / 239 officially scored, 0 errors | Primary stateful tool-use quality result |
 | **LongMemEval-S** | **358 / 500, 71.60%** QA accuracy | 500 / 500 completed; Luna reader and judge | Complete local protocol |
 | **PersonaMem Balanced-140** | **92 / 140, 65.71%** | Ledger + BM25/MMR retrieval; Luna medium | Complete internal engineering set |
 | **LoCoMo** | **24.69 token-F1** | 1,986 / 1,986 completed | Complete local protocol; retrieval is stronger than answer synthesis |
 | **Longitudinal companion eval** | **78.46 / 100** weighted mean | 171 judged checkpoints from 30-day scenarios | Internal product evaluation |
 
-> **How to read this table:** ToolSandbox is a continuous scenario-quality score, GAIA and Terminal-Bench are task success rates, and LoCoMo is token-F1. They measure different capabilities and must not be averaged into one synthetic score. On the controlled 165-task GAIA comparison, AILIS-LUNA scores **119 / 165 (72.12%)** versus **107 / 165 (64.85%)** for Codex-LUNA. On Terminal-Bench 2.1, AILIS A7 scores **60 / 89 (67.42%)**, while the official five-run Codex-Luna Max aggregate is **75.73% +/- 1.32%**.
+> **Metric boundary:** ToolSandbox is a continuous scenario-quality score, GAIA and Terminal-Bench are task success rates, and LoCoMo is token-F1. They measure different capabilities and must not be averaged into one synthetic score.
 
 [Complete evaluation scorecard](docs/ailis-evaluation-master-scorecard-20260817.md) ·
 [Machine-readable scorecard](evals/benchmark-catalog/ailis-evaluation-master-scorecard-20260817.json) ·
