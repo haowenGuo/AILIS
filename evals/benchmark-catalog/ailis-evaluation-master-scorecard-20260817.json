@@ -1,0 +1,292 @@
+{
+  "schema": "ailis.evaluation_master_scorecard.v1",
+  "generatedAt": "2026-08-17",
+  "claimPolicy": {
+    "primary": "Complete or frozen, uniquely identified runs with valid benchmark scoring.",
+    "diagnostic": "Focused, sampled, partial, or selection-conditioned runs are retained but never promoted to headline scores.",
+    "invalid": "Infrastructure-invalid attempts are excluded from capability scores.",
+    "comparability": "Scores with different models, judges, task sets, or metrics are not averaged or ranked as one leaderboard."
+  },
+  "headline": [
+    {
+      "benchmark": "Apple ToolSandbox",
+      "system": "AILIS V3",
+      "model": "production agent plus official on-policy user simulator",
+      "metric": "official continuous similarity mean",
+      "score": 0.7150834063502134,
+      "display": "71.51%",
+      "scored": 239,
+      "total": 239,
+      "errors": 0,
+      "status": "formal_frozen_holdout"
+    },
+    {
+      "benchmark": "GAIA public validation",
+      "system": "AILIS-LUNA",
+      "model": "gpt-5.6-luna",
+      "reasoningEffort": "medium",
+      "metric": "semantic correctness over complete user-visible answer",
+      "correct": 119,
+      "total": 165,
+      "score": 0.7212121212121212,
+      "display": "119/165 (72.12%)",
+      "status": "complete_local_public_validation"
+    },
+    {
+      "benchmark": "Terminal-Bench 2.1",
+      "system": "AILIS TaskAgent A7",
+      "model": "gpt-5.6-luna",
+      "reasoningEffort": "max",
+      "metric": "pass@1 verifier success",
+      "correct": 60,
+      "total": 89,
+      "score": 0.6741573033707865,
+      "display": "60/89 (67.42%)",
+      "infrastructureInvalid": 0,
+      "status": "complete_single_pass"
+    },
+    {
+      "benchmark": "SWE-bench Pro",
+      "system": "AILIS TaskAgent",
+      "model": "gpt-5.6-luna",
+      "reasoningEffort": "medium",
+      "metric": "official verifier resolved rate",
+      "correct": 6,
+      "total": 11,
+      "score": 0.5454545454545454,
+      "display": "6/11 (54.55%)",
+      "status": "fixed_smoke_subset"
+    },
+    {
+      "benchmark": "OSWorld",
+      "system": "AILIS TaskAgent",
+      "model": "gpt-5.6-luna",
+      "reasoningEffort": "medium",
+      "metric": "official per-task evaluator success on completed development batch",
+      "correct": 9,
+      "total": 15,
+      "score": 0.6,
+      "display": "9/15 (60.00%)",
+      "status": "partial_15_of_planned_36_not_headline"
+    },
+    {
+      "benchmark": "LongMemEval-S",
+      "system": "AILIS BM25 phrase v2 plus MMR 0.2",
+      "model": "Luna reader and Luna medium judge",
+      "metric": "local QA accuracy",
+      "correct": 358,
+      "total": 500,
+      "score": 0.716,
+      "display": "358/500 (71.60%)",
+      "status": "complete_local_protocol"
+    },
+    {
+      "benchmark": "LoCoMo",
+      "system": "AILIS BM25 phrase v2 plus MMR 0.2",
+      "metric": "released token F1",
+      "completed": 1986,
+      "total": 1986,
+      "score": 0.2469,
+      "display": "24.69 token-F1",
+      "status": "complete_local_protocol"
+    }
+  ],
+  "comparisons": {
+    "gaiaSameModel": {
+      "protocol": "complete 165-task public validation, Luna medium, same semantic scorer",
+      "ailis": {
+        "correct": 119,
+        "total": 165,
+        "scorePercent": 72.12,
+        "levels": {
+          "L1": "43/53",
+          "L2": "64/86",
+          "L3": "12/26"
+        }
+      },
+      "codex": {
+        "correct": 107,
+        "total": 165,
+        "scorePercent": 64.85,
+        "levels": {
+          "L1": "41/53",
+          "L2": "57/86",
+          "L3": "9/26"
+        }
+      },
+      "deltaTasks": 12,
+      "deltaPercentagePoints": 7.27,
+      "claimBoundary": "Local public-validation comparison, not the private GAIA leaderboard."
+    },
+    "terminalBenchSameModel": {
+      "ailisA7": {
+        "scorePercent": 67.42,
+        "runs": 89,
+        "meanTrialSeconds": 1088.0,
+        "logicalInputPerTask": 2569000,
+        "cachedInputPerTask": 1270000,
+        "uncachedInputPerTask": 1299000,
+        "outputPerTask": 23950,
+        "cacheRatePercent": 49.44,
+        "timeouts": 21,
+        "timeoutDenominator": 89
+      },
+      "officialCodexLunaMax": {
+        "scorePercent": 75.73,
+        "confidencePlusMinusPercentagePoints": 1.32,
+        "runs": 445,
+        "meanTrialSeconds": 457.3,
+        "logicalInputPerTask": 3183000,
+        "cachedInputPerTask": 3093000,
+        "uncachedInputPerTask": 89900,
+        "outputPerTask": 23890,
+        "cacheRatePercent": 97.17,
+        "timeouts": 15,
+        "timeoutDenominator": 445
+      },
+      "deltaPercentagePoints": -8.31,
+      "claimBoundary": "AILIS is one pass; official Codex is a five-run aggregate."
+    }
+  },
+  "resources": {
+    "toolsandboxFrozenHoldout": {
+      "llmCalls": 2602,
+      "tokens": 22053949,
+      "officialInteractionTurns": 2259,
+      "summedDurationMs": 44179549,
+      "tokensPerScenarioApprox": 92276,
+      "minutesPerScenarioApprox": 3.08
+    },
+    "gaiaA6ExactRun": {
+      "tasks": 165,
+      "exactVisibleCorrect": 102,
+      "promptTokens": 31039451,
+      "completionTokens": 330663,
+      "totalTokens": 31370114,
+      "cachedTokensReported": 0,
+      "llmCalls": 1881,
+      "finishedToolEvents": 3628,
+      "toolErrors": 337,
+      "meanDurationMs": 210426,
+      "p50DurationMs": 140086,
+      "p95DurationMs": 574971,
+      "note": "The later shared semantic scorer gives this AILIS-LUNA answer set 119/165."
+    },
+    "gaiaCodexLunaExactRun": {
+      "tasks": 165,
+      "exactVisibleCorrect": 106,
+      "semanticCorrect": 107,
+      "inputTokens": 68564884,
+      "cachedInputTokens": 60877568,
+      "outputTokens": 496995,
+      "totalTokens": 69061879,
+      "uncachedInputTokens": 7687316,
+      "inputCacheRatePercent": 88.79,
+      "toolCalls": 1959,
+      "meanDurationMs": 255891,
+      "p50DurationMs": 229292,
+      "p95DurationMs": 584699,
+      "capabilityTimeouts": 4
+    },
+    "terminalA7": {
+      "modelCalls": 4273,
+      "toolCalls": 4306,
+      "logicalInputTokens": 228631588,
+      "cachedInputTokens": 113024512,
+      "uncachedInputTokens": 115607076,
+      "outputTokens": 2131366,
+      "cacheRatePercent": 49.44,
+      "semanticCompactions": 4,
+      "peakPromptTokens": 245017,
+      "agentMeanSeconds": 934.103,
+      "agentP50Seconds": 662.647,
+      "agentP95Seconds": 2617.937
+    },
+    "osworldPartial15": {
+      "tasks": 15,
+      "correct": 9,
+      "runnerErrors": 0,
+      "meanDurationSeconds": 264.468,
+      "domainResults": {
+        "chrome": "3/4",
+        "libreoffice_calc": "1/1",
+        "multi_apps": "4/8",
+        "os": "1/2"
+      }
+    }
+  },
+  "historical": {
+    "gaiaL1Paired": [
+      {"name": "frozen baseline", "runs": [41, 43], "denominatorPerRun": 53, "meanPercent": 79.25, "gate": "reference"},
+      {"name": "P0", "runs": [47, 50], "denominatorPerRun": 53, "meanPercent": 91.51, "gate": "pass"},
+      {"name": "P1", "runs": [48, 48], "denominatorPerRun": 53, "meanPercent": 90.57, "gate": "fail"},
+      {"name": "P1.1", "runs": [45, 42], "denominatorPerRun": 53, "meanPercent": 82.08, "gate": "fail"}
+    ],
+    "gaiaMini20": [
+      {"name": "Codex", "correct": 16, "total": 20},
+      {"name": "P1", "correct": 14, "total": 20},
+      {"name": "P6", "correct": 13, "total": 20},
+      {"name": "P0", "correct": 12, "total": 20},
+      {"name": "P5", "correct": 12, "total": 20},
+      {"name": "P8", "correct": 12, "total": 20},
+      {"name": "P2", "correct": 11, "total": 20},
+      {"name": "P7", "correct": 11, "total": 20},
+      {"name": "P1.1", "correct": 10, "total": 20},
+      {"name": "P3.1", "correct": 10, "total": 20},
+      {"name": "P10", "correct": 10, "total": 20},
+      {"name": "P9", "correct": 9, "total": 20},
+      {"name": "P4", "correct": 9, "total": 20}
+    ],
+    "terminalBench": [
+      {"name": "A6", "correct": 53, "total": 89, "scorePercent": 59.55, "semanticCompactions": 20, "peakPromptTokens": 67381},
+      {"name": "A7", "correct": 60, "total": 89, "scorePercent": 67.42, "semanticCompactions": 4, "peakPromptTokens": 245017}
+    ],
+    "osworld": [
+      {"name": "historical small", "correct": 2, "total": 4, "scorePercent": 50.0},
+      {"name": "clean Chrome smoke", "correct": 1, "total": 1, "scorePercent": 100.0, "guiActions": 8, "durationSeconds": 205.214},
+      {"name": "partial comparable batch", "correct": 9, "total": 15, "scorePercent": 60.0}
+    ],
+    "swebenchPro": [
+      {"name": "DeepSeek V4 Flash smoke", "correct": 0, "total": 1, "selectedTests": "297/300"},
+      {"name": "AILIS Luna medium smoke-3", "correct": 1, "total": 3, "officialTests": "524/531"},
+      {"name": "AILIS Luna medium fixed smoke-11", "correct": 6, "total": 11}
+    ]
+  },
+  "memoryAndInternal": {
+    "longMemEvalS": {"completed": 500, "total": 500, "qaAccuracyPercent": 71.60, "sessionRecallAt8Percent": 93.53, "turnRecallAt8Percent": 83.31, "e2eP50Seconds": 18.6, "e2eP95Seconds": 39.1},
+    "personaMemBalanced140": {"correct": 92, "total": 140, "accuracyPercent": 65.71, "retrievalP95Seconds": 1.78, "e2eP50Seconds": 26.41, "e2eP95Seconds": 53.83},
+    "locomo": {"completed": 1986, "total": 1986, "releasedTokenF1Percent": 24.69, "sessionRecallAt8Percent": 89.67, "turnRecallAt8Percent": 71.75, "e2eP50Seconds": 12.72, "e2eP95Seconds": 30.44},
+    "humanlikeLongitudinal": {"checkpoints": 171, "weightedScore": 78.46, "passRatePercent": 61.4, "hardFails": 16},
+    "toolFeelSmoke": {"checkpoints": 6, "weightedScore": 81.37, "passRatePercent": 83.3},
+    "humanlikeDatasetValidation": {"valid": 1000, "total": 1000, "qualityMetric": false},
+    "artifactTools": {"passed": 10, "total": 10},
+    "deepseekReasoningReplay": {"beforeCompleted": 9, "beforeTotal": 30, "afterCompleted": 30, "afterTotal": 30, "providerErrorsAfter": 0},
+    "deepseekProtocolStress": {"completedTurns": 36, "totalTurns": 36, "effectiveInternalChecks": "101/101", "protocolErrors": 0, "promptTokens": 5792337, "completionTokens": 60237, "wallMs": 1116626}
+  },
+  "notScored": [
+    {"benchmark": "BrowseComp-Plus", "reason": "Official 830-query assets/index and judge runtime were not ready; no formal score."},
+    {"benchmark": "SWE-bench Lite", "reason": "Samples and a 1/1 harness selftest exist, but there is no public benchmark run score."},
+    {"benchmark": "WebArena", "reason": "Catalog entry only; no local score."},
+    {"benchmark": "BrowserGym", "reason": "Catalog entry only; no local score."},
+    {"benchmark": "AppWorld", "reason": "Catalog entry only; no local score."},
+    {"benchmark": "BFCL", "reason": "Catalog entry only; no local score."},
+    {"benchmark": "tau2-bench", "reason": "Catalog entry only; no local score."}
+  ],
+  "evidence": [
+    "README.md",
+    "docs/ailis-a7-taskagent-context-baseline.md",
+    "evals/terminal-bench-2.1/A7_BASELINE.json",
+    "docs/ailis-toolsandbox-v4-optimization-plan.md",
+    "docs/ailis-memory-bm25-mmr-baseline.md",
+    "docs/ailis-demo-benchmark-scorecard.md",
+    "evals/benchmark-catalog/ailis-benchmark-catalog.json",
+    "evals/engineering/osworld-clean-task-agent-smoke.json",
+    "eval-results/engineering/osworld-execution-control-comparable36-luna-medium-20260816-v1",
+    "eval-results/engineering/swebench-pro/ailis",
+    ".ailis-state/manual-tests/DEEPSEEK_REASONING_REPLAY_VALIDATION_20260816.md",
+    ".ailis-state/manual-tests/DEEPSEEK_PROTOCOL_STRESS_36_VALIDATION_20260816.md",
+    "F:/AILIS_self_evolution_runtime/eval-results/engineering/gaia-desktop-real/GAIA-ALL-VERSIONS-CODEX-COMPARATIVE-ANALYSIS-20260802.md",
+    "F:/AILIS_self_evolution_runtime/eval-results/engineering/gaia-desktop-real/p0-p10-mini20-score-20260728/mini-score-results.md",
+    "F:/AILIS_self_evolution_runtime-terminal-bench-21-timeout-recovery/evals/terminal-bench-2.1/analysis/A7_CODEX_EXECUTION_CHAIN_OPTIMIZATION.md"
+  ]
+}

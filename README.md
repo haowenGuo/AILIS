@@ -10,7 +10,7 @@
   <p>
     <img alt="ToolSandbox frozen holdout mean 71.51 percent" src="https://img.shields.io/badge/ToolSandbox_holdout-71.51%25-2563eb?style=for-the-badge">
     <img alt="AILIS-LUNA GAIA 165-task semantic score 72.12 percent" src="https://img.shields.io/badge/AILIS--LUNA_GAIA_165-72.12%25-059669?style=for-the-badge">
-    <img alt="Internal longitudinal companion evaluation 78.46 out of 100" src="https://img.shields.io/badge/Humanlike_longitudinal-78.46%2F100-059669?style=for-the-badge">
+    <img alt="AILIS TaskAgent A7 Terminal-Bench 2.1 pass at one 67.42 percent" src="https://img.shields.io/badge/Terminal--Bench_2.1-67.42%25-d97706?style=for-the-badge">
   </p>
   <p>
     <a href="README.md">English</a> ·
@@ -24,7 +24,7 @@
     <a href="https://101.133.239.56/Test/">Homepage</a> ·
     <a href="https://github.com/haowenGuo/AILIS/releases/tag/v1.1.0">Download</a> ·
     <a href="docs/ailis-embodied-agent-architecture.md">Architecture</a> ·
-    <a href="docs/ailis-demo-benchmark-scorecard.md">Benchmarks</a>
+    <a href="docs/ailis-evaluation-master-scorecard-20260817.md">Benchmarks</a>
   </p>
 </div>
 
@@ -32,24 +32,23 @@
 
 ## Evaluation Snapshot
 
-AILIS is developed as an evaluated agent system, not only as a character demo. The current evidence spans stateful tool use, general assistant tasks, long-term companion behavior, and desktop operation. Each number below includes its scale and claim boundary.
+AILIS is developed as an evaluated agent system, not only as a character demo. The public summary below only includes complete runs or evaluation sets large enough to support a useful claim. Small smoke tests, partial desktop batches, harness self-tests, and infrastructure-invalid attempts are deliberately omitted.
 
-| Evaluation track | Result | Scale | Evidence status |
+| Evaluation track | Result | Scale and protocol | Evidence status |
 | --- | ---: | ---: | --- |
 | **Apple ToolSandbox** | **71.51%** frozen holdout mean | 239 / 239 officially scored, 0 errors | Primary public task-quality result |
 | **GAIA full validation (AILIS-LUNA)** | **119 / 165, 72.12%** semantic correctness | Public L1-L3 validation; `gpt-5.6-luna`, medium | Same-model comparison: +12 tasks and +7.27 pp over Codex-LUNA; not an official leaderboard submission |
-| **GAIA Level 1 strict (2026-07)** | Run 1: **41 / 53, 77.36%** | First of two planned full runs | Earlier strict-memory-isolated result retained for comparison |
-| **GAIA Level 1 historical** | **85.85%** two-run mean; best run **90.57%** | 53 public validation tasks x 2 | Historical local diagnostic; task-memory isolation was missing |
+| **Terminal-Bench 2.1 (TaskAgent A7)** | **60 / 89, 67.42%** pass@1 | Complete 89-task source run; `gpt-5.6-luna`, max | One complete pass; Codex-Luna Max official aggregate is 75.73% +/- 1.32% |
+| **LongMemEval-S** | **358 / 500, 71.60%** QA accuracy | 500 / 500 completed; Luna reader and judge | Complete local protocol |
+| **PersonaMem Balanced-140** | **92 / 140, 65.71%** | Ledger + BM25/MMR retrieval; Luna medium | Complete internal engineering set |
+| **LoCoMo** | **24.69 token-F1** | 1,986 / 1,986 completed | Complete local protocol; retrieval is stronger than answer synthesis |
 | **Longitudinal companion eval** | **78.46 / 100** weighted mean | 171 judged checkpoints from 30-day scenarios | Internal product evaluation |
-| **OSWorld clean TaskAgent smoke** | **1 / 1**, official evaluator score **1.0** | 1 Chrome task, 8 GUI actions; `gpt-5.6-luna`, medium | Production AILIS Gateway with generic computer transport; smoke only |
-| **OSWorld small run** | **2 / 4**, 50% | 4 historical desktop tasks | Early external-benchmark signal; sample is too small for a broad claim |
-| **Humanlike dataset validation** | **1000 / 1000** valid | 9 categories, 251 negative probes | Evaluation coverage, not model quality |
 
-> **Primary headline:** the frozen Apple ToolSandbox holdout mean is **71.51%**. On the complete 165-task GAIA public validation set, AILIS-LUNA scores **119 / 165 (72.12%)** versus **107 / 165 (64.85%)** for Codex-LUNA. Both runs use `gpt-5.6-luna` at medium reasoning, the same task manifest, and semantic scoring over the complete user-visible answer. AILIS leads by **12 tasks**, or **7.27 percentage points**. These are local public-validation results, not official private-test submissions.
+> **How to read this table:** ToolSandbox is a continuous scenario-quality score, GAIA and Terminal-Bench are task success rates, and LoCoMo is token-F1. They measure different capabilities and must not be averaged into one synthetic score. On the controlled 165-task GAIA comparison, AILIS-LUNA scores **119 / 165 (72.12%)** versus **107 / 165 (64.85%)** for Codex-LUNA. On Terminal-Bench 2.1, AILIS A7 scores **60 / 89 (67.42%)**, while the official five-run Codex-Luna Max aggregate is **75.73% +/- 1.32%**.
 
-[Full benchmark scorecard](docs/ailis-demo-benchmark-scorecard.md) ·
+[Complete evaluation scorecard](docs/ailis-evaluation-master-scorecard-20260817.md) ·
+[Machine-readable scorecard](evals/benchmark-catalog/ailis-evaluation-master-scorecard-20260817.json) ·
 [GAIA methodology](docs/ailis-desktop-real-gaia-eval.md) ·
-[OSWorld / OSWorld-Verified methodology](docs/ailis-osworld-pc-eval.md) ·
 [BrowseComp-Plus fixed-corpus protocol](docs/ailis-browsecomp-plus-eval.md) ·
 [ToolSandbox protocol and gates](docs/ailis-toolsandbox-v4-optimization-plan.md)
 
