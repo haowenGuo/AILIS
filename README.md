@@ -334,13 +334,18 @@ python -m uvicorn backend.main:app --reload
 
 ## Model And Voice Setup
 
-AILIS is provider-agnostic at the application layer. Configure providers through the desktop control panel or local environment files:
+New desktop installations default to **AILIS Cloud**, so users can start chatting without creating or entering an API key. Persona orchestration, memory storage, TaskAgent, approvals, and computer/file tools continue to run on the user's PC. Only the model-facing inference payload is relayed through the AILIS server, using a short-lived signed session and server-owned upstream credentials.
 
+AILIS remains provider-agnostic at the application layer. Advanced users can switch providers through the desktop control panel or local environment files:
+
+- AILIS Cloud managed relay (default; internet required; no user API key).
 - OpenAI-compatible cloud providers.
 - Local vLLM endpoints.
 - Ollama-oriented local workflows.
 - Custom base URLs, model names, request timeouts, and private API keys.
 - Optional local ASR and desktop TTS runtime preparation.
+
+Model-visible conversation context, tool schemas/results, and any user-approved image or file content included in a turn can be sent through the selected model provider. Local tool execution and persistent memory databases are not moved to the AILIS server. Choose Ollama or another local endpoint when an offline or fully local inference path is required.
 
 Never commit real API keys, account credentials, chat transcripts, local model caches, runtime logs, or generated eval outputs.
 

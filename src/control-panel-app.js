@@ -78,6 +78,7 @@ const elements = {
     elevenLabsTimeout: document.getElementById('elevenlabs-timeout'),
     elevenLabsVoiceId: document.getElementById('elevenlabs-voice-id'),
     llmApiKey: document.getElementById('llm-api-key'),
+    llmCredentialFields: document.getElementById('llm-credential-fields'),
     llmApiKeyLabel: document.getElementById('llm-api-key-label'),
     llmApiKeySelect: document.getElementById('llm-api-key-select'),
     llmBaseUrl: document.getElementById('llm-base-url'),
@@ -409,6 +410,7 @@ const elevenLabsLanguagePresets = {
 const ELEVENLABS_LANGUAGE_CODES = Object.freeze(Object.keys(elevenLabsLanguagePresets));
 
 const llmProviderLabels = {
+    'ailis-cloud': 'AILIS Cloud（免配置）',
     'openai-compatible': 'OpenAI-compatible',
     doubao: '豆包 / 火山方舟',
     deepseek: 'DeepSeek',
@@ -423,6 +425,7 @@ const llmProviderLabels = {
 };
 
 const fallbackLlmProviderDefaultBaseUrls = {
+    'ailis-cloud': 'https://101.133.239.56/api/llm/v1',
     'openai-compatible': 'https://ark.cn-beijing.volces.com/api/v3',
     doubao: 'https://ark.cn-beijing.volces.com/api/v3',
     deepseek: 'https://api.deepseek.com',
@@ -437,6 +440,7 @@ const fallbackLlmProviderDefaultBaseUrls = {
 };
 
 const fallbackLlmProviderDefaultModels = {
+    'ailis-cloud': 'ailis-cloud',
     'openai-compatible': 'doubao-seed-2-0-mini-260215',
     doubao: 'doubao-seed-2-0-mini-260215',
     deepseek: 'deepseek-v4-flash',
@@ -452,6 +456,16 @@ const fallbackLlmProviderDefaultModels = {
 
 const LLM_PRESET_CUSTOM_ID = 'custom';
 const llmPresetCatalog = [
+    {
+        id: 'ailis-cloud',
+        label: 'AILIS Cloud（推荐，免 API Key）',
+        help: '开箱即用：Persona、TaskAgent、记忆与电脑工具留在本机，仅模型推理经 AILIS 服务器安全中转。',
+        provider: 'ailis-cloud',
+        baseUrl: 'https://101.133.239.56/api/llm/v1',
+        models: [
+            { id: 'ailis-cloud', label: 'AILIS 托管模型（服务器自动选择）' }
+        ]
+    },
     {
         id: 'doubao',
         label: '豆包 / 火山方舟',
@@ -801,6 +815,10 @@ function scheduleStartupDeferredWork() {
 
 function isLocalLlmProvider(provider = elements.llmProvider?.value) {
     return provider === 'ollama';
+}
+
+function isManagedLlmProvider(provider = elements.llmProvider?.value) {
+    return provider === 'ailis-cloud';
 }
 
 const emailElements = {
@@ -2497,6 +2515,22 @@ async function uninstallCharacterPack(packId, displayName = '') {
 function syncLlmKeyState() {
     renderLlmApiKeySelect();
     const provider = elements.llmProvider?.value || currentPreferences?.llmProvider || 'openai-compatible';
+    const managedProvider = isManagedLlmProvider(provider);
+    if (elements.llmCredentialFields) {
+        elements.llmCredentialFields.hidden = managedProvider;
+    }
+    if (managedProvider && elements.llmApiKeySelect) {
+        elements.llmApiKeySelect.disabled = true;
+    }
+    for (const field of [elements.llmApiKeyLabel, elements.llmApiKey]) {
+        if (field) {
+            field.disabled = managedProvider;
+        }
+    }
+    if (managedProvider) {
+        elements.llmKeyState.textContent = 'AILIS Cloud 使用临时签名会话，不需要也不会在安装包中保存上游 API Key。';
+        return;
+    }
     const selected = getSelectedLlmApiKeyMeta(provider);
     const profile = getCurrentLlmApiKeyProfile(provider);
     if (pendingClearLlmKey) {
@@ -2682,6 +2716,11 @@ function getModelNextStep({ provider, model, hasUnsaved, keyReady }) {
         }
         return '确认模型名后点击“自动部署并启用”，或者先点“诊断环境”。';
     }
+    if (provider === 'ailis-cloud') {
+        return hasUnsaved
+            ? 'AILIS Cloud 已选择。点击右下角“保存设置”即可使用。'
+            : 'AILIS Cloud 已开箱可用；可点击“测试连接”确认当前网络。';
+    }
     if (!keyReady) {
         return '填写 API Key，点击“测试连接”，成功后保存设置。';
     }
@@ -2697,6 +2736,7 @@ function renderModelActivationState() {
     const model = elements.llmModel?.value?.trim() || currentPreferences?.llmModel || '';
     const baseUrl = elements.llmBaseUrl?.value?.trim() || currentPreferences?.llmBaseUrl || '';
     const localProvider = isLocalLlmProvider(provider);
+    const managedProvider = isManagedLlmProvider(provider);
     const hasUnsaved = hasUnsavedModelChanges();
     const selectedSavedKey = getSelectedLlmApiKeyMeta(provider);
     const providerProfile = getCurrentLlmApiKeyProfile(provider);
@@ -2706,13 +2746,19 @@ function renderModelActivationState() {
         currentPreferences?.llmApiKeyConfigured &&
         currentPreferences?.llmApiKeySource === 'environment'
     );
-    const keyReady = localProvider ||
+    const keyReady = localProvider || managedProvider ||
         Boolean(elements.llmApiKey?.value?.trim()) ||
         Boolean(selectedSavedKey && !pendingClearLlmKey) ||
         Boolean(providerProfile.activeKeyId && !pendingClearLlmKey) ||
         Boolean(providerEnvironmentKeyReady && !pendingClearLlmKey);
-    const runtimeText = localProvider ? getLocalRuntimeStatusText(provider) : '云端 API，需通过连接测试确认';
-    const keyText = localProvider
+    const runtimeText = localProvider
+        ? getLocalRuntimeStatusText(provider)
+        : managedProvider
+        ? 'AILIS 托管中转，需联网'
+        : '云端 API，需通过连接测试确认';
+    const keyText = managedProvider
+        ? '无需用户 API Key'
+        : localProvider
         ? '本地服务通常无需 Key'
         : selectedSavedKey && !elements.llmApiKey?.value?.trim()
             ? `Key：${selectedSavedKey.label}${selectedSavedKey.masked ? `（${selectedSavedKey.masked}）` : ''}`
@@ -2723,6 +2769,8 @@ function renderModelActivationState() {
         : model ? '当前模型配置已保存' : '尚未选择可用模型';
     elements.modelActiveSubtitle.textContent = localProvider
         ? '本地模型需要先让运行时服务真正启动；部署成功后会自动写回模型配置。'
+        : managedProvider
+        ? '本地保留 Persona、TaskAgent、记忆和电脑工具；只有模型推理请求经过 AILIS 服务器。'
         : '云端模型需要 Key、Base URL 和模型 ID 都正确；保存后聊天和 Agent 才会使用。';
     elements.modelActiveProvider.textContent = presetLabel;
     elements.modelActiveModel.textContent = model || '未选择';
@@ -2907,6 +2955,9 @@ function getLocalLlmSetupHelp(provider = elements.llmProvider?.value) {
             'Ollama 使用步骤：先选择“已安装模型 / 导入本地文件 / 在线下载模型”三种来源之一，',
             '再点击下方主按钮。API Base 保持 http://127.0.0.1:11434，API Key 通常留空。'
         ].join('');
+    }
+    if (provider === 'ailis-cloud') {
+        return 'AILIS Cloud 无需填写 API Key。服务器只中转模型推理，本地 Agent 与电脑工具仍在这台电脑上运行。';
     }
     return '云端模型通常只需要填写平台 API Key；本地部署入口只会在选择 Ollama 时显示。';
 }

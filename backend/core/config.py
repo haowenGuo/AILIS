@@ -55,6 +55,16 @@ class Settings(BaseSettings):
     AILIS_WEB_SESSION_SECRET: str = ""
     AILIS_WEB_SESSION_TTL_DAYS: int = 180
 
+    # ================= Desktop LLM managed relay =================
+    AILIS_LLM_RELAY_ENABLED: bool = True
+    AILIS_LLM_RELAY_MAX_BYTES: int = 4 * 1024 * 1024
+    AILIS_LLM_RELAY_REQUESTS_PER_MINUTE: int = 30
+    AILIS_LLM_RELAY_MAX_CONCURRENT_PER_SESSION: int = 2
+    AILIS_LLM_RELAY_IP_REQUESTS_PER_MINUTE: int = 60
+    AILIS_LLM_RELAY_GLOBAL_REQUESTS_PER_MINUTE: int = 300
+    AILIS_LLM_RELAY_GLOBAL_MAX_CONCURRENT: int = 12
+    AILIS_LLM_RELAY_TRUST_PROXY_HEADERS: bool = False
+
     # ================= AI Safety 配置 =================
     # 默认复用主对话模型；如需单独切换内容安全审核模型，可单独覆盖下面三个字段
     SAFETY_API_BASE: str = ""

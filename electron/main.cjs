@@ -2316,6 +2316,7 @@ function removeLlmApiKeyProfile(profiles = {}, provider = DEFAULT_LLM_PROVIDER, 
 
 function llmProviderLabelsForLog(provider = DEFAULT_LLM_PROVIDER) {
     return {
+        'ailis-cloud': 'AILIS Cloud',
         'openai-compatible': 'OpenAI-compatible',
         doubao: 'Doubao',
         deepseek: 'DeepSeek',
@@ -2354,6 +2355,9 @@ function getPersistedLlmSettings() {
 
 function getEnvironmentLlmApiKey(provider = DEFAULT_LLM_PROVIDER) {
     const normalizedProvider = normalizeLlmProvider(provider);
+    if (normalizedProvider === 'ailis-cloud') {
+        return '';
+    }
     if (normalizedProvider === 'ollama') {
         return normalizeLlmApiKey(
             process.env.OLLAMA_API_KEY ||

@@ -92,6 +92,42 @@ function resolveHostedLlmSettings(env = process.env) {
     };
 }
 
+function sanitizeHostedLlmRequest(payload = {}) {
+    const input = payload && typeof payload === 'object' ? payload : {};
+    const sourceMessages = Array.isArray(input.messages) ? input.messages : [];
+    const pinnedMessages = sourceMessages
+        .filter((message) => ['system', 'developer'].includes(String(message?.role || '').toLowerCase()))
+        .slice(0, 8);
+    const recentMessages = sourceMessages.slice(-312);
+    const messages = [...pinnedMessages, ...recentMessages]
+        .filter((message, index, all) => all.indexOf(message) === index)
+        .slice(-320);
+    if (!messages.length) {
+        throw Object.assign(new Error('llm_messages_required'), { statusCode: 400 });
+    }
+
+    const temperature = Number(input.temperature);
+    const maxTokens = Number(input.max_tokens ?? input.max_completion_tokens);
+    const reasoningEffort = normalizeString(input.reasoning_effort).toLowerCase();
+    const allowedReasoningEffort = new Set(['none', 'minimal', 'low', 'medium', 'high', 'xhigh']);
+    const thinkingType = normalizeString(input.thinking?.type).toLowerCase();
+    const allowedThinkingTypes = new Set(['enabled', 'disabled', 'auto']);
+
+    return {
+        messages,
+        tools: Array.isArray(input.tools) ? input.tools.slice(0, 128) : [],
+        tool_choice: input.tool_choice,
+        responseFormat: input.response_format,
+        temperature: Number.isFinite(temperature) ? Math.max(0, Math.min(temperature, 2)) : undefined,
+        max_tokens: Number.isFinite(maxTokens) ? Math.max(1, Math.min(Math.trunc(maxTokens), 32768)) : undefined,
+        parallel_tool_calls: typeof input.parallel_tool_calls === 'boolean'
+            ? input.parallel_tool_calls
+            : undefined,
+        reasoning_effort: allowedReasoningEffort.has(reasoningEffort) ? reasoningEffort : undefined,
+        thinking: allowedThinkingTypes.has(thinkingType) ? { type: thinkingType } : undefined
+    };
+}
+
 function sanitizeAgentRequest(payload = {}, record) {
     const input = payload && typeof payload === 'object' ? payload : {};
     const sanitizedInput = { ...input };
@@ -579,6 +615,29 @@ class AILISHostedRuntimeManager {
         }
     }
 
+    async runLlmChatCompletion(payload = {}, options = {}) {
+        const request = sanitizeHostedLlmRequest(payload);
+        const result = await callDesktopLlmProvider(this.llmSettings, {
+            ...request,
+            timeoutMs: this.llmSettings.timeoutMs,
+            ...(typeof options.onTextDelta === 'function'
+                ? { onTextDelta: options.onTextDelta }
+                : {})
+        });
+        if (!result?.ok) {
+            const statusCode = Number(result?.status) >= 400 && Number(result?.status) < 600
+                ? Number(result.status)
+                : result?.code === 'timeout'
+                ? 504
+                : 502;
+            throw Object.assign(
+                new Error(result?.error || result?.code || 'hosted_llm_error'),
+                { statusCode }
+            );
+        }
+        return result;
+    }
+
     getStatus() {
         return {
             ok: true,
@@ -613,5 +672,6 @@ module.exports = {
     resolveHostedLlmSettings,
     sanitizeAgentRequest,
     sanitizeAttachmentFilename,
+    sanitizeHostedLlmRequest,
     tenantKey
 };

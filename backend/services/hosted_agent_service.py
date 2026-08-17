@@ -143,6 +143,32 @@ class HostedAgentRuntimeClient:
     async def health(self) -> dict[str, Any]:
         return await self._request("GET", "/health", timeout=10)
 
+    async def llm_status(self) -> dict[str, Any]:
+        return await self._request("GET", "/llm/status", timeout=10)
+
+    async def run_llm_completion(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return await self._request(
+            "POST",
+            "/llm/chat/completions",
+            payload=payload,
+        )
+
+    async def stream_llm_completion(
+        self,
+        payload: dict[str, Any],
+    ) -> AsyncIterator[bytes]:
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            async with client.stream(
+                "POST",
+                f"{self.base_url}/llm/chat/completions",
+                headers=self._stream_headers(),
+                json=payload,
+            ) as response:
+                response.raise_for_status()
+                async for chunk in response.aiter_bytes():
+                    if chunk:
+                        yield chunk
+
     async def tenant_status(self, tenant_id: str) -> dict[str, Any]:
         query = urlencode({"tenantId": tenant_id})
         return await self._request("GET", f"/tenant/status?{query}", timeout=30)

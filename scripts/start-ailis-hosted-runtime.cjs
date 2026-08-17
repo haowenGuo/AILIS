@@ -1,6 +1,7 @@
 'use strict';
 
 const http = require('http');
+const { randomUUID } = require('crypto');
 const { AILISHostedRuntimeManager } = require('../electron/ailis-hosted-runtime.cjs');
 
 const host = process.env.AILIS_HOSTED_RUNTIME_HOST || '127.0.0.1';
@@ -39,6 +40,70 @@ function writeEventStream(res, event, payload) {
         return false;
     }
     res.write(`event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`);
+    return true;
+}
+
+function hostedCompletionId() {
+    return `chatcmpl-ailis-${randomUUID().replace(/-/g, '')}`;
+}
+
+function mapHostedToolCalls(toolCalls = []) {
+    return (Array.isArray(toolCalls) ? toolCalls : []).map((call, index) => ({
+        index,
+        id: String(call?.id || `call_${index + 1}`),
+        type: 'function',
+        function: {
+            name: String(call?.name || ''),
+            arguments: typeof call?.rawArguments === 'string'
+                ? call.rawArguments
+                : JSON.stringify(call?.arguments || {})
+        }
+    }));
+}
+
+function hostedCompletionResponse(result, completionId = hostedCompletionId()) {
+    const toolCalls = mapHostedToolCalls(result?.toolCalls);
+    const providerMessage = result?.providerMessage && typeof result.providerMessage === 'object'
+        ? result.providerMessage
+        : {};
+    return {
+        id: completionId,
+        object: 'chat.completion',
+        created: Math.floor(Date.now() / 1000),
+        model: 'ailis-cloud',
+        choices: [{
+            index: 0,
+            message: {
+                role: 'assistant',
+                content: result?.content || null,
+                ...(Object.prototype.hasOwnProperty.call(providerMessage, 'reasoning_content')
+                    ? { reasoning_content: providerMessage.reasoning_content }
+                    : {}),
+                ...(toolCalls.length ? { tool_calls: toolCalls.map(({ index: _index, ...call }) => call) } : {})
+            },
+            finish_reason: toolCalls.length ? 'tool_calls' : 'stop'
+        }],
+        usage: result?.usage || null
+    };
+}
+
+function writeOpenAiStreamChunk(res, completionId, delta = {}, finishReason = null, usage = null) {
+    if (res.destroyed || res.writableEnded) {
+        return false;
+    }
+    const payload = {
+        id: completionId,
+        object: 'chat.completion.chunk',
+        created: Math.floor(Date.now() / 1000),
+        model: 'ailis-cloud',
+        choices: [{
+            index: 0,
+            delta,
+            finish_reason: finishReason
+        }],
+        ...(usage ? { usage } : {})
+    };
+    res.write(`data: ${JSON.stringify(payload)}\n\n`);
     return true;
 }
 
@@ -104,6 +169,67 @@ const server = http.createServer(async (req, res) => {
                     bytes
                 }
             ));
+            return;
+        }
+        if (url.pathname === '/llm/status' && req.method === 'GET') {
+            const configured = Boolean(
+                manager.llmSettings?.apiKey &&
+                manager.llmSettings?.baseUrl &&
+                manager.llmSettings?.model
+            );
+            sendJson(res, 200, {
+                ok: configured,
+                provider: 'ailis-cloud',
+                configured,
+                transport: 'chat-completions'
+            });
+            return;
+        }
+        if (url.pathname === '/llm/chat/completions' && req.method === 'POST') {
+            const body = await readJson(req);
+            if (body.stream !== true && !acceptsEventStream(req)) {
+                const result = await manager.runLlmChatCompletion(body);
+                sendJson(res, 200, hostedCompletionResponse(result));
+                return;
+            }
+
+            const completionId = hostedCompletionId();
+            res.ailisLlmStream = true;
+            startEventStream(res);
+            writeOpenAiStreamChunk(res, completionId, { role: 'assistant' });
+            const keepAlive = setInterval(() => {
+                if (!res.destroyed && !res.writableEnded) {
+                    res.write(': keep-alive\n\n');
+                }
+            }, 15000);
+            keepAlive.unref?.();
+            try {
+                const result = await manager.runLlmChatCompletion(body, {
+                    onTextDelta: (delta) => {
+                        writeOpenAiStreamChunk(res, completionId, { content: delta });
+                    }
+                });
+                const toolCalls = mapHostedToolCalls(result.toolCalls);
+                const providerMessage = result.providerMessage && typeof result.providerMessage === 'object'
+                    ? result.providerMessage
+                    : {};
+                writeOpenAiStreamChunk(
+                    res,
+                    completionId,
+                    {
+                        ...(Object.prototype.hasOwnProperty.call(providerMessage, 'reasoning_content')
+                            ? { reasoning_content: providerMessage.reasoning_content }
+                            : {}),
+                        ...(toolCalls.length ? { tool_calls: toolCalls } : {})
+                    },
+                    toolCalls.length ? 'tool_calls' : 'stop',
+                    result.usage || null
+                );
+                res.write('data: [DONE]\n\n');
+            } finally {
+                clearInterval(keepAlive);
+            }
+            res.end();
             return;
         }
         if (url.pathname === '/agent/run' && req.method === 'POST') {
@@ -179,6 +305,18 @@ const server = http.createServer(async (req, res) => {
             error: error.message || String(error)
         };
         if (res.headersSent) {
+            if (res.ailisLlmStream) {
+                res.write(`data: ${JSON.stringify({
+                    error: {
+                        message: payload.error,
+                        type: 'ailis_cloud_error',
+                        code: payload.status
+                    }
+                })}\n\n`);
+                res.write('data: [DONE]\n\n');
+                res.end();
+                return;
+            }
             writeEventStream(res, 'response.error', payload);
             res.end();
             return;

@@ -1,5 +1,6 @@
-const DEFAULT_PROVIDER = 'openai-compatible';
+const AILIS_CLOUD_PROVIDER = 'ailis-cloud';
 const OPENAI_COMPATIBLE_PROVIDER = 'openai-compatible';
+const DEFAULT_PROVIDER = OPENAI_COMPATIBLE_PROVIDER;
 const DOUBAO_PROVIDER = 'doubao';
 const DEEPSEEK_PROVIDER = 'deepseek';
 const QWEN_PROVIDER = 'qwen';
@@ -24,6 +25,7 @@ const {
 } = require('./ailis-response-model.cjs');
 
 const OPENAI_COMPATIBLE_CHAT_PROVIDERS = Object.freeze([
+    AILIS_CLOUD_PROVIDER,
     OPENAI_COMPATIBLE_PROVIDER,
     DOUBAO_PROVIDER,
     DEEPSEEK_PROVIDER,
@@ -35,6 +37,7 @@ const OPENAI_COMPATIBLE_CHAT_PROVIDERS = Object.freeze([
 ]);
 
 const PROVIDER_OPTIONS = Object.freeze([
+    AILIS_CLOUD_PROVIDER,
     OPENAI_COMPATIBLE_PROVIDER,
     DOUBAO_PROVIDER,
     DEEPSEEK_PROVIDER,
@@ -51,6 +54,7 @@ const PROVIDER_OPTIONS = Object.freeze([
 ]);
 
 const DEFAULT_PROVIDER_BASE_URLS = Object.freeze({
+    [AILIS_CLOUD_PROVIDER]: 'https://101.133.239.56/api/llm/v1',
     [OPENAI_COMPATIBLE_PROVIDER]: 'https://ark.cn-beijing.volces.com/api/v3',
     [DOUBAO_PROVIDER]: 'https://ark.cn-beijing.volces.com/api/v3',
     [DEEPSEEK_PROVIDER]: 'https://api.deepseek.com',
@@ -67,6 +71,7 @@ const DEFAULT_PROVIDER_BASE_URLS = Object.freeze({
 });
 
 const DEFAULT_PROVIDER_MODELS = Object.freeze({
+    [AILIS_CLOUD_PROVIDER]: 'ailis-cloud',
     [OPENAI_COMPATIBLE_PROVIDER]: 'doubao-seed-2-0-mini-260215',
     [DOUBAO_PROVIDER]: 'doubao-seed-2-0-mini-260215',
     [DEEPSEEK_PROVIDER]: 'deepseek-v4-flash',
@@ -100,6 +105,20 @@ function createOpenAiCompatibleProviderCapabilities(provider, label, notes) {
 }
 
 const PROVIDER_CAPABILITY_TABLE = Object.freeze({
+    [AILIS_CLOUD_PROVIDER]: Object.freeze({
+        provider: AILIS_CLOUD_PROVIDER,
+        label: 'AILIS Cloud managed relay',
+        transport: 'ailis-cloud-chat-completions',
+        chat: true,
+        nativeToolCalling: true,
+        nativeToolCallingDefault: true,
+        jsonMode: true,
+        jsonSchema: true,
+        vision: 'model-dependent',
+        longContext: 'model-dependent',
+        lowLatency: 'model-dependent',
+        notes: 'AILIS 托管中转：本地保留 Persona、TaskAgent、记忆和工具执行，仅由服务器代管模型凭据与推理请求。'
+    }),
     [OPENAI_COMPATIBLE_PROVIDER]: createOpenAiCompatibleProviderCapabilities(
         OPENAI_COMPATIBLE_PROVIDER,
         'OpenAI-compatible Chat Completions',
@@ -845,6 +864,13 @@ function findReasoningContentField(message = {}) {
     return { present: false, value: '' };
 }
 
+function buildAilisCloudSessionUrl(baseUrl) {
+    let normalizedBaseUrl = normalizeBaseUrl(baseUrl);
+    normalizedBaseUrl = normalizedBaseUrl.replace(/\/chat\/completions$/i, '');
+    normalizedBaseUrl = normalizedBaseUrl.replace(/\/v1$/i, '');
+    return normalizedBaseUrl ? `${normalizedBaseUrl}/session` : '';
+}
+
 function extractOpenAiCompatibleProviderMessage(message = {}, { preserveEmpty = false } = {}) {
     const reasoningContent = findReasoningContentField(message);
     if (!reasoningContent.present && !preserveEmpty) {
@@ -864,7 +890,11 @@ function getChatMessageReasoningContent(message = {}) {
 
 function shouldRoundTripOpenAiCompatibleReasoningContent(settings = {}) {
     const normalizedProvider = normalizeProvider(settings.provider);
-    if (normalizedProvider === DEEPSEEK_PROVIDER || normalizedProvider === QWEN_PROVIDER) {
+    if (
+        normalizedProvider === AILIS_CLOUD_PROVIDER ||
+        normalizedProvider === DEEPSEEK_PROVIDER ||
+        normalizedProvider === QWEN_PROVIDER
+    ) {
         return true;
     }
     const baseUrl = normalizeString(settings.baseUrl).toLowerCase();
@@ -872,7 +902,10 @@ function shouldRoundTripOpenAiCompatibleReasoningContent(settings = {}) {
 }
 
 function shouldPreserveEmptyToolCallReasoningContent(settings = {}, payload = {}, toolCalls = []) {
-    if (!toolCalls.length || normalizeProvider(settings.provider) !== DEEPSEEK_PROVIDER) {
+    if (
+        !toolCalls.length ||
+        ![AILIS_CLOUD_PROVIDER, DEEPSEEK_PROVIDER].includes(normalizeProvider(settings.provider))
+    ) {
         return false;
     }
     const thinkingType = normalizeString(payload?.thinking?.type).toLowerCase();
@@ -1164,7 +1197,8 @@ function validateProviderInput(settings, messages) {
 
 function providerRequiresApiKey(provider = DEFAULT_PROVIDER) {
     const normalizedProvider = normalizeProvider(provider);
-    return normalizedProvider !== VLLM_PROVIDER &&
+    return normalizedProvider !== AILIS_CLOUD_PROVIDER &&
+        normalizedProvider !== VLLM_PROVIDER &&
         normalizedProvider !== OLLAMA_PROVIDER &&
         normalizedProvider !== CODEX_MODEL_BRIDGE_PROVIDER;
 }
@@ -1239,6 +1273,7 @@ async function callOpenAiCompatible(settings, payload, messages) {
         let reasoningContentSeen = false;
         let usage = null;
         let finishReason = '';
+        let streamError = '';
         const toolCallParts = new Map();
         const result = await fetchSseWithTimeout(
             buildChatCompletionsUrl(settings.baseUrl),
@@ -1252,6 +1287,12 @@ async function callOpenAiCompatible(settings, payload, messages) {
             async (rawData) => {
                 const chunk = safeJsonParse(rawData);
                 if (!chunk) {
+                    return;
+                }
+                if (chunk.error) {
+                    streamError = normalizeString(
+                        chunk.error?.message || chunk.error?.error || chunk.error
+                    );
                     return;
                 }
                 usage = chunk.usage || usage;
@@ -1299,6 +1340,13 @@ async function callOpenAiCompatible(settings, payload, messages) {
                 code: result.code || 'provider_error',
                 status: result.status,
                 error: result.error
+            };
+        }
+        if (streamError) {
+            return {
+                ok: false,
+                code: 'provider_stream_error',
+                error: streamError
             };
         }
 
@@ -1373,6 +1421,92 @@ async function callOpenAiCompatible(settings, payload, messages) {
     }
 
     return buildProviderResult(settings, result.data, content, toolCalls, { providerMessage });
+}
+
+const ailisCloudSessionCache = new Map();
+
+async function resolveAilisCloudSession(settings, payload = {}, { forceRefresh = false } = {}) {
+    const baseUrl = normalizeBaseUrl(settings.baseUrl);
+    const sessionUrl = buildAilisCloudSessionUrl(baseUrl);
+    if (!sessionUrl) {
+        return {
+            ok: false,
+            code: 'needs_config',
+            error: 'AILIS Cloud 中转地址未配置。'
+        };
+    }
+
+    const now = Date.now();
+    const cached = ailisCloudSessionCache.get(baseUrl);
+    if (!forceRefresh && cached?.token && cached.expiresAt > now + 60_000) {
+        return { ok: true, token: cached.token };
+    }
+    if (!forceRefresh && cached?.pending) {
+        return cached.pending;
+    }
+
+    const pending = (async () => {
+        const result = await fetchJsonWithTimeout(
+            sessionUrl,
+            {
+                method: 'GET',
+                headers: { Accept: 'application/json' }
+            },
+            normalizeTimeoutMs(payload.timeoutMs ?? settings.timeoutMs),
+            payload.abortSignal || payload.signal || null
+        );
+        const token = normalizeString(result.data?.token);
+        if (!result.ok || !token) {
+            return {
+                ok: false,
+                code: result.code || 'cloud_session_unavailable',
+                status: result.status,
+                error: result.error || 'AILIS Cloud 会话暂时不可用。'
+            };
+        }
+        const parsedExpiry = Date.parse(result.data?.expiresAt || '');
+        ailisCloudSessionCache.set(baseUrl, {
+            token,
+            expiresAt: Number.isFinite(parsedExpiry) ? parsedExpiry : Date.now() + 6 * 60 * 60 * 1000,
+            pending: null
+        });
+        return { ok: true, token };
+    })();
+
+    ailisCloudSessionCache.set(baseUrl, {
+        token: forceRefresh ? '' : cached?.token || '',
+        expiresAt: forceRefresh ? 0 : cached?.expiresAt || 0,
+        pending
+    });
+    const resolved = await pending;
+    if (!resolved.ok) {
+        ailisCloudSessionCache.delete(baseUrl);
+    }
+    return resolved;
+}
+
+async function callAilisCloud(settings, payload, messages) {
+    const session = await resolveAilisCloudSession(settings, payload);
+    if (!session.ok) {
+        return session;
+    }
+    let result = await callOpenAiCompatible(
+        { ...settings, apiKey: session.token },
+        payload,
+        messages
+    );
+    if (result.status === 401) {
+        const refreshed = await resolveAilisCloudSession(settings, payload, { forceRefresh: true });
+        if (!refreshed.ok) {
+            return refreshed;
+        }
+        result = await callOpenAiCompatible(
+            { ...settings, apiKey: refreshed.token },
+            payload,
+            messages
+        );
+    }
+    return result;
 }
 
 function convertMessagesForOllama(messages = [], payload = {}) {
@@ -1912,6 +2046,9 @@ async function callDesktopLlmProvider(settings = {}, payload = {}) {
           })
         : null;
     const messages = normalizeMessages(responseInputMessages || payload.messages);
+    if (resolvedSettings.provider === AILIS_CLOUD_PROVIDER) {
+        return callAilisCloud(resolvedSettings, payload, messages);
+    }
     if (resolvedSettings.provider === CODEX_MODEL_BRIDGE_PROVIDER) {
         const result = await callCodexModelBridge(
             {
@@ -2100,6 +2237,7 @@ async function checkDesktopLlmProvider(settings = {}, options = {}) {
 }
 
 module.exports = {
+    AILIS_CLOUD_PROVIDER,
     ANTHROPIC_PROVIDER,
     CODEX_MODEL_BRIDGE_PROVIDER,
     DEFAULT_PROVIDER,
@@ -2113,6 +2251,7 @@ module.exports = {
     PROVIDER_OPTIONS,
     VLLM_PROVIDER,
     buildAnthropicMessagesUrl,
+    buildAilisCloudSessionUrl,
     buildChatCompletionsUrl,
     buildGeminiGenerateContentUrl,
     buildOllamaChatUrl,

@@ -1,4 +1,8 @@
-# AILIS Local LLM Setup
+# AILIS Cloud And Local LLM Setup
+
+Fresh desktop installs use `AILIS Cloud（推荐，免 API Key）` by default. It obtains a short-lived signed session automatically and relays only model inference through the AILIS server. The local Persona, memory store, TaskAgent, approvals, and computer/file tools remain on the PC. This path requires internet access but no user API key.
+
+Users can still select a custom cloud provider or either local provider below. Local providers are the appropriate choice for offline or fully local model inference.
 
 AILIS now supports two local model providers:
 
@@ -9,6 +13,7 @@ The most important rule: the control panel `API Base` is the service root that A
 
 | Provider | Control panel preset | API Base | Model | API Key |
 | --- | --- | --- | --- | --- |
+| AILIS managed relay | `AILIS Cloud（推荐，免 API Key）` | managed automatically | `ailis-cloud` | not required |
 | Ollama | `Ollama 本地` | `http://127.0.0.1:11434` | output of `ollama list`, for example `llama3.2` | empty |
 | vLLM | `vLLM 本地 / 局域网` | `http://127.0.0.1:8000/v1` | id returned by `/v1/models` | empty unless vLLM auth is enabled |
 

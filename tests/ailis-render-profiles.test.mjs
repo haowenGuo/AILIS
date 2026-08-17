@@ -189,6 +189,25 @@ test('desktop store migrates known OpenAI-compatible preset provider keys by bas
     assert.equal(legacyProfileOnly.preferences.llmApiKeyProfiles.deepseek.keys[0].label, 'DeepSeek 主 Key');
 });
 
+test('desktop store uses AILIS Cloud only for clean-install defaults and preserves existing providers', () => {
+    const cleanInstall = store.normalizeState({});
+    assert.equal(cleanInstall.preferences.llmProvider, 'ailis-cloud');
+    assert.equal(cleanInstall.preferences.llmBaseUrl, 'https://101.133.239.56/api/llm/v1');
+    assert.equal(cleanInstall.preferences.llmModel, 'ailis-cloud');
+
+    const existingInstall = store.normalizeState({
+        version: 30,
+        preferences: {
+            llmProvider: 'deepseek',
+            llmBaseUrl: 'https://api.deepseek.com',
+            llmModel: 'deepseek-chat'
+        }
+    });
+    assert.equal(existingInstall.preferences.llmProvider, 'deepseek');
+    assert.equal(existingInstall.preferences.llmBaseUrl, 'https://api.deepseek.com');
+    assert.equal(existingInstall.preferences.llmModel, 'deepseek-chat');
+});
+
 test('MToon render profile controller applies group-specific tuning and restores from original snapshot', () => {
     const skin = createMockMToonMaterial('AILIS_skin_face');
     const hair = createMockMToonMaterial('AILIS_hair_main');

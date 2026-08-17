@@ -14,6 +14,7 @@ from backend.api.blog import router as blog_router
 from backend.api.edu import router as edu_router
 from backend.api.vivix import router as vivix_router
 from backend.api.hosted_agent import router as hosted_agent_router
+from backend.api.llm_relay import router as llm_relay_router
 from backend.AISafety import router as ai_safety_router
 from backend.models import db_models, edu_models  # noqa: F401
 # 🔴 导入新的压缩服务（而不是从 chat.py 导入）
@@ -84,6 +85,7 @@ app.include_router(blog_router, tags=["博客"])
 app.include_router(edu_router, tags=["教学"])
 app.include_router(vivix_router, tags=["Vivix"])
 app.include_router(hosted_agent_router, prefix="/api", tags=["AILIS Agent Runtime"])
+app.include_router(llm_relay_router, prefix="/api", tags=["AILIS Cloud LLM Relay"])
 
 
 # ---------------- 根路径测试 ----------------

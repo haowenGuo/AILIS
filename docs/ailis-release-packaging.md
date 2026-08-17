@@ -9,6 +9,12 @@ compiled them into `dist`, and retains only the Electron locales exposed by the
 desktop UI. Runtime libraries used by the Agent, tools, local safety classifier,
 terminal, document adapters, and language server remain production dependencies.
 
+The core installer contains no upstream LLM credential. A clean install defaults
+to the AILIS Cloud managed relay, obtains a short-lived signed session at runtime,
+and therefore needs internet access but no user API configuration. Persona,
+memory, TaskAgent, approvals, and local tool execution stay on the PC. Custom
+cloud keys and fully local Ollama/vLLM endpoints remain optional user choices.
+
 Production source maps and Stockfish variants that the runtime never resolves are
 excluded. The lite single-thread Stockfish JavaScript/WASM pair remains bundled.
 

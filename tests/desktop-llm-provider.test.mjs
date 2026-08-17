@@ -20,6 +20,7 @@ const {
 let server;
 let serverUrl;
 let receivedRequest;
+const receivedRequests = [];
 
 function readRequestBody(request) {
     return new Promise((resolve, reject) => {
@@ -46,8 +47,20 @@ describe('desktop LLM provider', () => {
                 contentType: request.headers['content-type'],
                 body: parsedBody
             };
+            receivedRequests.push(receivedRequest);
 
-            if (request.url === '/v1/chat/completions' && parsedBody.stream === true) {
+            if (request.url === '/api/llm/session' && request.method === 'GET') {
+                response.writeHead(200, { 'content-type': 'application/json' });
+                response.end(JSON.stringify({
+                    ok: true,
+                    token: 'signed-ailis-session',
+                    expiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+                    runtime: 'ailis-cloud'
+                }));
+                return;
+            }
+
+            if (request.url.endsWith('/chat/completions') && parsedBody.stream === true) {
                 if (Array.isArray(parsedBody.tools) && parsedBody.tools.length) {
                     response.writeHead(200, {
                         'content-type': 'text/event-stream; charset=utf-8',
@@ -286,6 +299,37 @@ describe('desktop LLM provider', () => {
         assert.equal(result.usage.total_tokens, 7);
         assert.equal(receivedRequest.body.stream, true);
         assert.deepEqual(receivedRequest.body.stream_options, { include_usage: true });
+    });
+
+    it('uses AILIS Cloud without a user API key and keeps streaming tool calls compatible', async () => {
+        const before = receivedRequests.length;
+        const result = await callDesktopLlmProvider({
+            provider: 'ailis-cloud',
+            baseUrl: `${serverUrl}/api/llm/v1`,
+            model: 'ailis-cloud',
+            timeoutMs: 5000
+        }, {
+            messages: [{ role: 'user', content: 'route this turn' }],
+            tools: [{
+                name: 'task_route',
+                description: 'Route this turn.',
+                parameters: {
+                    type: 'object',
+                    required: ['mode'],
+                    properties: { mode: { type: 'string', enum: ['chat', 'execute'] } }
+                }
+            }],
+            toolChoice: { name: 'task_route' },
+            onTextDelta: () => {}
+        });
+
+        const cloudRequests = receivedRequests.slice(before);
+        assert.equal(result.ok, true);
+        assert.equal(result.provider, 'ailis-cloud');
+        assert.equal(result.toolCalls[0].name, 'task_route');
+        assert.equal(cloudRequests[0].url, '/api/llm/session');
+        assert.equal(cloudRequests[1].url, '/api/llm/v1/chat/completions');
+        assert.equal(cloudRequests[1].authorization, 'Bearer signed-ailis-session');
     });
 
     it('assembles OpenAI-compatible native tool calls from streamed deltas', async () => {

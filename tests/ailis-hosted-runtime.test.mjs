@@ -11,6 +11,7 @@ const require = createRequire(import.meta.url);
 const {
     AILISHostedRuntimeManager,
     sanitizeAgentRequest,
+    sanitizeHostedLlmRequest,
     tenantKey
 } = require('../electron/ailis-hosted-runtime.cjs');
 
@@ -303,6 +304,35 @@ test('hosted runtime replaces browser-supplied paths, credentials, and approvals
     assert.equal(request.approved, undefined);
     assert.equal(request.agentRole, 'persona_orchestrator');
     assert.equal(request.context.agentRole, 'persona_orchestrator');
+});
+
+test('hosted LLM relay accepts only inference fields and clamps client controls', () => {
+    const request = sanitizeHostedLlmRequest({
+        model: 'attacker-model',
+        baseUrl: 'https://attacker.test',
+        apiKey: 'browser-key',
+        messages: [{ role: 'user', content: 'hello' }],
+        tools: Array.from({ length: 140 }, (_, index) => ({
+            type: 'function',
+            function: { name: `tool_${index}`, parameters: { type: 'object' } }
+        })),
+        temperature: 99,
+        max_tokens: 999999,
+        parallel_tool_calls: false,
+        reasoning_effort: 'medium',
+        thinking: { type: 'disabled', budget_tokens: 999999 }
+    });
+
+    assert.equal(request.model, undefined);
+    assert.equal(request.baseUrl, undefined);
+    assert.equal(request.apiKey, undefined);
+    assert.equal(request.messages.length, 1);
+    assert.equal(request.tools.length, 128);
+    assert.equal(request.temperature, 2);
+    assert.equal(request.max_tokens, 32768);
+    assert.equal(request.parallel_tool_calls, false);
+    assert.equal(request.reasoning_effort, 'medium');
+    assert.deepEqual(request.thinking, { type: 'disabled' });
 });
 
 test('hosted runtime forwards provider text deltas outside the serialized request', async () => {

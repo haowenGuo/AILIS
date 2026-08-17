@@ -4,7 +4,7 @@ const path = require('path');
 const { screen } = require('electron');
 
 const STATE_FILE_NAME = 'desktop-state.json';
-const STATE_VERSION = 30;
+const STATE_VERSION = 31;
 // Transparent Electron frame size. Avatar visual size is compensated in the pet renderer.
 const PET_BASE_WIDTH = 720;
 const PET_BASE_HEIGHT = 960;
@@ -23,8 +23,10 @@ const DEFAULT_AGENT_RUNTIME_GATEWAY_URL = 'ws://127.0.0.1:19011';
 const DEFAULT_OPENCLAW_GATEWAY_URL = DEFAULT_AGENT_RUNTIME_GATEWAY_URL;
 const DEFAULT_AILIS_STATE_DIR = '';
 const OPENAI_COMPATIBLE_PROVIDER = 'openai-compatible';
+const AILIS_CLOUD_PROVIDER = 'ailis-cloud';
 const OPENAI_COMPATIBLE_PRESET_PROVIDER_IDS = ['doubao', 'deepseek', 'qwen', 'kimi', 'zhipu', 'openrouter'];
 const LLM_PROVIDER_OPTIONS = [
+    AILIS_CLOUD_PROVIDER,
     OPENAI_COMPATIBLE_PROVIDER,
     ...OPENAI_COMPATIBLE_PRESET_PROVIDER_IDS,
     'openai-responses',
@@ -32,12 +34,15 @@ const LLM_PROVIDER_OPTIONS = [
     'gemini',
     'ollama'
 ];
-const DEFAULT_LLM_PROVIDER = 'openai-compatible';
-const DEFAULT_LLM_BASE_URL = 'https://ark.cn-beijing.volces.com/api/v3';
-const DEFAULT_LLM_MODEL = 'doubao-seed-2-0-mini-260215';
+const DEFAULT_LLM_PROVIDER = AILIS_CLOUD_PROVIDER;
+const DEFAULT_LLM_BASE_URL = 'https://101.133.239.56/api/llm/v1';
+const DEFAULT_LLM_MODEL = 'ailis-cloud';
+const DEFAULT_OPENAI_COMPATIBLE_BASE_URL = 'https://ark.cn-beijing.volces.com/api/v3';
+const DEFAULT_OPENAI_COMPATIBLE_MODEL = 'doubao-seed-2-0-mini-260215';
 const LLM_PROVIDER_DEFAULT_BASE_URLS = Object.freeze({
-    [OPENAI_COMPATIBLE_PROVIDER]: DEFAULT_LLM_BASE_URL,
-    doubao: DEFAULT_LLM_BASE_URL,
+    [AILIS_CLOUD_PROVIDER]: DEFAULT_LLM_BASE_URL,
+    [OPENAI_COMPATIBLE_PROVIDER]: DEFAULT_OPENAI_COMPATIBLE_BASE_URL,
+    doubao: DEFAULT_OPENAI_COMPATIBLE_BASE_URL,
     deepseek: 'https://api.deepseek.com',
     qwen: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
     kimi: 'https://api.moonshot.cn/v1',
@@ -50,8 +55,9 @@ const LLM_PROVIDER_DEFAULT_BASE_URLS = Object.freeze({
     ollama: 'http://127.0.0.1:11434'
 });
 const LLM_PROVIDER_DEFAULT_MODELS = Object.freeze({
-    [OPENAI_COMPATIBLE_PROVIDER]: DEFAULT_LLM_MODEL,
-    doubao: DEFAULT_LLM_MODEL,
+    [AILIS_CLOUD_PROVIDER]: DEFAULT_LLM_MODEL,
+    [OPENAI_COMPATIBLE_PROVIDER]: DEFAULT_OPENAI_COMPATIBLE_MODEL,
+    doubao: DEFAULT_OPENAI_COMPATIBLE_MODEL,
     deepseek: 'deepseek-v4-flash',
     qwen: 'qwen-turbo',
     kimi: 'moonshot-v1-8k',
