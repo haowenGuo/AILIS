@@ -3,7 +3,7 @@
   <h1>AILIS</h1>
   <p><strong>A desktop AI companion with a visible character, voice, memory, and a Codex-style tool runtime.</strong></p>
   <p>
-    <img alt="Version" src="https://img.shields.io/badge/version-1.1.0-2563eb?style=for-the-badge">
+    <img alt="Version" src="https://img.shields.io/badge/version-1.4.0-2563eb?style=for-the-badge">
     <img alt="Runtime" src="https://img.shields.io/badge/runtime-Electron-0f172a?style=for-the-badge">
     <img alt="License" src="https://img.shields.io/badge/license-MIT-059669?style=for-the-badge">
   </p>
@@ -22,7 +22,7 @@
   </p>
   <p>
     <a href="https://101.133.239.56/Test/">Homepage</a> ·
-    <a href="https://github.com/haowenGuo/AILIS/releases/tag/v1.1.0">Download</a> ·
+    <a href="https://github.com/haowenGuo/AILIS/releases/latest">Download</a> ·
     <a href="docs/ailis-embodied-agent-architecture.md">Architecture</a> ·
     <a href="docs/ailis-evaluation-master-scorecard-20260817.md">Benchmarks</a>
   </p>
@@ -159,6 +159,13 @@ This is a development baseline, not a stable release claim. The source run fixed
 18 A6 failures but regressed 11 A6 successes and has only one complete pass. See
 the [A7 context baseline](docs/ailis-a7-taskagent-context-baseline.md) and
 [machine-readable provenance](evals/terminal-bench-2.1/A7_BASELINE.json).
+
+The accepted product parent, frozen experiment commits, and score-ownership
+rules are recorded in the [version registry](docs/ailis-version-registry.md).
+The current execution-chain audit and next development gates are in the
+[Harness architecture roadmap](docs/ailis-harness-architecture-audit-roadmap.md).
+The measured code-growth and rollback-safe modularization plan is in the
+[codebase refactor audit](docs/ailis-codebase-refactor-audit.md).
 
 ### Earlier Level 1 runs
 
@@ -358,6 +365,7 @@ pnpm ailis:validate-gateway
 - [Documentation Index](docs/README.md)
 - [Embodied Agent Architecture](docs/ailis-embodied-agent-architecture.md)
 - [System TaskAgent Architecture](docs/ailis-system-taskagent-architecture.md)
+- [Codebase Refactor Audit](docs/ailis-codebase-refactor-audit.md)
 - [Codex Multi-Agent Data-Flow Migration](docs/ailis-codex-multi-agent-dataflow-migration.md)
 - [Memory Architecture V2](docs/ailis-memory-architecture-v2.md)
 - [Humanlike Eval](docs/ailis-humanlike-eval.md)
@@ -365,7 +373,7 @@ pnpm ailis:validate-gateway
 
 ## Project Status
 
-Current release line: `v1.1.0`.
+Current release line: `v1.4.0`.
 
 AILIS is in active development. It already has a substantial desktop runtime, agent harness, tool layer, and evaluation surface, but it should still be treated as an alpha-stage product/runtime rather than a production-grade Agent OS. The near-term priority is reliability: clearer tool contracts, safer approvals, stronger memory behavior, better local model setup, and higher-quality end-to-end evaluation.
 

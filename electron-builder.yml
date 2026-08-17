@@ -1,10 +1,16 @@
 appId: com.ailis.desktop
 productName: AILIS
 artifactName: ${productName}-${version}-${arch}.${ext}
+electronDist: node_modules/electron/dist
 icon: build/icon.png
 afterPack: scripts/fix-windows-exe-icon.cjs
 directories:
   output: F:/AILIS/Build/AILIS
+electronLanguages:
+  - en-US
+  - zh-CN
+  - ja
+  - ko
 files:
   - dist/**/*
   - electron/**/*
@@ -13,6 +19,16 @@ files:
   - scripts/ailis-python-search-worker.py
   - installer/ailis-runtime-components.json
   - package.json
+  # Keep production diagnostics lean and bundle only the Stockfish engine
+  # variant that scripts/ailis-stockfish-engine.cjs actually resolves.
+  - "!**/*.map"
+  - "!node_modules/stockfish/bin/stockfish-*-asm.js"
+  - "!node_modules/stockfish/bin/stockfish-18.js"
+  - "!node_modules/stockfish/bin/stockfish-18.wasm"
+  - "!node_modules/stockfish/bin/stockfish-18-single.js"
+  - "!node_modules/stockfish/bin/stockfish-18-single.wasm"
+  - "!node_modules/stockfish/bin/stockfish-18-lite.js"
+  - "!node_modules/stockfish/bin/stockfish-18-lite.wasm"
 extraMetadata:
   main: electron/main.cjs
 asar: true
@@ -38,6 +54,7 @@ nsis:
   artifactName: ${productName}-Setup-${version}-win-${arch}.${ext}
   oneClick: false
   allowToChangeInstallationDirectory: true
+  packElevateHelper: false
   include: installer/ailis-runtime-components.nsh
 portable:
   artifactName: ${productName}-Portable-${version}-win-${arch}.${ext}

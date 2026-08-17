@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
+import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -35,12 +36,29 @@ const {
     isTerminalAgentDecisionFailure,
     looksLikeLeakedAgentProtocol,
     resolveAgentDirectToolChoice,
+    resolveDirectToolTransportTimeoutMs,
     resolveMemoryPolicy,
     stageFileAttachmentsForWorkspace,
     splitNativeProgressNoteArgs,
     stripControlTags,
     validateNativeDirectToolCall
 } = require('../electron/ailis-agent-runner.cjs');
+
+test('task verification transport timeout always covers the verification budget', () => {
+    assert.equal(resolveDirectToolTransportTimeoutMs({ toolId: 'read' }), 0);
+    assert.equal(resolveDirectToolTransportTimeoutMs({
+        toolId: 'task_verify',
+        args: { timeout_ms: 30000 }
+    }), 130000);
+    assert.equal(resolveDirectToolTransportTimeoutMs({
+        toolId: 'task_verify',
+        args: { timeoutMs: 180000 }
+    }), 190000);
+    assert.equal(resolveDirectToolTransportTimeoutMs({
+        toolId: 'wait_agent',
+        agentWaitTimeoutMs: 240000
+    }), 240000);
+});
 
 test('agent context budget accepts Codex-aligned absolute limits from environment', () => {
     const names = [
@@ -707,14 +725,34 @@ test('native tool validation leaves entity and relative-time semantics to the mo
     assert.equal(validateNativeDirectToolCall(reminderCall, reminderTools.slice(1), relativeContext).ok, true);
 });
 
-test('TaskAgent prompt contains no execution-evidence completion contract', () => {
-    const prompt = buildLlmAgentDirectToolPrompt({
+test('TaskAgent engineering delivery protocol is explicit and remains opt-in', () => {
+    const ordinaryPrompt = buildLlmAgentDirectToolPrompt({
         message: 'Answer from the current context.',
         contextMode: 'task_agent',
-        requireExecutionEvidence: true,
         tools: []
     });
-    assert.doesNotMatch(prompt.instructions, /execution-evidence contract|successful task-execution tool/i);
+    assert.doesNotMatch(ordinaryPrompt.instructions, /task_verify/i);
+
+    const engineeringPrompt = buildLlmAgentDirectToolPrompt({
+        message: 'Fix the repository bug.',
+        contextMode: 'task_agent',
+        deliveryPolicy: {
+            enabled: true,
+            mode: 'engineering',
+            requireVerification: true
+        },
+        verificationEnvironment: {
+            kind: 'container',
+            platform: 'linux',
+            shell: '/bin/bash',
+            workspace: '/app'
+        },
+        tools: []
+    });
+    assert.match(engineeringPrompt.instructions, /use task_verify/i);
+    assert.match(engineeringPrompt.instructions, /repair the implementation, and verify again/i);
+    assert.match(engineeringPrompt.instructions, /host-selected validation environment/i);
+    assert.match(engineeringPrompt.instructions, /\/bin\/bash/i);
 });
 
 test('TaskAgent research progress preserves mechanical web state without deciding the answer', () => {
@@ -2022,6 +2060,140 @@ test('AILIS Agent Runner accepts local vLLM and Ollama settings without API keys
         model: 'demo-model',
         apiKey: ''
     }), true);
+});
+
+test('Gateway preserves DeepSeek tool-call reasoning metadata across canonical replay', async () => {
+    const modelRequests = [];
+    const readRequestBody = (request) => new Promise((resolve, reject) => {
+        let body = '';
+        request.setEncoding('utf8');
+        request.on('data', (chunk) => {
+            body += chunk;
+        });
+        request.on('end', () => resolve(body));
+        request.on('error', reject);
+    });
+    const modelServer = http.createServer(async (request, response) => {
+        const body = JSON.parse((await readRequestBody(request)) || '{}');
+        modelRequests.push(body);
+        const replayedToolCall = (body.messages || []).find((message) =>
+            message.role === 'assistant' && Array.isArray(message.tool_calls) && message.tool_calls.length
+        );
+
+        if (
+            body.tool_choice &&
+            typeof body.tool_choice === 'object' &&
+            body.thinking?.type === 'disabled'
+        ) {
+            response.writeHead(400, { 'content-type': 'application/json' });
+            response.end(JSON.stringify({
+                error: {
+                    type: 'invalid_request_error',
+                    message: 'Thinking mode does not support this tool_choice'
+                }
+            }));
+            return;
+        }
+
+        if (!replayedToolCall) {
+            response.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8' });
+            response.write('data: {"choices":[{"delta":{"role":"assistant","content":""}}]}\n\n');
+            response.write('data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-route-1","function":{"name":"task_route","arguments":"{\\"mode\\":\\"execute\\",\\"progress_note\\":\\"开始测试。\\"}"}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":10,"completion_tokens":3,"total_tokens":13}}\n\n');
+            response.end('data: [DONE]\n\n');
+            return;
+        }
+
+        const reasoningWasReplayed =
+            Object.prototype.hasOwnProperty.call(replayedToolCall, 'reasoning_content') &&
+            replayedToolCall.reasoning_content === '';
+        if (!reasoningWasReplayed) {
+            response.writeHead(400, { 'content-type': 'application/json' });
+            response.end(JSON.stringify({
+                error: {
+                    type: 'invalid_request_error',
+                    message: 'The reasoning_content in the thinking mode must be passed back to the API.'
+                }
+            }));
+            return;
+        }
+
+        response.writeHead(200, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({
+            choices: [{
+                message: {
+                    role: 'assistant',
+                    content: 'Gateway replay succeeded.'
+                }
+            }],
+            usage: { prompt_tokens: 20, completion_tokens: 4, total_tokens: 24 }
+        }));
+    });
+    await new Promise((resolve) => modelServer.listen(0, '127.0.0.1', resolve));
+
+    const modelAddress = modelServer.address();
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-deepseek-replay-'));
+    const gateway = new AILISGateway({
+        port: 0,
+        workspaceRoot,
+        projectRoot: path.resolve('.'),
+        auditDir: path.join(workspaceRoot, '.audit'),
+        profileCurationEnabled: false
+    });
+
+    try {
+        await gateway.start();
+        const result = await gateway.taskAgentHarness.dispatchTurn({
+            sessionId: 'deepseek-replay-session',
+            runId: 'deepseek-replay-parent',
+            currentUserMessage: '执行这个测试任务。',
+            sharedSessionHistory: [{ role: 'user', content: '执行这个测试任务。' }],
+            workspace: workspaceRoot,
+            runtimeKind: 'desktop',
+            agentLoop: 'llm',
+            directToolExecutor: true,
+            maxAgentSteps: 3,
+            agentRole: 'persona_orchestrator',
+            taskAgentRoutingOwned: true,
+            llmSettings: {
+                provider: 'deepseek',
+                baseUrl: `http://127.0.0.1:${modelAddress.port}/v1`,
+                apiKey: 'test-key',
+                model: 'deepseek-v4-flash',
+                temperature: 0,
+                timeoutMs: 10000
+            }
+        });
+
+        assert.equal(result.status, 'completed', result.final_answer);
+        assert.equal(result.final_answer, 'Gateway replay succeeded.');
+        assert.equal(modelRequests.length, 3);
+        assert.equal(modelRequests[0].thinking.type, 'disabled');
+        assert.equal(typeof modelRequests[0].tool_choice, 'object');
+        assert.equal(modelRequests[1].tool_choice, 'auto');
+
+        const replayRequest = modelRequests.find((body) =>
+            (body.messages || []).some((message) =>
+                message.role === 'assistant' && Array.isArray(message.tool_calls) && message.tool_calls.length
+            )
+        );
+        const replayedToolCall = replayRequest.messages.find((message) =>
+            message.role === 'assistant' && Array.isArray(message.tool_calls) && message.tool_calls.length
+        );
+        assert.equal(
+            Object.prototype.hasOwnProperty.call(replayedToolCall, 'reasoning_content'),
+            true
+        );
+        assert.equal(replayedToolCall.reasoning_content, '');
+
+        const thread = gateway.taskAgentHarness.getThread('deepseek-replay-session');
+        const canonicalToolCall = thread.contextCheckpoint.items.find((item) =>
+            item.type === 'function_call' && item.name === 'task_route'
+        );
+        assert.deepEqual(canonicalToolCall.provider_metadata, { reasoning_content: '' });
+    } finally {
+        await gateway.stop().catch(() => {});
+        await new Promise((resolve) => modelServer.close(resolve));
+    }
 });
 
 test('AILIS Agent Runner plans chat and executes file tasks through the Gateway', async () => {

@@ -32,7 +32,7 @@ const {
     AILISToolRuntimeRegistry
 } = require('./ailis-tool-runtime.cjs');
 const { createAILISPlatformAdapter } = require('./ailis-platform-adapter.cjs');
-const { AILISAgentRunner } = require('./ailis-agent-runner.cjs');
+const { AILISAgentRunner } = require('./agent-loop/index.cjs');
 const { AILISMemoryRuntime } = require('./ailis-memory-store.cjs');
 const { AILISRawMemoryLedger } = require('./ailis-raw-memory-ledger.cjs');
 const { AILISUserProfileCurator } = require('./ailis-user-profile-curator.cjs');
@@ -51,6 +51,7 @@ const TASK_RESULTS_TOOL_ID = 'task_results';
 const HANDOFF_TASK_TOOL_ID = 'handoff_task';
 const TASK_ROUTE_TOOL_ID = 'task_route';
 const TASK_GOAL_TOOL_ID = 'task_goal';
+const TASK_VERIFY_TOOL_ID = 'task_verify';
 const WEB_RUN_TOOL_ID = 'web_run';
 const WEB_SEARCH_TOOL_ID = 'web_search';
 const { FILE_MANAGER_TOOL_ID, executeFileManagerTool } = require('./ailis-file-manager-tool.cjs');
@@ -289,6 +290,16 @@ const AILIS_LOCAL_TOOL_DEFINITIONS = Object.freeze([
         materialized: true,
         status: 'available',
         needsApprovalActions: Object.freeze([])
+    }),
+    Object.freeze({
+        id: TASK_VERIFY_TOOL_ID,
+        label: 'task_verify',
+        description: 'Run a model-selected project validation command and return a structured verification observation. Use this for focused tests, regression tests, builds, typechecks, lint, or smoke checks before engineering delivery. A failed verification is an observation to repair, not a completed delivery.',
+        sectionId: 'task-agent-runtime',
+        route: 'ailis-system-task-agent',
+        materialized: true,
+        status: 'available',
+        needsApprovalActions: Object.freeze(['verify'])
     }),
     Object.freeze({
         id: TASK_RESULTS_TOOL_ID,
@@ -1192,6 +1203,9 @@ class AILISGateway extends EventEmitter {
         this.app = options.app;
         this.projectRoot = path.resolve(options.projectRoot || PROJECT_ROOT);
         this.workspaceRoot = path.resolve(options.workspaceRoot || this.projectRoot);
+        this.taskVerificationExecutor = typeof options.taskVerificationExecutor === 'function'
+            ? options.taskVerificationExecutor
+            : null;
         this.port = options.port === undefined ? DEFAULT_PORT : Number(options.port);
         this.host = normalizeString(options.host, '127.0.0.1');
         this.toolGatewayUrl = normalizeString(options.toolGatewayUrl, DEFAULT_TOOL_GATEWAY_URL);
@@ -5142,6 +5156,113 @@ class AILISGateway extends EventEmitter {
                 isError: goalResult.ok === false,
                 details: goalResult,
                 structuredContent: goalResult
+            };
+        }
+        if (toolId === TASK_VERIFY_TOOL_ID) {
+            const startedAt = Date.now();
+            let execution;
+            try {
+                const verificationArgs = {
+                    command: args.command,
+                    workdir: args.workdir,
+                    timeoutMs: args.timeoutMs,
+                    maxOutputBytes: args.maxOutputBytes,
+                    env: args.env
+                };
+                execution = this.taskVerificationExecutor
+                    ? await this.taskVerificationExecutor({
+                          args: verificationArgs,
+                          context,
+                          workspaceDir
+                      })
+                    : await this.executeLocalCoreTool({
+                          toolId: 'exec',
+                          args: verificationArgs,
+                          context,
+                          workspaceDir
+                      });
+            } catch (error) {
+                execution = {
+                    isError: true,
+                    content: [{ type: 'text', text: error?.message || String(error) }],
+                    details: {
+                        status: 'verification_failed',
+                        error: error?.message || String(error)
+                    }
+                };
+            }
+            const executionDetails = execution?.details && typeof execution.details === 'object'
+                ? execution.details
+                : {};
+            let outputStore = executionDetails.outputStore && typeof executionDetails.outputStore === 'object'
+                ? executionDetails.outputStore
+                : null;
+            if (!outputStore && (typeof executionDetails.stdout === 'string' || typeof executionDetails.stderr === 'string')) {
+                const capture = await this.runtime.outputStore.createCapture({
+                    callId: `verification_${randomUUID()}`,
+                    metadata: {
+                        kind: 'task_verification',
+                        scope: normalizeString(args.scope, 'custom'),
+                        command: normalizeString(args.command),
+                        environment: executionDetails.environment || context.verificationEnvironment || null
+                    }
+                });
+                capture.append('stdout', executionDetails.stdout || '');
+                capture.append('stderr', executionDetails.stderr || '');
+                outputStore = await capture.finalize({
+                    status: execution?.isError === true ? 'failed' : 'completed'
+                });
+            }
+            const exitCodeValue = executionDetails.exitCode ?? executionDetails.exit_code;
+            const exitCode = Number.isFinite(Number(exitCodeValue)) ? Number(exitCodeValue) : null;
+            const passed = execution?.isError !== true && (exitCode === null || exitCode === 0);
+            const outputId = normalizeString(
+                executionDetails.outputId || executionDetails.output_id || outputStore?.outputId
+            );
+            const outputPreview = normalizeString(
+                executionDetails.outputPreview || executionDetails.output_preview || outputStore?.preview
+            );
+            const verification = {
+                schema: 'ailis.verification_observation.v1',
+                id: `verification_${randomUUID()}`,
+                status: passed ? 'passed' : 'failed',
+                scope: normalizeString(args.scope, 'custom'),
+                command: normalizeString(args.command),
+                workdir: normalizeString(args.workdir || executionDetails.workdir || workspaceDir),
+                exitCode,
+                durationMs: Number(executionDetails.durationMs || executionDetails.duration_ms || (Date.now() - startedAt)) || 0,
+                outputId,
+                outputPreview: outputPreview.slice(0, 1800),
+                outputPreviewTruncated:
+                    executionDetails.outputPreviewTruncated === true || outputStore?.previewTruncated === true,
+                outputBytes: Number(
+                    executionDetails.outputBytes || outputStore?.bytes || outputStore?.combinedBytes || 0
+                ) || 0,
+                outputLineCount: Number(
+                    executionDetails.outputLineCount || outputStore?.lineCount || 0
+                ) || 0,
+                environment: executionDetails.environment || context.verificationEnvironment || {
+                    kind: 'host',
+                    platform: this.platformAdapter?.platform || process.platform
+                },
+                summary: passed
+                    ? 'Verification command completed successfully.'
+                    : normalizeString(
+                          executionDetails.error || executionDetails.stderr,
+                          'Verification command failed.'
+                      ).slice(0, 1200),
+                outputStore: outputStore && outputId ? {
+                    outputId,
+                    bytes: Number(outputStore.bytes || outputStore.combinedBytes || 0) || 0,
+                    lineCount: Number(outputStore.lineCount || 0) || 0,
+                    previewTruncated: outputStore.previewTruncated === true
+                } : null
+            };
+            return {
+                content: [{ type: 'text', text: JSON.stringify(verification, null, 2) }],
+                isError: !passed,
+                details: { verification },
+                structuredContent: { verification }
             };
         }
         if (toolId === HANDOFF_TASK_TOOL_ID) {

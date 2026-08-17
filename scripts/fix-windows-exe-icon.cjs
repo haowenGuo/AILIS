@@ -36,6 +36,17 @@ function findRcedit(projectRoot) {
         return explicit;
     }
 
+    const directDependency = path.join(
+        projectRoot,
+        'node_modules',
+        'rcedit',
+        'bin',
+        process.arch === 'arm64' ? 'rcedit-arm64.exe' : 'rcedit-x64.exe'
+    );
+    if (fs.existsSync(directDependency)) {
+        return directDependency;
+    }
+
     const bundled = path.join(
         projectRoot,
         'node_modules',
@@ -93,6 +104,35 @@ function findRcedit(projectRoot) {
     return '';
 }
 
+function findAppBuilder(projectRoot) {
+    const explicit = normalizeString(process.env.AILIS_APP_BUILDER_PATH);
+    if (explicit && fs.existsSync(explicit)) {
+        return explicit;
+    }
+    const pnpmRoot = path.join(projectRoot, 'node_modules', '.pnpm');
+    if (!fs.existsSync(pnpmRoot)) {
+        return '';
+    }
+    for (const entry of fs.readdirSync(pnpmRoot, { withFileTypes: true })) {
+        if (!entry.isDirectory() || !entry.name.startsWith('app-builder-bin@')) {
+            continue;
+        }
+        const candidate = path.join(
+            pnpmRoot,
+            entry.name,
+            'node_modules',
+            'app-builder-bin',
+            'win',
+            process.arch === 'arm64' ? 'arm64' : 'x64',
+            'app-builder.exe'
+        );
+        if (fs.existsSync(candidate)) {
+            return candidate;
+        }
+    }
+    return '';
+}
+
 function resolveAppExe(context, projectRoot) {
     const appOutDir = normalizeString(context?.appOutDir);
     const candidates = [
@@ -118,6 +158,9 @@ function fixWindowsExeIcon(context = {}) {
     const exePath = resolveAppExe(context, projectRoot);
     const iconPath = path.join(projectRoot, 'build', 'icon.ico');
     const rceditPath = findRcedit(projectRoot);
+    const appBuilderPath = rceditPath ? '' : findAppBuilder(projectRoot);
+    const packageJson = JSON.parse(fs.readFileSync(path.join(projectRoot, 'package.json'), 'utf8'));
+    const appVersion = normalizeString(context?.packager?.appInfo?.version, packageJson.version || '0.0.0');
 
     if (!exePath) {
         throw new Error('[AILIS icon] Windows exe not found after packaging.');
@@ -125,8 +168,8 @@ function fixWindowsExeIcon(context = {}) {
     if (!fs.existsSync(iconPath)) {
         throw new Error(`[AILIS icon] Icon file not found: ${iconPath}`);
     }
-    if (!rceditPath) {
-        throw new Error('[AILIS icon] rcedit.exe not found. Install dependencies or set AILIS_RCEDIT_PATH.');
+    if (!rceditPath && !appBuilderPath) {
+        throw new Error('[AILIS icon] Neither rcedit.exe nor the installed app-builder rcedit wrapper was found.');
     }
 
     try {
@@ -146,13 +189,24 @@ function fixWindowsExeIcon(context = {}) {
         'ProductName',
         'AILIS',
         '--set-version-string',
+        'ProductVersion',
+        appVersion,
+        '--set-file-version',
+        appVersion,
+        '--set-product-version',
+        appVersion,
+        '--set-version-string',
         'InternalName',
         'AILIS',
         '--set-version-string',
         'OriginalFilename',
         'AILIS.exe'
     ];
-    const result = runRceditWithRetry(rceditPath, rceditArgs, {
+    const toolPath = rceditPath || appBuilderPath;
+    const toolArgs = rceditPath
+        ? rceditArgs
+        : ['rcedit', '--args', JSON.stringify(rceditArgs)];
+    const result = runRceditWithRetry(toolPath, toolArgs, {
         cwd: projectRoot,
         encoding: 'utf8'
     });
@@ -160,7 +214,7 @@ function fixWindowsExeIcon(context = {}) {
     if (result.status !== 0) {
         throw new Error([
             '[AILIS icon] Failed to write Windows exe icon.',
-            `rcedit=${rceditPath}`,
+            `tool=${toolPath}`,
             `exe=${exePath}`,
             result.stdout,
             result.stderr

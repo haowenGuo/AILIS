@@ -1,0 +1,20 @@
+{
+  "benchmark": "SWE-bench Pro",
+  "dataset": {
+    "id": "ScaleAI/SWE-bench_Pro",
+    "revision": "7ab5114912baf22bb098818e604c02fe7ad2c11f",
+    "split": "test",
+    "rows": 731,
+    "leaderboardRows": 730,
+    "leaderboardExcludedInstanceIds": [
+      "instance_element-hq__element-web-ec0f940ef0e8e3b61078f145f34dc40d1938e6c5-vnan"
+    ],
+    "source": "https://huggingface.co/datasets/ScaleAI/SWE-bench_Pro"
+  },
+  "officialHarness": {
+    "repository": "https://github.com/scaleapi/SWE-bench_Pro-os.git",
+    "commit": "ca10a60a5fcae51e6948ffe1485d4153d421e6c5"
+  },
+  "dockerRepository": "jefzda/sweap-images",
+  "verifiedAt": "2026-08-11"
+}

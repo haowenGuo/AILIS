@@ -63,6 +63,7 @@ Every non-dry-run release profile writes:
 
 ```text
 AILIS-Release-<profile>-<version>.json
+SHA256SUMS.txt
 ```
 
 The manifest records:
@@ -73,6 +74,33 @@ The manifest records:
 - runtime components included in the build plan
 - commands executed
 - generated artifacts with size and SHA-256
+
+`SHA256SUMS.txt` is generated from the completed artifacts and the release
+manifest so the files uploaded to a GitHub Release can be verified directly.
+
+The public desktop package keeps only the Electron locale payloads used by the
+product (`zh-CN`, `en-US`, `ja`, and `ko`). Frontend-only rendering libraries
+and Vite remain build-time dependencies: their compiled code lives in `dist`
+and is not duplicated in the packaged production `node_modules` tree.
+
+Electron Builder consumes the exact Electron distribution installed under
+`node_modules/electron/dist`. This keeps release builds reproducible and avoids
+an unnecessary GitHub download when the pinned Electron version is already
+available locally.
+
+The Windows icon hook uses the pinned development-only `rcedit` package. It is
+available during packaging but is excluded from production dependencies and
+therefore does not increase the installer payload.
+
+Production source maps and unused Stockfish engine variants are also excluded.
+The package keeps the exact `stockfish-18-lite-single.js/.wasm` pair selected by
+`scripts/ailis-stockfish-engine.cjs`, so chess analysis remains available without
+shipping the unused 100+ MiB multi-thread engine pairs.
+
+The core installer does not bundle Electron's updater elevation helper. AILIS
+does not ship an automatic per-machine updater, while the assisted installer
+still supports the normal Windows elevation flow when a protected destination
+is explicitly selected.
 
 ## Rules
 

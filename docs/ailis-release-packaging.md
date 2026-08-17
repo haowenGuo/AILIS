@@ -4,6 +4,14 @@ AILIS must not ship the full local voice stack in the default desktop installer.
 The CosyVoice3 model, Torch/CUDA runtime, and ASR runtime are optional local AI
 components and are too large for first-run distribution.
 
+The core package also excludes frontend-only build dependencies after Vite has
+compiled them into `dist`, and retains only the Electron locales exposed by the
+desktop UI. Runtime libraries used by the Agent, tools, local safety classifier,
+terminal, document adapters, and language server remain production dependencies.
+
+Production source maps and Stockfish variants that the runtime never resolves are
+excluded. The lite single-thread Stockfish JavaScript/WASM pair remains bundled.
+
 ## Release Tiers
 
 - `desktop:package:win` / `desktop:package:win:lite`: default user download.

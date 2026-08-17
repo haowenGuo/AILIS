@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import {
     SWE_BENCH_LITE_DATASET,
+    SWE_BENCH_PRO_DATASET,
     prepareSweBenchSample,
     sweBenchDatasetFilePrefix
 } from './prepare-swebench-lite-sample.mjs';
@@ -1398,6 +1399,12 @@ export async function runSweBenchExecution(options = {}) {
         ...parseArgs([]),
         ...options
     };
+    if (args.datasetName === SWE_BENCH_PRO_DATASET) {
+        throw new Error(
+            'SWE-bench Pro must be scored with the official ScaleAI harness. ' +
+            'Use pnpm bench:swebench-pro:doctor and pnpm bench:swebench-pro:evaluate.'
+        );
+    }
     await fs.mkdir(args.outputDir, { recursive: true });
     const runner = await resolveRunner(args);
     const { datasetPath, prepared, rows } = await loadRows(args);

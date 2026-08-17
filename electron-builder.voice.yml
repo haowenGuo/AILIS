@@ -1,10 +1,16 @@
 appId: com.ailis.desktop
 productName: AILIS
 artifactName: ${productName}-${version}-offline-voice-${arch}.${ext}
+electronDist: node_modules/electron/dist
 icon: build/icon.png
 afterPack: scripts/fix-windows-exe-icon.cjs
 directories:
   output: D:/AILIS/Build/AILIS-voice
+electronLanguages:
+  - en-US
+  - zh-CN
+  - ja
+  - ko
 files:
   - dist/**/*
   - electron/**/*
@@ -12,6 +18,14 @@ files:
   - scripts/ailis-crawl4ai-worker.py
   - scripts/ailis-python-search-worker.py
   - package.json
+  - "!**/*.map"
+  - "!node_modules/stockfish/bin/stockfish-*-asm.js"
+  - "!node_modules/stockfish/bin/stockfish-18.js"
+  - "!node_modules/stockfish/bin/stockfish-18.wasm"
+  - "!node_modules/stockfish/bin/stockfish-18-single.js"
+  - "!node_modules/stockfish/bin/stockfish-18-single.wasm"
+  - "!node_modules/stockfish/bin/stockfish-18-lite.js"
+  - "!node_modules/stockfish/bin/stockfish-18-lite.wasm"
 extraResources:
   - from: models/voice-runtime
     to: models/voice-runtime

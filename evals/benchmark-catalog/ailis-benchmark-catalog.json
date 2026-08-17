@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updatedAt": "2026-06-30",
+  "updatedAt": "2026-08-11",
   "purpose": "Benchmark catalog for AILIS optimization. Benchmarks are regression signals, not hard-coded task solvers.",
   "local": [
     {
@@ -89,12 +89,52 @@
       "gaps": ["fixed smoke subset", "no-visual and visual split", "current rerun"]
     },
     {
+      "id": "browsecomp-plus",
+      "category": "fixed_corpus_deep_research_agent",
+      "script": "pnpm bench:browsecomp-plus:run",
+      "status": "integrated_runtime_blocked_on_official_assets",
+      "measures": ["answer_accuracy", "retrieval_recall", "citation_quality", "calibration", "search_calls", "latency", "token_usage"],
+      "gaps": ["official 830-query data not downloaded", "Java 21 and Pyserini not installed", "official BM25 index not downloaded", "Qwen3-32B judge GPU runtime not available"],
+      "smoke": "pnpm bench:browsecomp-plus:preflight"
+    },
+    {
       "id": "swebench-lite",
       "category": "software_engineering_agent",
       "script": "pnpm bench:swebench-lite:execute",
       "status": "sample_data_exists",
       "measures": ["patch_success", "test_pass", "environment_setup", "code_navigation"],
       "gaps": ["stable wheelhouse", "fixed small sample", "nightly run"]
+    },
+    {
+      "id": "swebench-pro",
+      "category": "long_horizon_software_engineering_agent",
+      "script": "pnpm bench:swebench-pro:doctor:wsl",
+      "status": "official_smoke_started",
+      "latestLocalResult": {
+        "datasetRows": 731,
+        "preparedSampleRows": 731,
+        "officialHarnessCommit": "ca10a60a5fcae51e6948ffe1485d4153d421e6c5",
+        "sampleHarnessCoverage": "730/730 passed",
+        "failToPassIntegrity": "730/730 non-empty and Python-literal parseable",
+        "taskAgentTransport": "ready: isolated context, 250-turn cap, official predictions.json",
+        "environment": "ready: Ubuntu-22.04 WSL Docker + isolated scorer venv",
+        "model": "deepseek-v4-flash",
+        "officialSmoke": "0/1 resolved; 297/300 selected tests passed",
+        "firstInstance": "instance_NodeBB__NodeBB-04998908ba6721d64eba79ae3b65a351dcfbc5b5-vnan",
+        "taskAgentTurns": 232,
+        "generationDurationMs": 1003731,
+        "cumulativeUsage": {
+          "promptTokens": 10744802,
+          "completionTokens": 84635,
+          "cachedTokens": 9643264
+        },
+        "blockers": []
+      },
+      "measures": ["official_resolved_rate", "long_horizon_patch_generation", "container_verification", "latency", "token_usage", "cost"],
+      "gaps": ["remaining smoke-11 tasks", "reduce TaskAgent context repetition", "stronger coding-model comparison", "calibration-44 run"],
+      "prepare": "pnpm bench:swebench-pro:prepare",
+      "evaluate": "pnpm bench:swebench-pro:evaluate:wsl",
+      "documentation": "docs/ailis-swebench-pro-evaluation.md"
     }
   ],
   "external": [
@@ -106,11 +146,26 @@
       "recommendedUse": "Fixed L1/L2 smoke plus official validation reruns."
     },
     {
+      "id": "browsecomp-plus",
+      "priority": "P0",
+      "category": "fixed_corpus_deep_research_agent",
+      "source": "https://github.com/texttron/BrowseComp-Plus",
+      "recommendedUse": "Evaluate deep-research answer accuracy and retrieval quality under a fixed 100K-document corpus; use the official Qwen3-32B judge for comparable scores."
+    },
+    {
       "id": "swebench-lite",
       "priority": "P0",
       "category": "software_engineering_agent",
       "source": "https://www.swebench.com/",
       "recommendedUse": "Small deterministic code repair subset."
+    },
+    {
+      "id": "swebench-pro",
+      "priority": "P0",
+      "category": "long_horizon_software_engineering_agent",
+      "source": "https://github.com/scaleapi/SWE-bench_Pro-os",
+      "dataset": "https://huggingface.co/datasets/ScaleAI/SWE-bench_Pro",
+      "recommendedUse": "Evaluate long-horizon repository repair with AILIS-generated patches and the pinned official ScaleAI evaluator."
     },
     {
       "id": "osworld",

@@ -53,6 +53,10 @@ describe('desktop LLM provider', () => {
                         'content-type': 'text/event-stream; charset=utf-8',
                         'cache-control': 'no-cache'
                     });
+                    if (parsedBody.thinking?.type !== 'disabled') {
+                        response.write('data: {"choices":[{"delta":{"role":"assistant","reasoning_content":"think "}}]}\n\n');
+                        response.write('data: {"choices":[{"delta":{"reasoning_content":"before-tool"}}]}\n\n');
+                    }
                     response.write('data: {"choices":[{"delta":{"role":"assistant","tool_calls":[{"index":0,"id":"call-stream-tool","function":{"name":"task_","arguments":"{\\\"mode\\\":"}}]}}]}\n\n');
                     response.write('data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"name":"route","arguments":"\\\"chat\\\"}"}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":5,"completion_tokens":3,"total_tokens":8}}\n\n');
                     response.end('data: [DONE]\n\n');
@@ -310,7 +314,72 @@ describe('desktop LLM provider', () => {
         assert.equal(result.toolCalls.length, 1);
         assert.equal(result.toolCalls[0].name, 'task_route');
         assert.deepEqual(result.toolCalls[0].arguments, { mode: 'chat' });
+        assert.deepEqual(result.providerMessage, {
+            reasoning_content: 'think before-tool'
+        });
         assert.equal(receivedRequest.body.stream, true);
+    });
+
+    it('round-trips empty reasoning_content after a DeepSeek thinking-disabled tool call', async () => {
+        const first = await callDesktopLlmProvider({
+            provider: 'deepseek',
+            baseUrl: `${serverUrl}/v1`,
+            apiKey: 'deepseek-secret',
+            model: 'deepseek-v4-flash',
+            timeoutMs: 5000
+        }, {
+            thinking: { type: 'disabled' },
+            messages: [{ role: 'user', content: 'route this turn' }],
+            tools: [{
+                name: 'task_route',
+                description: 'Route this turn.',
+                parameters: {
+                    type: 'object',
+                    required: ['mode'],
+                    properties: { mode: { type: 'string', enum: ['chat', 'execute'] } }
+                }
+            }],
+            toolChoice: 'auto',
+            onTextDelta: () => {}
+        });
+
+        assert.equal(first.ok, true);
+        assert.deepEqual(first.providerMessage, { reasoning_content: '' });
+
+        await callDesktopLlmProvider({
+            provider: 'deepseek',
+            baseUrl: `${serverUrl}/v1`,
+            apiKey: 'deepseek-secret',
+            model: 'deepseek-v4-flash',
+            timeoutMs: 5000
+        }, {
+            messages: [{
+                role: 'assistant',
+                content: '',
+                providerMetadata: first.providerMessage,
+                toolCalls: [{
+                    id: first.toolCalls[0].id,
+                    type: 'function',
+                    function: {
+                        name: first.toolCalls[0].name,
+                        arguments: JSON.stringify(first.toolCalls[0].arguments)
+                    }
+                }]
+            }, {
+                role: 'tool',
+                toolCallId: first.toolCalls[0].id,
+                content: '{"ok":true}'
+            }, {
+                role: 'user',
+                content: 'continue'
+            }]
+        });
+
+        assert.equal(
+            Object.prototype.hasOwnProperty.call(receivedRequest.body.messages[0], 'reasoning_content'),
+            true
+        );
+        assert.equal(receivedRequest.body.messages[0].reasoning_content, '');
     });
 
     it('round-trips DeepSeek reasoning_content for native tool-call history', async () => {

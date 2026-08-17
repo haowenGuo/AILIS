@@ -6,7 +6,7 @@ const TASK_HARNESS_STATE_VERSION = 3;
 const TASK_RESULT_SCHEMA = 'ailis.task_result.v1';
 const LONG_HORIZON_TASK_OPTIMIZATION = '长程任务优化';
 const MAX_PARENT_RUN_HANDOFFS = 256;
-const FINAL_STATUSES = new Set(['completed', 'completed_with_warnings', 'success', 'succeeded']);
+const FINAL_STATUSES = new Set(['completed', 'completed_with_warnings', 'success', 'succeeded', 'verified_delivery']);
 const GOAL_STATUSES = new Set(['active', 'blocked', 'completed', 'replaced', 'cancelled']);
 
 function normalizeString(value, fallback = '') {
@@ -475,6 +475,9 @@ function buildTaskResultPacket(result = {}, state = {}) {
         partial_answer: partialAnswer,
         source_refs: normalizeSourceRefs(handoff.sourceRefs),
         output_refs: outputRefsFromCollectedData(collectedData),
+        delivery: handoff.delivery && typeof handoff.delivery === 'object'
+            ? cloneJson(handoff.delivery)
+            : (result.delivery && typeof result.delivery === 'object' ? cloneJson(result.delivery) : null),
         unresolved_fields: unresolvedFields,
         trace_ref: normalizeString(handoff.traceRef || result.runId || turn.runId || turn.latestRunId),
         checkpoint_available: Boolean(
@@ -1019,6 +1022,7 @@ class AILISSystemTaskAgentHarness {
                     final_answer: packet.final_answer,
                     source_refs: packet.source_refs,
                     output_refs: packet.output_refs,
+                    delivery: packet.delivery,
                     unresolved_fields: packet.unresolved_fields
                 }, turn.turnId);
                 const handoff = result.taskRunHandoff || result.task_run_handoff || result.handoff || {};

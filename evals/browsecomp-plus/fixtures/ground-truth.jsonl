@@ -1,0 +1,2 @@
+{"query_id":"fixture-q1","query":"On what date did the restored North Harbor clock resume public operation?","answer":"17 May 2018","evidence_docids":["fixture-101"],"gold_docids":["fixture-101"]}
+{"query_id":"fixture-q2","query":"Who was the first curator of the alpine greenhouse?","answer":"Elias Noor","evidence_docids":["fixture-102"],"gold_docids":["fixture-102"]}

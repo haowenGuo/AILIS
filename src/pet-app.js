@@ -1,11 +1,13 @@
-import { VRMModelSystem } from './vrm-model-system.js';
+import {
+    VRMModelSystem,
+    installAvatarDialogueBubble,
+    installPetMouseHitTest
+} from './rendering/index.js';
 import { TTSAudioPlayer } from './tts-audio-player.js';
 import { ChatTTSSystem } from './chat-tts-system.js';
 import { createChatService } from './chat-service.js';
 import { createSpeechProvider } from './speech-provider.js';
 import { CONFIG, applyDesktopPreferencesToConfig } from './config.js';
-import { installAvatarDialogueBubble } from './avatar-dialogue-bubble.js';
-import { installPetMouseHitTest } from './pet-mouse-hit-test.js';
 import { setUiLanguage } from './i18n.js';
 
 const PET_RENDER_AVATAR_REFERENCE_HEIGHT = 560;

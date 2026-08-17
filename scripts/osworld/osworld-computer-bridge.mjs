@@ -1,5 +1,8 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import {
+    createObservationStateTracker
+} from './osworld-observation-state.mjs';
 
 const SUPPORTED_ACTIONS = Object.freeze([
     'schema',
@@ -156,11 +159,12 @@ async function fetchJson(url, options = {}, timeoutMs = 120000) {
 }
 
 class OSWorldComputerBridgeTool {
-    constructor({ bridgeUrl, artifactDir, timeoutMs = 120000 } = {}) {
+    constructor({ bridgeUrl, artifactDir, timeoutMs = 120000, observationTracker = null } = {}) {
         this.bridgeUrl = normalizeText(bridgeUrl).replace(/\/+$/, '');
         this.artifactDir = path.resolve(artifactDir || process.cwd());
         this.timeoutMs = Math.max(5000, Number(timeoutMs) || 120000);
         this.imageSequence = 0;
+        this.observationTracker = observationTracker || createObservationStateTracker();
         if (!this.bridgeUrl) throw new Error('OSWorldComputerBridgeTool requires bridgeUrl');
     }
 
@@ -169,15 +173,32 @@ class OSWorldComputerBridgeTool {
     async materializeObservation(payload = {}, action = 'screen_screenshot') {
         await fs.mkdir(this.artifactDir, { recursive: true });
         const screenshotBase64 = normalizeText(payload.screenshot_base64 || payload.screenshotBase64);
+        const observationSequence = ++this.imageSequence;
         const screenshotPath = path.join(
             this.artifactDir,
-            `observation-${String(++this.imageSequence).padStart(4, '0')}.png`
+            `observation-${String(observationSequence).padStart(4, '0')}.png`
         );
+        const screenshotBuffer = screenshotBase64
+            ? Buffer.from(screenshotBase64, 'base64')
+            : null;
         if (screenshotBase64) {
-            await fs.writeFile(screenshotPath, Buffer.from(screenshotBase64, 'base64'));
+            await fs.writeFile(screenshotPath, screenshotBuffer);
         }
         const accessibilityTree = normalizeText(payload.accessibility_tree || payload.accessibilityTree);
+        const accessibilityTreePath = path.join(
+            this.artifactDir,
+            `observation-${String(observationSequence).padStart(4, '0')}.a11y.xml`
+        );
+        if (accessibilityTree) {
+            await fs.writeFile(accessibilityTreePath, accessibilityTree, 'utf8');
+        }
         const status = normalizeText(payload.status, payload.done ? 'done' : 'completed');
+        const observationState = this.observationTracker.observe({
+            accessibilityTree,
+            screenshotBuffer,
+            action,
+            step: Number(payload.step || payload.action_count || 0)
+        });
         const text = [
             `OSWorld GUI action: ${action}`,
             `status=${status}`,
@@ -189,8 +210,11 @@ class OSWorldComputerBridgeTool {
                 ? 'The GUI action budget is exhausted. Stop calling tools and return your final response.'
                 : '',
             normalizeText(payload.error),
-            accessibilityTree ? 'Accessibility tree (current screen):' : '',
-            accessibilityTree ? accessibilityTree.slice(0, 18000) : ''
+            `Desktop execution state (mechanical, not a task conclusion):\n${JSON.stringify(observationState.executionState)}`,
+            accessibilityTree
+                ? `Accessibility observation (${observationState.accessibility.mode}; full audit artifact: ${accessibilityTreePath}):`
+                : '',
+            accessibilityTree ? observationState.accessibility.promptText : ''
         ].filter(Boolean).join('\n');
         const details = {
             status,
@@ -198,13 +222,26 @@ class OSWorldComputerBridgeTool {
             done: payload.done === true,
             limitReached: payload.limit_reached === true,
             step: Number(payload.step || payload.action_count || 0),
+            executionState: observationState.executionState,
+            observationCompression: {
+                schema: 'ailis.observation_compression.v1',
+                mode: observationState.accessibility.mode,
+                originalChars: observationState.accessibility.originalChars,
+                promptChars: observationState.accessibility.promptChars,
+                originalTokens: observationState.accessibility.originalTokens,
+                visibleTokens: observationState.accessibility.visibleTokens,
+                omittedTokens: observationState.accessibility.omittedTokens,
+                changedRatio: observationState.accessibility.changedRatio,
+                fullAccessibilityTreePath: accessibilityTree ? accessibilityTreePath : ''
+            },
             ...(screenshotBase64 ? {
                 modelImage: {
                     path: screenshotPath,
                     detail: 'original'
                 },
                 screenshotPath
-            } : {})
+            } : {}),
+            ...(accessibilityTree ? { accessibilityTreePath } : {})
         };
         return {
             content: [{ type: 'text', text }],

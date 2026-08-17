@@ -1,0 +1,290 @@
+{
+  "schema": "ailis.version_registry.v1",
+  "generatedAt": "2026-08-17",
+  "repository": {
+    "path": "F:/AILIS/main",
+    "branch": "main",
+    "remote": "origin/main"
+  },
+  "identityPolicy": {
+    "productRelease": "SemVer tag for a shipped product. It does not inherit an experiment score.",
+    "productBaseline": "A fixed product commit accepted as the next development parent.",
+    "mechanismBaseline": "A named Harness mechanism with frozen evaluation provenance.",
+    "experiment": "A fixed source commit plus an immutable evaluation protocol.",
+    "run": "One concrete execution of an experiment. Invalid attempts and diagnostics never become scores.",
+    "scoreIdentity": [
+      "sourceCommit",
+      "datasetCommitOrManifestHash",
+      "taskSetHash",
+      "model",
+      "reasoningEffort",
+      "promptProfile",
+      "toolSurfaceHash",
+      "timeoutPolicy",
+      "scorerOrVerifier",
+      "runIds"
+    ],
+    "invariant": "A score belongs only to its complete score identity. Product integrations and descendants must be rerun before receiving that score."
+  },
+  "acceptedProductBaseline": {
+    "name": "A7-main",
+    "commit": "fbf2454dbf32562d995b221386ce95d996b9fcb9",
+    "acceptedAt": "2026-08-17",
+    "status": "accepted_product_parent_unscored_as_commit",
+    "mechanismLineage": [
+      "e3c7e7d93767df8978487b84f4219119d39726e5",
+      "8675ef81d7aae0b54fc46df6fb341361508ca3c0"
+    ],
+    "claimBoundary": "fbf2454 is the accepted product parent. The 60/89 Terminal-Bench result belongs to e3c7e7d, and the 119/165 GAIA result belongs to 085e17d answer artifacts under the shared semantic scorer."
+  },
+  "mechanismBaselines": [
+    {
+      "name": "TaskAgent-A7-canonical-tool-history",
+      "status": "accepted_mechanism_not_release_stable",
+      "evaluationSourceCommit": "e3c7e7d93767df8978487b84f4219119d39726e5",
+      "evaluationTag": "taskagent-a7-terminal-20260812",
+      "productIntegrationCommit": "8675ef81d7aae0b54fc46df6fb341361508ca3c0",
+      "contextWindowTokens": 272000,
+      "softMonitorTokens": 220000,
+      "semanticCompactTokens": 244800,
+      "operationalStopTokens": 258400,
+      "terminalBench21": {
+        "model": "gpt-5.6-luna",
+        "reasoningEffort": "max",
+        "datasetCommit": "5c8eadf",
+        "correct": 60,
+        "total": 89,
+        "scorePercent": 67.42,
+        "completePasses": 1,
+        "fixedVsA6": 18,
+        "regressedVsA6": 11,
+        "releaseStable": false
+      }
+    }
+  ],
+  "productReleaseTags": [
+    { "tag": "v1.0.1", "commit": "117dc58", "date": "2026-04-13" },
+    { "tag": "v1.0.2", "commit": "c9052f4", "date": "2026-04-18" },
+    { "tag": "v1.0.3", "commit": "8d2ab35", "date": "2026-04-18" },
+    { "tag": "v1.0.4", "commit": "30a0bea", "date": "2026-06-15" },
+    { "tag": "v1.0.5", "commit": "633e599", "date": "2026-06-22" },
+    { "tag": "v1.0.6", "commit": "34a6368", "date": "2026-06-23" },
+    { "tag": "v1.0.7", "commit": "67a6b81", "date": "2026-06-30" },
+    { "tag": "v1.1.0", "commit": "cbc264e", "date": "2026-07-07" },
+    { "tag": "v1.2.0", "commit": "6c17d3c", "date": "2026-07-20" },
+    { "tag": "v1.3.0", "commit": "0837fd1", "date": "2026-08-05" }
+  ],
+  "gaiaExperiments": [
+    {
+      "name": "frozen-baseline",
+      "commit": "6afc0ae6a4b51992fcf20092fb5b8e109dab98e5",
+      "mechanism": "isolated GAIA evaluation baseline",
+      "formalL1Runs": [41, 43],
+      "denominatorPerRun": 53,
+      "meanPercent": 79.25,
+      "decision": "reference"
+    },
+    {
+      "name": "P0",
+      "commit": "8ebc1e577a21e9badf081ae9b05fb3eb0607cb88",
+      "mechanism": "Windows attachment and subprocess path hardening",
+      "formalL1Runs": [47, 50],
+      "denominatorPerRun": 53,
+      "meanPercent": 91.51,
+      "mini20": 12,
+      "decision": "pass"
+    },
+    {
+      "name": "P1",
+      "commit": "7ba2cf77628f793ad70abb5bd9577d5d41c1ba0b",
+      "mechanism": "evidence navigation and answer preservation",
+      "formalL1Runs": [48, 48],
+      "denominatorPerRun": 53,
+      "meanPercent": 90.57,
+      "mini20": 14,
+      "full165Gpt55Strict": 105,
+      "decision": "quality_reference_but_formal_l1_fail"
+    },
+    {
+      "name": "P1.1",
+      "commit": "e1352131230432512835436aff26336c96a3481c",
+      "mechanism": "bounded recovery and entity lookup",
+      "formalL1Runs": [45, 42],
+      "denominatorPerRun": 53,
+      "meanPercent": 82.08,
+      "mini20": 10,
+      "decision": "rejected_global_regression"
+    },
+    {
+      "name": "P1.2",
+      "commit": "35b6f8b2e9305a7951f2835e6fd6361bcf70a4bb",
+      "mechanism": "concise retry for empty bloated searches",
+      "partialL1": "13/15",
+      "decision": "stopped_after_stable_control_regressions"
+    },
+    {
+      "name": "P2",
+      "commit": "7f94302173bb5fd5913f52066e98c56a2a8a3bb4",
+      "mechanism": "shadow task journal and context replay",
+      "mini20": 11,
+      "decision": "diagnostic_only"
+    },
+    {
+      "name": "P3",
+      "commit": "aebd722230c06f828c4d281316fc2c86259425c9",
+      "mechanism": "canonical context plus enlarged long-horizon budget",
+      "decision": "rejected_due_mixed_variables_and_control_regression"
+    },
+    {
+      "name": "P3.1",
+      "commit": "95f8d849bcc305e9b94f4b498a543b0c832e42fb",
+      "mechanism": "canonical finalization with prior round boundary",
+      "mini20": 10,
+      "l2L3Runs": [69, 64],
+      "denominatorPerRun": 112,
+      "decision": "positive_architecture_signal_incomplete_gate"
+    },
+    {
+      "name": "P4",
+      "commit": "504d01418cac7f89a6fdb5bcc1282889a4907fed",
+      "mechanism": "replay loadable tools from canonical history",
+      "mini20": 9,
+      "decision": "rejected"
+    },
+    {
+      "name": "P5",
+      "commit": "5941d0a39f340575634202a75703c3897fdc5609",
+      "mechanism": "expose loaded tools with native contracts",
+      "mini20": 12,
+      "decision": "rejected_failure_side_not_fixed"
+    },
+    {
+      "name": "P6",
+      "commit": "cb6076a36df087c120d011d33004f73fc26b76da",
+      "mechanism": "call loaded tools through native schemas",
+      "mini20": 13,
+      "decision": "diagnostic_only_failure_side_not_fixed"
+    },
+    {
+      "name": "P7",
+      "commit": "174c98b79b1b5a7db8d3d1b5e500150cbfbdd84b",
+      "mechanism": "preserve native reasoning summaries",
+      "mini20": 11,
+      "decision": "rejected"
+    },
+    {
+      "name": "P8",
+      "commit": "9e7b893c028c5d2538ee6d60ab67771131593505",
+      "mechanism": "clarify exec batch and network capabilities",
+      "mini20": 12,
+      "decision": "rejected"
+    },
+    {
+      "name": "P9",
+      "commit": "9067a505bbf88887c254c6601d94167631c12c12",
+      "mechanism": "stable explicit long-tail tool loading",
+      "mini20": 9,
+      "decision": "rejected_answer_relation_still_missing"
+    },
+    {
+      "name": "P10",
+      "commit": "c0d24be8c7d766cc6c7fc48ba9a86d85d9527462",
+      "mechanism": "preserve source viewport link references",
+      "mini20": 10,
+      "decision": "local_fix_only_dynamic_resource_still_failed"
+    }
+  ],
+  "postPExperiments": [
+    {
+      "name": "A1-native-transport",
+      "commit": "a4baea39841fc25bbf98614bc17f1c775e7e120e",
+      "full165Visible": 96,
+      "logicalTokens": 15000000,
+      "meanSeconds": 542.9,
+      "decision": "rejected_quality_and_latency"
+    },
+    {
+      "name": "batched-web",
+      "commit": "de756a48406e9102a60952293135a59cb5a3f29e",
+      "full165Visible": 102,
+      "answers": 165,
+      "logicalTokens": 13920000,
+      "meanSeconds": 150.0,
+      "decision": "efficiency_reference"
+    },
+    {
+      "name": "A4",
+      "commit": "b6f6dc0a9a41062dbde02337ae989aa591018acc",
+      "full165Conservative": 106,
+      "answers": 164,
+      "logicalTokens": 13430000,
+      "meanSeconds": 113.7,
+      "decision": "positive_l2_signal_global_gate_fail"
+    },
+    {
+      "name": "A5",
+      "commit": "63d44a6ba2ec6cb615e533d338220227e7ea0ba6",
+      "full165Visible": 97,
+      "answers": 165,
+      "logicalTokens": 14940000,
+      "meanSeconds": 155.7,
+      "decision": "rejected_final_context_regression"
+    },
+    {
+      "name": "GAIA-A6",
+      "commit": "085e17d2f4a8ce0e841ee1543ad0df10e2387415",
+      "model": "gpt-5.6-luna",
+      "reasoningEffort": "medium",
+      "exactVisible": 102,
+      "semanticCorrect": 119,
+      "total": 165,
+      "logicalTokens": 31370114,
+      "meanSeconds": 210.426,
+      "decision": "frozen_gaia_luna_evidence"
+    },
+    {
+      "name": "Terminal-A7",
+      "commit": "e3c7e7d93767df8978487b84f4219119d39726e5",
+      "model": "gpt-5.6-luna",
+      "reasoningEffort": "max",
+      "correct": 60,
+      "total": 89,
+      "decision": "accepted_context_mechanism_not_release_stable"
+    },
+    {
+      "name": "A8-Codex-prompt",
+      "commit": "208e4a01f25b7c78a49eb4a194f4f0537d42da5f",
+      "focused": "1/3",
+      "decision": "rejected_prompt_only_experiment"
+    }
+  ],
+  "currentEvidence": {
+    "gaiaPublicValidation": {
+      "sourceCommit": "085e17d2f4a8ce0e841ee1543ad0df10e2387415",
+      "model": "gpt-5.6-luna medium",
+      "scorer": "shared semantic scorer over complete visible answer",
+      "ailis": "119/165 (72.12%)",
+      "codex": "107/165 (64.85%)"
+    },
+    "terminalBench21": {
+      "sourceCommit": "e3c7e7d93767df8978487b84f4219119d39726e5",
+      "model": "gpt-5.6-luna max",
+      "ailis": "60/89 (67.42%), one complete pass",
+      "codex": "75.73% +/- 1.32%, official five-pass aggregate"
+    },
+    "osworld": {
+      "result": "9/15 (60.00%)",
+      "status": "partial_not_headline"
+    },
+    "sweBenchPro": {
+      "result": "6/11 (54.55%)",
+      "status": "fixed_smoke_subset_not_headline"
+    }
+  },
+  "workingTree": {
+    "basedOn": "fbf2454dbf32562d995b221386ce95d996b9fcb9",
+    "status": "dirty_unscored_candidate",
+    "notableChanges": "Large Agent Loop extraction plus unrelated benchmark and rendering work.",
+    "policy": "Do not name, tag, merge, or inherit A7 scores until the candidate is isolated, frozen, replay-equivalent, and evaluated."
+  }
+}

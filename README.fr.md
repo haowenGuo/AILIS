@@ -2,7 +2,7 @@
   <h1>AILIS Assistant</h1>
   <p><strong>Un assistant IA incarné pour desktop, open source, avec personnage VRM, voix temps réel, contexte visuel, mémoire et Agent Harness inspiré de Codex.</strong></p>
   <p>
-    <img alt="Version" src="https://img.shields.io/badge/version-1.1.0-2563eb?style=for-the-badge">
+    <img alt="Version" src="https://img.shields.io/badge/version-1.4.0-2563eb?style=for-the-badge">
     <img alt="Runtime" src="https://img.shields.io/badge/runtime-Electron-0f172a?style=for-the-badge">
     <img alt="License" src="https://img.shields.io/badge/license-MIT-059669?style=for-the-badge">
   </p>
@@ -165,7 +165,7 @@ pnpm ailis:validate-gateway
 
 ## État du projet
 
-Ligne de release actuelle : `v1.1.0`.
+Ligne de release actuelle : `v1.4.0`.
 
 AILIS est en développement actif. Le runtime desktop, l'Agent Harness, la couche d'outils et la surface d'évaluation sont déjà importants, mais le projet doit encore être considéré comme un product/runtime en phase alpha plutôt qu'un Agent OS de production. Les priorités immédiates sont les contrats d'outils, les validations plus sûres, une meilleure mémoire, une configuration locale plus fluide et des évaluations end-to-end plus solides.
 

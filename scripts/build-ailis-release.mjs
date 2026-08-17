@@ -241,6 +241,30 @@ async function writeReleaseManifest(plan, dryRun) {
     return manifestPath;
 }
 
+async function writeChecksumFile(plan, manifestPath, dryRun) {
+    if (dryRun) {
+        return null;
+    }
+    const artifacts = await collectArtifacts(plan.outputDir);
+    const checksumEntries = artifacts.map((artifact) => ({
+        file: artifact.file,
+        sha256: artifact.sha256
+    }));
+    if (manifestPath && await pathExists(manifestPath)) {
+        checksumEntries.push({
+            file: path.relative(plan.outputDir, manifestPath).replace(/\\/g, '/'),
+            sha256: await hashFile(manifestPath)
+        });
+    }
+    checksumEntries.sort((left, right) => left.file.localeCompare(right.file));
+    const checksumPath = path.join(plan.outputDir, 'SHA256SUMS.txt');
+    const body = checksumEntries
+        .map((entry) => `${entry.sha256.toUpperCase()}  ${entry.file}`)
+        .join('\n');
+    await fsp.writeFile(checksumPath, body ? `${body}\n` : '', 'utf8');
+    return checksumPath;
+}
+
 async function main() {
     const args = process.argv.slice(2);
     const options = {
@@ -309,7 +333,9 @@ async function main() {
             await run(command);
         }
         const manifestPath = await writeReleaseManifest(plan, false);
+        const checksumPath = await writeChecksumFile(plan, manifestPath, false);
         console.log(`[AILIS Release] manifest: ${manifestPath}`);
+        console.log(`[AILIS Release] checksums: ${checksumPath}`);
     }
 }
 

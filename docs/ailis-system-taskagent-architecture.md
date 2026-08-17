@@ -1,88 +1,153 @@
 # AILIS System TaskAgent Architecture
 
+Last verified against: `fbf2454dbf32562d995b221386ce95d996b9fcb9`
+
+State schema: `TASK_HARNESS_STATE_VERSION = 3`
+
 ## Goal
 
-AILIS is the only user-facing persona. TaskAgent is the only task-execution agent. The Harness owns their transport, lifecycle, context budgets, and durable state.
+AILIS is the only user-facing persona. TaskAgent is the only task-execution
+agent. The Harness owns routing, Thread/Turn lifecycle, checkpoints, steering,
+Goal state, and the compact result boundary.
 
-This removes the current topology in which Persona creates, names, waits for, resumes, and closes child agents. Persona makes one semantic choice: answer naturally or hand the exact user request to the system TaskAgent. No regex, keyword router, or task-type branch substitutes for that model decision.
+The Persona makes one semantic choice: answer as conversation or dispatch the
+exact user input to TaskAgent. A regex, keyword router, benchmark branch, or
+rewritten hidden task must not replace that model decision.
 
 ## Runtime Boundaries
 
 | Lane | Owner | Model visibility | Durable form |
 | --- | --- | --- | --- |
-| Persona identity, relationship, preferences | AILIS | Persona only | Memory/profile store |
-| Visible conversation | Desktop chat | Persona; compact excerpts only when needed elsewhere | Chat history |
-| Current user task request | Harness | Persona and TaskAgent | Task record |
-| Task working context | TaskAgent | TaskAgent only | Context-manager checkpoint |
-| Tool observations | TaskAgent | TaskAgent budgeted view | Transcript/output store |
-| Evidence and sources | TaskAgent | TaskAgent; compact result packet to Persona | Evidence Manifest/source refs |
-| Generated artifacts | TaskAgent | References to Persona | Output refs/artifact store |
-| Final presentation | AILIS | User-visible | Persona surface/chat record |
+| Persona identity and relationship | Persona runtime | Persona only | Memory/profile store |
+| Visible conversation | Gateway/Desktop | Persona; TaskAgent receives a bounded immutable envelope | Chat history and Turn envelope |
+| Current user input | Harness | Persona and TaskAgent | Turn input item |
+| Current execution | TaskAgent Runner | TaskAgent only | Active Turn and ContextManager history |
+| Optional long-term Goal | Harness, mutated by active TaskAgent Turn | TaskAgent | `activeGoal` plus `goalHistory` |
+| Tool calls and observations | ContextManager/Runner | TaskAgent budgeted view | Canonical ResponseItems plus output store |
+| Evidence and artifacts | TaskAgent | TaskAgent; compact refs returned to Persona | Source/output/artifact refs |
+| Final presentation | Persona/Gateway | User-visible | Chat record |
 
-## Call Flow
+## Current Call Flow
 
 ```text
 user message
-    -> AILIS Persona turn
-        -> ordinary conversation: assistant message -> Persona surface -> user
-        -> task execution: handoff_task({ message: exact user text, continuation })
-            -> SystemTaskAgentHarness
-                -> resolve lifecycle from durable task state
-                -> run or resume the single system TaskAgent
-                -> compact full execution into TaskResultPacket
-            -> handoff_task result observation
-        -> AILIS renders TaskResultPacket -> Persona surface -> user
+  -> Gateway opens or steers a product turn
+  -> Persona chooses chat or execute
+     -> chat: Persona result reaches the user
+     -> execute: SystemTaskAgentHarness.dispatchTurn()
+        -> if a TaskAgent Turn is already running:
+             verify expectedTurnId
+             enqueue the exact input into that Runner
+             append user.steer to the Thread ledger
+        -> otherwise:
+             load or create the persistent Thread for the product Session
+             create a new Turn for the exact input
+             restore the Thread ContextManager checkpoint when present
+             run the private TaskAgent
+        -> convert Runner output to TaskResultPacket
+        -> append Turn completion to canonical checkpoint
+        -> clear activeTurnId and persist Thread
+  -> Persona renders the compact result
 ```
 
-The handoff call blocks until the current TaskAgent turn reaches a result boundary. Persona does not call `wait_agent`, read a mailbox, create another agent, or decide how to resume a checkpoint.
+The persistent object is the TaskAgent Thread, not the first task. Each idle
+user input creates a new Turn in the same Thread. A message received while a
+Turn is running steers that exact Turn; it does not create a second TaskAgent.
 
-## Contracts
+## Durable Contracts
 
-### PersonaToTaskAgentHandoff
+### Thread
 
 ```js
 {
-  message: string,                  // exact current user request; required
-  continuation?: 'auto' | 'continue' | 'new'
-}
-```
-
-`continuation` is a semantic hint from the model, not a regex-derived decision. `auto` continues only an unfinished task; `continue` may resume the most recent checkpoint; `new` starts clean. The Harness validates this enum but never rewrites `message`.
-
-### TaskRecord
-
-```js
-{
-  taskId: string,
+  threadId: string,
   sessionId: string,
-  originalGoal: string,
-  latestRequest: string,
-  status: 'running' | 'completed' | 'incomplete' | 'failed' | 'interrupted',
   childSessionId: string,
-  latestRunId: string,
-  checkpoint: object | null,
-  evidenceRefs: string[],
+  turns: Turn[],
+  activeTurnId: string,
+  activeGoal: Goal | null,
+  goalHistory: Goal[],
+  ledger: LedgerEntry[],
+  contextCheckpoint: ContextManagerCheckpoint | null,
   outputRefs: string[],
   sourceRefs: SourceRef[],
   unresolvedFields: string[],
+  traceRef: string,
   createdAt: string,
   updatedAt: string
 }
 ```
+
+### Turn
+
+```js
+{
+  turnId: string,
+  sessionId: string,
+  runId: string,
+  request: string,
+  latestRequest: string,
+  inputs: [{ inputId, message, createdAt }],
+  envelope: {
+    sessionId,
+    turnId,
+    userMessage,
+    attachments,
+    visibleHistory,
+    createdAt
+  },
+  status: 'running' | 'completed' | 'failed' | 'interrupted',
+  resultStatus: string,
+  finalAnswer: string,
+  traceRef: string,
+  createdAt: string,
+  updatedAt: string,
+  completedAt: string
+}
+```
+
+`request` is the input that created the Turn. `latestRequest` and `inputs`
+record steering without changing the identity of the active Turn.
+
+### Goal
+
+```js
+{
+  goalId: string,
+  objective: string,
+  status: 'active' | 'blocked' | 'completed' | 'replaced' | 'cancelled',
+  reason: string,
+  createdAt: string,
+  updatedAt: string,
+  completedAt: string
+}
+```
+
+Goal mutation is accepted only from the active `turnId`. `expected_goal_id`
+provides compare-and-swap conflict protection. Replacing, completing, or
+clearing a Goal moves the prior value to `goalHistory`.
+
+Important current boundary: Goal state is durable but scheduler-passive. The
+baseline does not automatically create another Turn after the current Turn
+ends. A future Goal Engine must be implemented separately and must prioritize
+queued user input over automatic continuation.
 
 ### TaskResultPacket
 
 ```js
 {
   schema: 'ailis.task_result.v1',
+  thread_id: string,
+  turn_id: string,
   task_id: string,
   status: string,
   original_goal: string,
+  active_goal: Goal | null,
   current_request: string,
   final_answer: string,
+  display_text: string,
   partial_answer: string,
   source_refs: SourceRef[],
-  evidence_refs: string[],
   output_refs: string[],
   unresolved_fields: string[],
   trace_ref: string,
@@ -90,77 +155,78 @@ The handoff call blocks until the current TaskAgent turn reaches a result bounda
 }
 ```
 
-Only this compact packet returns to Persona. `steps`, raw tool outputs, hidden reasoning, full checkpoints, and internal mailbox state remain outside Persona context.
+Only this compact result crosses back to Persona. Raw tool output, hidden
+reasoning, the full checkpoint, and internal ledger state stay in TaskAgent.
 
-## Harness Pseudocode
+## Context and Checkpoint Semantics
 
-```js
-async function handoffTask(input, turnContext) {
-  assertStrictSchema(input)
-  const request = input.message // preserve verbatim
-  const session = loadSessionTaskState(turnContext.sessionId)
+1. A clean Thread starts with no ContextManager checkpoint.
+2. After each Turn, the Runner checkpoint is sanitized and stored on the
+   Thread.
+3. Turn completion is appended to that checkpoint as canonical user/assistant
+   history.
+4. Legacy task checkpoints are migrated to Session history and stripped of
+   active authority such as old `originalGoal` or `currentRequest` fields.
+5. On the next Turn, the latest input and current active Goal are authoritative;
+   completed commands and stale errors are historical observations.
+6. A7 keeps tool-layer-bounded outputs in canonical history and waits until the
+   absolute Luna hard threshold before semantic replacement.
 
-  if (session.inFlight) {
-    enqueueIntoTaskAgentInput(session.taskId, request)
-    return await session.inFlight
-  }
+## Steering Semantics
 
-  const prior = selectPriorTaskByLifecycleHint(session, input.continuation)
-  const task = prior ? resumeTaskRecord(prior, request) : createTaskRecord(request)
-  persist(task)
+Gateway binds a user follow-up to `expectedTaskAgentTurnId`. The Harness rejects
+a mismatch instead of guessing which execution to steer. If the Runner's input
+handler is ready, the message is delivered immediately; otherwise it is queued
+and flushed when the handler registers.
 
-  const fullResult = await executeTaskAgent({
-    stableTaskId: task.taskId,
-    originalUserGoal: task.originalGoal,
-    message: request,
-    inheritanceMode: prior?.checkpoint ? 'checkpoint' : 'clean',
-    checkpoint: prior?.checkpoint,
-    maxAgentSteps: 4
-  })
+Natural language such as “continue” is ordinary user input. It is not an
+approval event and does not identify a stale command. Approvals require their
+own structured identity and policy path.
 
-  const packet = buildTaskResultPacket(fullResult, task)
-  persistTaskCheckpointAndRefs(task, fullResult)
-  savePublicResultCapsule(packet)
-  return packet
-}
-```
+## Termination and Budget
 
-`selectPriorTaskByLifecycleHint` is lifecycle logic only. It does not inspect task text. Semantic continuity comes from the model-provided enum; `auto` uses deterministic status (`unfinished` versus `completed`) rather than keyword matching.
+The TaskAgent model ends a Turn naturally by returning an assistant result with
+no further tool continuation. The baseline Runner has a default 30-step safety
+fuse and model/transport deadlines, but A7 does not create a synthetic final
+prompt that discards canonical history.
 
-## Persona Prompt Invariants
+The safety fuse is not a semantic completion policy. If it triggers, the system
+must preserve checkpoint and unresolved state rather than fabricate completion.
+
+## Prompt Invariants
+
+### Persona
 
 1. Keep ordinary conversation direct and natural.
-2. For concrete task execution, call `handoff_task` once with the user's actual request.
-3. Do not invent a broader task, stricter evidence requirement, task name, or subtask plan in the handoff.
-4. Treat `TaskResultPacket` as the factual boundary. Rephrase tone, but never add unsupported names, numbers, quotes, links, or conclusions.
-5. Never expose TaskAgent, Harness, tool protocol, checkpoint, trace, or internal status markup to the user.
-6. Dynamic facts without fresh evidence go through TaskAgent instead of being guessed from pretrained memory.
+2. Dispatch the exact current input when execution is needed.
+3. Do not invent a broader task, stricter evidence rule, or hidden subtask.
+4. Treat TaskResultPacket as the factual boundary.
+5. Do not expose TaskAgent protocol, checkpoint, trace, or raw tool logs.
 
-## TaskAgent Prompt Invariants
+### TaskAgent
 
-1. `original_user_goal` remains authoritative across resumed turns.
-2. `delegated_task` is the exact current user request and may refine but not erase the original goal.
-3. Use tools and evidence naturally; the model decides whether evidence is sufficient.
-4. Stop with the best supported result when the evidence is reasonable; safety budgets are fuses, not semantic completion rules.
-5. Return a result boundary with answer, unresolved fields, Evidence Manifest, Output Refs, source refs, and checkpoint.
-
-## Migration Steps
-
-1. Add `SystemTaskAgentHarness` and a strict `handoff_task` tool.
-2. Change Persona's direct tool surface to only `handoff_task`.
-3. Hide legacy `spawn_agent`, `followup_task`, `wait_agent`, `list_agents`, and `close_agent` from all model-visible surfaces.
-4. Keep legacy classes temporarily loadable for transcript compatibility, but remove them from the active execution path.
-5. Cap Persona's loop as a safety fuse; keep TaskAgent's four-round budget unchanged.
-6. Replace old spawn/mailbox tests with handoff, continuation, result-boundary, and context-isolation tests.
+1. The latest Turn input is authoritative for the current action.
+2. An active Goal is optional durable context, not an immutable first prompt.
+3. The model owns planning, evidence sufficiency, tool choice, and natural
+   ending.
+4. The runtime owns environment truth, permissions, tool execution, budgets,
+   persistence, and replay.
+5. Return the best supported result plus unresolved fields and durable refs.
 
 ## Acceptance Tests
 
-- Ordinary chat produces no TaskAgent run.
-- One task request produces exactly one Harness handoff and one TaskAgent run.
-- Persona cannot call legacy collaboration tools because they are absent from its tool array.
-- TaskAgent cannot call Persona handoff or legacy collaboration tools.
-- The exact current user request and original goal arrive unchanged in TaskAgent context.
-- A completed result returns to Persona without raw steps, tool logs, or checkpoint payload.
-- An unfinished follow-up resumes the saved checkpoint; `new` starts clean.
-- Concurrent follow-up input is queued into the existing TaskAgent turn instead of spawning another TaskAgent.
-- Persona output contains no DSML, tool-call markup, internal JSON, or unsupported factual additions.
+- Ordinary chat produces no TaskAgent Turn.
+- A new idle request creates a new Turn in the same Thread.
+- A running request can be steered only with the active `turnId`.
+- Concurrent input is queued into the active Turn and does not spawn a second
+  TaskAgent.
+- A completed first request cannot remain an immutable goal for later requests.
+- Goal changes from stale Turns are rejected.
+- Legacy checkpoints cannot regain active task authority after migration.
+- The exact current user input reaches TaskAgent without keyword rewriting.
+- Completed results return without raw checkpoint or tool payload leakage.
+- Restart marks an interrupted active Turn and keeps the Thread recoverable.
+- A7 checkpoint replay preserves the configured full-history tool-output mode.
+
+For the source-level audit, performance evidence, and next architecture phases,
+see [Harness Architecture Audit and Roadmap](ailis-harness-architecture-audit-roadmap.md).

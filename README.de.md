@@ -2,7 +2,7 @@
   <h1>AILIS Assistant</h1>
   <p><strong>Ein Open-Source-Desktop-Assistent mit verkörperter KI, VRM-Charakter, Echtzeitstimme, visuellem Kontext, Gedächtnis und Codex-artigem Agent Harness.</strong></p>
   <p>
-    <img alt="Version" src="https://img.shields.io/badge/version-1.1.0-2563eb?style=for-the-badge">
+    <img alt="Version" src="https://img.shields.io/badge/version-1.4.0-2563eb?style=for-the-badge">
     <img alt="Runtime" src="https://img.shields.io/badge/runtime-Electron-0f172a?style=for-the-badge">
     <img alt="License" src="https://img.shields.io/badge/license-MIT-059669?style=for-the-badge">
   </p>
@@ -165,7 +165,7 @@ pnpm ailis:validate-gateway
 
 ## Projektstatus
 
-Aktuelle Release-Linie: `v1.1.0`.
+Aktuelle Release-Linie: `v1.4.0`.
 
 AILIS wird aktiv entwickelt. Desktop Runtime, Agent Harness, Tool-Layer und Evaluation Surface sind bereits substanziell, das Projekt sollte aber noch als Alpha-Produkt/Runtime und nicht als production-grade Agent OS betrachtet werden. Kurzfristige Prioritäten sind klarere Tool Contracts, sicherere Genehmigungen, bessere Memory-Qualität, einfachere lokale Modellkonfiguration und robustere End-to-End-Evaluation.
 

@@ -148,7 +148,7 @@ function buildSourceHints({ affectedCapability = '', bugReport = '', sourceHints
     const hints = new Set(normalizeArray(sourceHints).map(String).filter(Boolean));
     const text = `${affectedCapability} ${bugReport}`.toLowerCase();
     if (/vision|截图|screen|capture/.test(text)) {
-        hints.add('electron/ailis-agent-runner.cjs');
+        hints.add('electron/agent-loop/runner.cjs');
         hints.add('electron/ailis-gateway.cjs');
         hints.add('src/ailis-chat-service.js');
     }
@@ -163,7 +163,7 @@ function buildSourceHints({ affectedCapability = '', bugReport = '', sourceHints
         hints.add('electron/ailis-skills.cjs');
     }
     if (/agent|loop|执行|任务/.test(text)) {
-        hints.add('electron/ailis-agent-runner.cjs');
+        hints.add('electron/agent-loop/runner.cjs');
         hints.add('electron/ailis-runtime.cjs');
     }
     return [...hints];

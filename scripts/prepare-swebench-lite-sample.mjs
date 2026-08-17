@@ -12,9 +12,11 @@ const execFileAsync = promisify(execFile);
 
 export const SWE_BENCH_DATASET = 'princeton-nlp/SWE-bench';
 export const SWE_BENCH_LITE_DATASET = 'princeton-nlp/SWE-bench_Lite';
-const SUPPORTED_DATASETS = new Set([
-    SWE_BENCH_DATASET,
-    SWE_BENCH_LITE_DATASET
+export const SWE_BENCH_PRO_DATASET = 'ScaleAI/SWE-bench_Pro';
+const DATASET_FILE_PREFIXES = new Map([
+    [SWE_BENCH_DATASET, 'swebench'],
+    [SWE_BENCH_LITE_DATASET, 'swebench-lite'],
+    [SWE_BENCH_PRO_DATASET, 'swebench-pro']
 ]);
 const CONFIG = 'default';
 const DEFAULT_SPLIT = 'test';
@@ -63,19 +65,17 @@ function parseArgs(argv = process.argv.slice(2)) {
 
 export function resolveSweBenchDataset(datasetName = SWE_BENCH_LITE_DATASET) {
     const normalized = String(datasetName || SWE_BENCH_LITE_DATASET).trim();
-    if (!SUPPORTED_DATASETS.has(normalized)) {
+    if (!DATASET_FILE_PREFIXES.has(normalized)) {
         throw new Error(
             `Unsupported SWE-bench dataset: ${normalized}. ` +
-            `Expected ${SWE_BENCH_DATASET} or ${SWE_BENCH_LITE_DATASET}.`
+            `Expected one of: ${[...DATASET_FILE_PREFIXES.keys()].join(', ')}.`
         );
     }
     return normalized;
 }
 
 export function sweBenchDatasetFilePrefix(datasetName = SWE_BENCH_LITE_DATASET) {
-    return resolveSweBenchDataset(datasetName) === SWE_BENCH_DATASET
-        ? 'swebench'
-        : 'swebench-lite';
+    return DATASET_FILE_PREFIXES.get(resolveSweBenchDataset(datasetName));
 }
 
 function fetchTextOverHttps(url, { timeoutMs = 60000 } = {}) {
@@ -114,8 +114,34 @@ function fetchTextOverHttps(url, { timeoutMs = 60000 } = {}) {
     });
 }
 
+async function fetchJsonWithPowerShell(url) {
+    const { stdout } = await execFileAsync(
+        'powershell',
+        [
+            '-NoProfile',
+            '-ExecutionPolicy',
+            'Bypass',
+            '-Command',
+            `$ProgressPreference='SilentlyContinue'; Invoke-RestMethod -Uri ${JSON.stringify(url)} | ConvertTo-Json -Depth 100`
+        ],
+        {
+            windowsHide: true,
+            maxBuffer: 50 * 1024 * 1024,
+            timeout: 120000
+        }
+    );
+    return JSON.parse(stdout);
+}
+
 async function fetchJson(url, { attempts = 3 } = {}) {
     let lastError = null;
+    if (process.platform === 'win32') {
+        try {
+            return await fetchJsonWithPowerShell(url);
+        } catch (error) {
+            lastError = error;
+        }
+    }
     for (let attempt = 1; attempt <= attempts; attempt += 1) {
         try {
             const text = await fetchTextOverHttps(url);
@@ -127,23 +153,9 @@ async function fetchJson(url, { attempts = 3 } = {}) {
             }
         }
     }
+    if (process.platform !== 'win32') throw lastError;
     try {
-        const { stdout } = await execFileAsync(
-            'powershell',
-            [
-                '-NoProfile',
-                '-ExecutionPolicy',
-                'Bypass',
-                '-Command',
-                `$ProgressPreference='SilentlyContinue'; Invoke-RestMethod -Uri ${JSON.stringify(url)} | ConvertTo-Json -Depth 100`
-            ],
-            {
-                windowsHide: true,
-                maxBuffer: 50 * 1024 * 1024,
-                timeout: 120000
-            }
-        );
-        return JSON.parse(stdout);
+        return await fetchJsonWithPowerShell(url);
     } catch (fallbackError) {
         fallbackError.cause = lastError;
         throw fallbackError;
@@ -151,6 +163,9 @@ async function fetchJson(url, { attempts = 3 } = {}) {
 }
 
 function safeJsonParse(value, fallback = []) {
+    if (Array.isArray(value)) {
+        return value;
+    }
     if (!value || typeof value !== 'string') {
         return fallback;
     }
@@ -162,8 +177,10 @@ function safeJsonParse(value, fallback = []) {
     }
 }
 
-function normalizeRow(rowEntry = {}, datasetName = SWE_BENCH_LITE_DATASET) {
+export function normalizeSweBenchRow(rowEntry = {}, datasetName = SWE_BENCH_LITE_DATASET) {
     const row = rowEntry.row || rowEntry;
+    const isPro = datasetName === SWE_BENCH_PRO_DATASET;
+    const dockerhubTag = row.dockerhub_tag || '';
     return {
         row_idx: rowEntry.row_idx ?? null,
         dataset: datasetName,
@@ -176,11 +193,43 @@ function normalizeRow(rowEntry = {}, datasetName = SWE_BENCH_LITE_DATASET) {
         hints_text: row.hints_text || '',
         test_patch: row.test_patch || '',
         patch: row.patch || '',
-        fail_to_pass: safeJsonParse(row.FAIL_TO_PASS),
-        pass_to_pass: safeJsonParse(row.PASS_TO_PASS),
+        fail_to_pass: isPro
+            ? preserveSerializedList(row.FAIL_TO_PASS ?? row.fail_to_pass)
+            : safeJsonParse(row.FAIL_TO_PASS ?? row.fail_to_pass),
+        pass_to_pass: isPro
+            ? preserveSerializedList(row.PASS_TO_PASS ?? row.pass_to_pass)
+            : safeJsonParse(row.PASS_TO_PASS ?? row.pass_to_pass),
         version: row.version || '',
         created_at: row.created_at || '',
-        environment_setup_commit: row.environment_setup_commit || ''
+        environment_setup_commit: row.environment_setup_commit || '',
+        ...(isPro ? {
+            requirements: row.requirements || '',
+            interface: row.interface || '',
+            repo_language: row.repo_language || '',
+            issue_specificity: row.issue_specificity || '',
+            issue_categories: safeJsonParse(row.issue_categories),
+            before_repo_set_cmd: row.before_repo_set_cmd || '',
+            selected_test_files_to_run: preserveSerializedList(row.selected_test_files_to_run),
+            dockerhub_tag: dockerhubTag,
+            docker_image: dockerhubTag ? `jefzda/sweap-images:${dockerhubTag}` : ''
+        } : {})
+    };
+}
+
+function preserveSerializedList(value) {
+    if (Array.isArray(value)) return JSON.stringify(value);
+    if (typeof value !== 'string') return '[]';
+    return value.trim() || '[]';
+}
+
+export async function fetchHuggingFaceDatasetRevision(datasetName) {
+    const normalized = String(datasetName || '').trim();
+    if (!normalized) throw new Error('Hugging Face dataset name is required.');
+    const payload = await fetchJson(`https://huggingface.co/api/datasets/${normalized}`);
+    return {
+        dataset: normalized,
+        revision: String(payload.sha || ''),
+        lastModified: payload.lastModified || null
     };
 }
 
@@ -205,24 +254,34 @@ async function fetchRowsPage({ datasetName, split, offset, length }) {
     return {
         payload,
         rows: (payload.rows || []).map((entry) =>
-            normalizeRow({ ...entry, split }, datasetName)
+            normalizeSweBenchRow({ ...entry, split }, datasetName)
         )
     };
 }
 
 async function fetchRows(args) {
     if (!args.repo) {
-        const { payload, rows } = await fetchRowsPage({
-            datasetName: args.datasetName,
-            split: args.split,
-            offset: args.offset,
-            length: args.limit
-        });
+        const rows = [];
+        const scanOffsets = [];
+        let totalRows = null;
+        for (let offset = args.offset; rows.length < args.limit; offset += args.scanStep) {
+            const length = Math.min(args.scanStep, args.limit - rows.length);
+            const page = await fetchRowsPage({
+                datasetName: args.datasetName,
+                split: args.split,
+                offset,
+                length
+            });
+            totalRows = page.payload.num_rows_total ?? totalRows;
+            scanOffsets.push(offset);
+            rows.push(...page.rows);
+            if (!page.rows.length || (totalRows !== null && offset + page.rows.length >= totalRows)) break;
+        }
         return {
             rows,
-            totalRows: payload.num_rows_total,
+            totalRows,
             scannedRows: rows.length,
-            scanOffsets: [args.offset]
+            scanOffsets
         };
     }
 
@@ -296,6 +355,13 @@ export async function prepareSweBenchLiteSample(options = {}) {
     return await prepareSweBenchSample({
         ...options,
         datasetName: SWE_BENCH_LITE_DATASET
+    });
+}
+
+export async function prepareSweBenchProSample(options = {}) {
+    return await prepareSweBenchSample({
+        ...options,
+        datasetName: SWE_BENCH_PRO_DATASET
     });
 }
 

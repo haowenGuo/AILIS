@@ -195,6 +195,8 @@ test('ToolContext keeps approval and sandbox policy in one reusable object', () 
         nativeDirectTools: true,
         directToolLimit: 35,
         requireTaskExecution: true,
+        deliveryProtocol: { enabled: true, requireVerification: true },
+        verificationEnvironment: { kind: 'container', platform: 'linux' },
         desktopRealEval: true,
         desktopRealEvalTaskId: 'toolsandbox-scenario-1',
         desktopRealEvalTaskText: 'Run the official scenario.',
@@ -229,6 +231,8 @@ test('ToolContext keeps approval and sandbox policy in one reusable object', () 
     assert.equal(context.nativeDirectTools, true);
     assert.equal(context.directToolLimit, 35);
     assert.equal(context.requireTaskExecution, true);
+    assert.deepEqual(context.deliveryProtocol, { enabled: true, requireVerification: true });
+    assert.deepEqual(context.verificationEnvironment, { kind: 'container', platform: 'linux' });
     assert.equal(Object.hasOwn(context, 'requireExecutionEvidence'), false);
     assert.equal(context.desktopRealEval, true);
     assert.equal(context.desktopRealEvalTaskId, 'toolsandbox-scenario-1');

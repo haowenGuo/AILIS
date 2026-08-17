@@ -12,11 +12,13 @@ import {
 import {
     SWE_BENCH_DATASET,
     SWE_BENCH_LITE_DATASET,
+    SWE_BENCH_PRO_DATASET,
+    normalizeSweBenchRow,
     resolveSweBenchDataset,
     sweBenchDatasetFilePrefix
 } from '../scripts/prepare-swebench-lite-sample.mjs';
 
-test('SWE-bench sampler separates full and Lite dataset identities', () => {
+test('SWE-bench sampler separates full, Lite, and Pro dataset identities', () => {
     assert.equal(resolveSweBenchDataset(SWE_BENCH_DATASET), 'princeton-nlp/SWE-bench');
     assert.equal(
         resolveSweBenchDataset(SWE_BENCH_LITE_DATASET),
@@ -24,11 +26,50 @@ test('SWE-bench sampler separates full and Lite dataset identities', () => {
     );
     assert.equal(sweBenchDatasetFilePrefix(SWE_BENCH_DATASET), 'swebench');
     assert.equal(sweBenchDatasetFilePrefix(SWE_BENCH_LITE_DATASET), 'swebench-lite');
+    assert.equal(resolveSweBenchDataset(SWE_BENCH_PRO_DATASET), 'ScaleAI/SWE-bench_Pro');
+    assert.equal(sweBenchDatasetFilePrefix(SWE_BENCH_PRO_DATASET), 'swebench-pro');
     assert.throws(
         () => resolveSweBenchDataset('third-party/not-swebench'),
         /Unsupported SWE-bench dataset/
     );
     assert.equal(typeof runSweBenchExecution, 'function');
+});
+
+test('legacy SWE-bench execution runner refuses to score SWE-bench Pro', async () => {
+    await assert.rejects(
+        runSweBenchExecution({ datasetName: SWE_BENCH_PRO_DATASET }),
+        /official ScaleAI harness/
+    );
+});
+
+test('SWE-bench Pro rows preserve official Python-list test metadata losslessly', () => {
+    const row = normalizeSweBenchRow({
+        row_idx: 7,
+        row: {
+            repo: 'NodeBB/NodeBB',
+            instance_id: 'instance_NodeBB__NodeBB-example-v1',
+            base_commit: 'abc123',
+            problem_statement: 'Repair the issue.',
+            patch: 'diff --git a/a b/a',
+            test_patch: 'diff --git a/test b/test',
+            fail_to_pass: '["test/a.js", \'test/b.js\']',
+            pass_to_pass: '["test/b.js"]',
+            requirements: 'Use the existing API.',
+            interface: 'db.mget(keys)',
+            repo_language: 'js',
+            issue_specificity: 'specific',
+            issue_categories: '["data_bug"]',
+            before_repo_set_cmd: 'git reset --hard abc123',
+            selected_test_files_to_run: '["test/a.js"]',
+            dockerhub_tag: 'nodebb.example'
+        }
+    }, SWE_BENCH_PRO_DATASET);
+
+    assert.equal(row.fail_to_pass, '["test/a.js", \'test/b.js\']');
+    assert.equal(row.pass_to_pass, '["test/b.js"]');
+    assert.deepEqual(row.issue_categories, ['data_bug']);
+    assert.equal(row.selected_test_files_to_run, '["test/a.js"]');
+    assert.equal(row.docker_image, 'jefzda/sweap-images:nodebb.example');
 });
 
 test('SWE-bench runner reverses only evidence-bearing UTF-8 mojibake', () => {

@@ -450,13 +450,16 @@ function normalizeMessages(messages) {
                 ? message.role
                 : 'user';
             const content = normalizeMessageContent(message?.content);
+            const reasoningContent = findReasoningContentField(message);
             return {
                 role,
                 content,
                 toolCallId: normalizeString(message?.tool_call_id || message?.toolCallId),
                 name: normalizeString(message?.name),
                 providerMetadata: message?.providerMetadata || message?.provider_metadata || null,
-                reasoning_content: normalizeString(message?.reasoning_content || message?.reasoningContent),
+                ...(reasoningContent.present
+                    ? { reasoning_content: reasoningContent.value }
+                    : {}),
                 toolCalls: Array.isArray(message?.tool_calls)
                     ? message.tool_calls
                     : Array.isArray(message?.toolCalls)
@@ -821,24 +824,42 @@ function extractContentDeltaTextFromOpenAiMessage(message = {}) {
     return '';
 }
 
-function extractOpenAiCompatibleProviderMessage(message = {}) {
-    const reasoningContent = normalizeString(message?.reasoning_content || message?.reasoningContent);
-    if (!reasoningContent) {
+function findReasoningContentField(message = {}) {
+    const candidates = [
+        [message, 'reasoning_content'],
+        [message, 'reasoningContent'],
+        [message?.provider_metadata, 'reasoning_content'],
+        [message?.provider_metadata, 'reasoningContent'],
+        [message?.providerMetadata, 'reasoning_content'],
+        [message?.providerMetadata, 'reasoningContent']
+    ];
+    for (const [container, key] of candidates) {
+        if (container && Object.prototype.hasOwnProperty.call(container, key)) {
+            const value = container[key];
+            return {
+                present: true,
+                value: value === null || value === undefined ? '' : String(value)
+            };
+        }
+    }
+    return { present: false, value: '' };
+}
+
+function extractOpenAiCompatibleProviderMessage(message = {}, { preserveEmpty = false } = {}) {
+    const reasoningContent = findReasoningContentField(message);
+    if (!reasoningContent.present && !preserveEmpty) {
+        return null;
+    }
+    if (!reasoningContent.value && !preserveEmpty) {
         return null;
     }
     return {
-        reasoning_content: reasoningContent
+        reasoning_content: reasoningContent.value
     };
 }
 
 function getChatMessageReasoningContent(message = {}) {
-    return normalizeString(
-        message?.reasoning_content ||
-        message?.reasoningContent ||
-        message?.provider_metadata?.reasoning_content ||
-        message?.providerMetadata?.reasoning_content ||
-        message?.providerMetadata?.reasoningContent
-    );
+    return findReasoningContentField(message);
 }
 
 function shouldRoundTripOpenAiCompatibleReasoningContent(settings = {}) {
@@ -850,6 +871,14 @@ function shouldRoundTripOpenAiCompatibleReasoningContent(settings = {}) {
     return normalizedProvider === OPENAI_COMPATIBLE_PROVIDER && /(deepseek|dashscope|qwen)/i.test(baseUrl);
 }
 
+function shouldPreserveEmptyToolCallReasoningContent(settings = {}, payload = {}, toolCalls = []) {
+    if (!toolCalls.length || normalizeProvider(settings.provider) !== DEEPSEEK_PROVIDER) {
+        return false;
+    }
+    const thinkingType = normalizeString(payload?.thinking?.type).toLowerCase();
+    return ['disabled', 'disable', 'off', 'false', 'none'].includes(thinkingType);
+}
+
 function mapChatMessageForOpenAiCompatible(message = {}, settings = {}) {
     const mapped = {
         role: message.role === 'developer' ? 'system' : message.role,
@@ -859,8 +888,8 @@ function mapChatMessageForOpenAiCompatible(message = {}, settings = {}) {
         ...(message.toolCalls?.length ? { tool_calls: message.toolCalls } : {})
     };
     const reasoningContent = getChatMessageReasoningContent(message);
-    if (reasoningContent && shouldRoundTripOpenAiCompatibleReasoningContent(settings)) {
-        mapped.reasoning_content = reasoningContent;
+    if (reasoningContent.present && shouldRoundTripOpenAiCompatibleReasoningContent(settings)) {
+        mapped.reasoning_content = reasoningContent.value;
     }
     return mapped;
 }
@@ -1207,6 +1236,7 @@ async function callOpenAiCompatible(settings, payload, messages) {
         body.stream_options = { include_usage: true };
         let content = '';
         let reasoningContent = '';
+        let reasoningContentSeen = false;
         let usage = null;
         let finishReason = '';
         const toolCallParts = new Map();
@@ -1237,11 +1267,10 @@ async function callOpenAiCompatible(settings, payload, messages) {
                         transport: 'chat-completions'
                     });
                 }
-                const reasoningDelta = normalizeString(
-                    delta.reasoning_content || delta.reasoningContent
-                );
-                if (reasoningDelta) {
-                    reasoningContent += reasoningDelta;
+                const reasoningDelta = findReasoningContentField(delta);
+                if (reasoningDelta.present) {
+                    reasoningContentSeen = true;
+                    reasoningContent += reasoningDelta.value;
                 }
                 for (const callPart of Array.isArray(delta.tool_calls) ? delta.tool_calls : []) {
                     const index = Number.isFinite(Number(callPart.index)) ? Number(callPart.index) : 0;
@@ -1282,9 +1311,15 @@ async function callOpenAiCompatible(settings, payload, messages) {
                 provider: settings.provider
             }))
             .filter(Boolean);
-        const providerMessage = extractOpenAiCompatibleProviderMessage({
-            reasoning_content: reasoningContent
-        });
+        const preserveEmptyReasoningContent = shouldPreserveEmptyToolCallReasoningContent(
+            settings,
+            payload,
+            toolCalls
+        );
+        const providerMessage = extractOpenAiCompatibleProviderMessage(
+            reasoningContentSeen ? { reasoning_content: reasoningContent } : {},
+            { preserveEmpty: preserveEmptyReasoningContent }
+        );
         if (!content && !toolCalls.length) {
             return {
                 ok: false,
@@ -1325,7 +1360,9 @@ async function callOpenAiCompatible(settings, payload, messages) {
     const content = extractContentTextFromOpenAiMessage(message) ||
         normalizeString(result.data?.choices?.[0]?.text || '');
     const toolCalls = extractChatToolCalls(message, settings.provider);
-    const providerMessage = extractOpenAiCompatibleProviderMessage(message);
+    const providerMessage = extractOpenAiCompatibleProviderMessage(message, {
+        preserveEmpty: shouldPreserveEmptyToolCallReasoningContent(settings, payload, toolCalls)
+    });
 
     if (!content && !toolCalls.length) {
         return {

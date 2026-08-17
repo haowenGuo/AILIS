@@ -13,6 +13,9 @@ This directory contains the design record, operating guides, evaluation plans, a
 - [Tool Ecosystem Driver Guide](tool-ecosystem-driver-guide.md) - tool, MCP, skill, and adapter entry points.
 - [Demo and Benchmark Scorecard](ailis-demo-benchmark-scorecard.md) - current evidence and benchmark status.
 - [TaskAgent A7 Context Baseline](ailis-a7-taskagent-context-baseline.md) - current mainline context profile, frozen Terminal-Bench evidence, and the next promotion gate.
+- [Version Registry](ailis-version-registry.md) - product releases, experiment lineage, score ownership, and the accepted `A7-main` parent.
+- [Harness Architecture Audit and Roadmap](ailis-harness-architecture-audit-roadmap.md) - current execution chain, measured Codex gaps, and staged development gates.
+- [Codebase Refactor Audit](ailis-codebase-refactor-audit.md) - measured code growth, ownership debt, realistic line budgets, and a rollback-safe modularization sequence.
 
 ## Agent Runtime And Harness
 
@@ -30,6 +33,9 @@ This directory contains the design record, operating guides, evaluation plans, a
 - [Codex Runtime Optimization Reference](codex-runtime-optimization-reference.md)
 - [AILIS vs Codex Execution Benchmark](ailis-vs-codex-execution-benchmark.md)
 - [TaskAgent A7 Context Baseline](ailis-a7-taskagent-context-baseline.md)
+- [Version Registry](ailis-version-registry.md)
+- [Harness Architecture Audit and Roadmap](ailis-harness-architecture-audit-roadmap.md)
+- [Codebase Refactor Audit](ailis-codebase-refactor-audit.md)
 
 ## Tools, Artifacts, And Integrations
 

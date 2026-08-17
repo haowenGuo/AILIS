@@ -2,7 +2,7 @@
   <h1>AILIS Assistant</h1>
   <p><strong>开源桌面具身 AI 助手：集成 VRM 角色、实时语音、视觉上下文、记忆系统，以及接近 Codex 工作方式的 Agent Harness。</strong></p>
   <p>
-    <img alt="Version" src="https://img.shields.io/badge/version-1.1.0-2563eb?style=for-the-badge">
+    <img alt="Version" src="https://img.shields.io/badge/version-1.4.0-2563eb?style=for-the-badge">
     <img alt="Runtime" src="https://img.shields.io/badge/runtime-Electron-0f172a?style=for-the-badge">
     <img alt="License" src="https://img.shields.io/badge/license-MIT-059669?style=for-the-badge">
   </p>
@@ -287,7 +287,7 @@ pnpm ailis:validate-gateway
 
 ## 项目状态
 
-当前发布线：`v1.1.0`。
+当前发布线：`v1.4.0`。
 
 AILIS 正在积极开发。它已经具备较完整的桌面运行时、Agent Harness、工具层和评测面，但仍应被视为 alpha 阶段产品/运行时，而不是生产级 Agent OS。近期重点是可靠性：更清晰的工具契约、更安全的审批、更稳定的记忆行为、更顺滑的本地模型配置，以及更高质量的端到端评测。
 

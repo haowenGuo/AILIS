@@ -11,7 +11,7 @@ const human = {
   toolRuntime: rel('electron', 'ailis-tool-runtime.cjs'),
   toolSpecs: rel('electron', 'ailis-tool-specs.cjs'),
   gateway: rel('electron', 'ailis-gateway.cjs'),
-  runner: rel('electron', 'ailis-agent-runner.cjs'),
+  runner: rel('electron', 'agent-loop', 'runner.cjs'),
   runtimeTest: rel('tests', 'ailis-runtime.test.mjs'),
 };
 

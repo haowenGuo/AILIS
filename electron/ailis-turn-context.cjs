@@ -81,6 +81,8 @@ function buildToolContext(requestContext = {}, fallbackWorkspace = '', sessionId
         'nativeDirectTools',
         'directToolLimit',
         'requireTaskExecution',
+        'deliveryProtocol',
+        'verificationEnvironment',
         'desktopRealEval',
         'desktopRealEvalTaskId',
         'desktopRealEvalTaskText',

@@ -1210,6 +1210,38 @@ const TOOL_CONTRACTS = Object.freeze({
                 : [];
         }
     }),
+    task_verify: Object.freeze({
+        id: 'task_verify',
+        version: CONTRACT_VERSION,
+        mutates: false,
+        risk: 'high',
+        approval: 'policy',
+        experience: TOOL_EXPERIENCE.exec,
+        returns: STANDARD_TOOL_RETURN_SCHEMA,
+        errors: defaultErrors(['verification_failed', 'exec_blocked', 'shell_access_disabled']),
+        schema: makeObjectSchema({
+            required: ['command', 'scope'],
+            properties: {
+                command: stringSchema({
+                    minLength: 1,
+                    description: 'A project-appropriate visible validation command selected by the model, such as a focused test, regression suite, build, typecheck, or lint command.'
+                }),
+                scope: stringSchema({
+                    enum: ['targeted_test', 'regression_test', 'build', 'typecheck', 'lint', 'smoke', 'custom']
+                }),
+                workdir: stringSchema({
+                    description: 'Optional working directory inside the active workspace.'
+                }),
+                timeoutMs: numberSchema({
+                    minimum: 1000,
+                    maximum: 24 * 60 * 60 * 1000
+                }),
+                maxOutputBytes: numberSchema({ minimum: 1 }),
+                env: objectSchema({ description: 'Additional environment variables for the verification command.' })
+            },
+            additionalProperties: false
+        })
+    }),
     task_results: Object.freeze({
         id: 'task_results',
         version: CONTRACT_VERSION,
