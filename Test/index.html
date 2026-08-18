@@ -31,7 +31,7 @@
             </a>
 
             <div class="topbar-actions">
-                <span class="version-badge">v1.2.0</span>
+                <span class="version-badge">v1.4.0</span>
                 <a class="icon-link" href="../" aria-label="返回主页" title="返回主页">
                     <svg viewBox="0 0 24 24" aria-hidden="true">
                         <path d="m3 10 9-7 9 7"></path>
@@ -115,6 +115,19 @@
                             <option value="cloud">AILIS 云端语音</option>
                         </select>
                     </label>
+                    <button
+                        id="tts-preview-button"
+                        class="stage-icon-button voice-preview-button"
+                        type="button"
+                        aria-label="试听当前语音"
+                        title="试听当前语音"
+                    >
+                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="M11 5 6 9H3v6h3l5 4Z"></path>
+                            <path d="M15.5 8.5a5 5 0 0 1 0 7"></path>
+                            <path d="M18.5 5.5a9 9 0 0 1 0 13"></path>
+                        </svg>
+                    </button>
                     <div class="render-picker" role="group" aria-label="角色渲染风格">
                         <button
                             type="button"
@@ -198,6 +211,24 @@
                             maxlength="1200"
                             placeholder="想和 AILIS 说什么？"
                         ></textarea>
+                        <button
+                            id="voice-input-button"
+                            class="voice-input-button"
+                            type="button"
+                            aria-label="语音输入"
+                            aria-pressed="false"
+                            title="语音输入"
+                            data-state="idle"
+                        >
+                            <svg class="voice-icon voice-icon-mic" viewBox="0 0 24 24" aria-hidden="true">
+                                <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"></path>
+                                <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
+                                <path d="M12 19v3"></path>
+                            </svg>
+                            <svg class="voice-icon voice-icon-stop" viewBox="0 0 24 24" aria-hidden="true">
+                                <rect x="6" y="6" width="12" height="12" rx="1"></rect>
+                            </svg>
+                        </button>
                         <button
                             id="send-button"
                             class="send-button"

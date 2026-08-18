@@ -1,4 +1,8 @@
 import { setMarkdownContent, setPlainTextContent } from '../src/markdown-renderer.js';
+import {
+    createBrowserSpeechRecognition,
+    mergeSpeechTranscript
+} from '../src/browser-speech-recognition.js';
 
 const CLOUD_BACKEND_BASE_URL = 'https://101.133.239.56';
 const DEFAULT_BACKEND_BASE_URL = window.location.hostname.toLowerCase() === 'haowenguo.github.io'
@@ -51,9 +55,11 @@ const elements = {
     chatInput: document.getElementById('chat-input'),
     fileInput: document.getElementById('file-input'),
     attachButton: document.getElementById('attach-button'),
+    voiceInputButton: document.getElementById('voice-input-button'),
     attachmentPreview: document.getElementById('attachment-preview'),
     sendButton: document.getElementById('send-button'),
     voiceSelect: document.getElementById('tts-voice-select'),
+    voicePreviewButton: document.getElementById('tts-preview-button'),
     quickButtons: Array.from(document.querySelectorAll('[data-prompt]')),
     sceneButtons: Array.from(document.querySelectorAll('[data-scene-option]')),
     renderButtons: Array.from(document.querySelectorAll('[data-render-profile]'))
@@ -71,6 +77,11 @@ const state = {
     followLatestMessage: true,
     uploadingAttachments: false,
     pendingAttachments: [],
+    voiceInputState: 'idle',
+    voiceInputStatus: '',
+    voiceDraftBase: '',
+    voiceFinalTranscript: '',
+    ttsPreviewPlaying: false,
     fileDragDepth: 0,
     scrollFrame: 0,
     messagesById: new Map(),
@@ -80,6 +91,47 @@ const state = {
 };
 
 const MESSAGE_BOTTOM_THRESHOLD = 72;
+
+const browserSpeechRecognition = createBrowserSpeechRecognition({
+    globalScope: window,
+    language: 'zh-CN',
+    onStateChange: ({ state: recognitionState }) => {
+        state.voiceInputState = recognitionState;
+        if (recognitionState === 'starting') {
+            state.voiceInputStatus = '正在请求麦克风权限';
+        } else if (recognitionState === 'listening') {
+            state.voiceInputStatus = '正在听你说话，再点一次结束';
+        } else if (recognitionState === 'processing') {
+            state.voiceInputStatus = '正在整理识别结果';
+        } else if (!state.voiceFinalTranscript) {
+            state.voiceInputStatus = '';
+        }
+        updateComposer();
+    },
+    onInterimResult: ({ transcript }) => {
+        elements.chatInput.value = mergeSpeechTranscript(
+            state.voiceDraftBase,
+            mergeSpeechTranscript(state.voiceFinalTranscript, transcript)
+        );
+        resizeInput();
+        updateComposer();
+    },
+    onFinalResult: ({ transcript }) => {
+        state.voiceFinalTranscript = mergeSpeechTranscript(state.voiceFinalTranscript, transcript);
+        elements.chatInput.value = mergeSpeechTranscript(state.voiceDraftBase, state.voiceFinalTranscript);
+        state.voiceInputStatus = '已识别，可以修改后发送';
+        resizeInput();
+        updateComposer();
+        elements.chatInput.focus();
+    },
+    onError: ({ message }) => {
+        state.voiceInputStatus = '';
+        if (message) {
+            showSystemNotice({ level: 'warning', message });
+        }
+        updateComposer();
+    }
+});
 
 function normalizeBackendBaseUrl(value) {
     try {
@@ -283,19 +335,38 @@ function setBackendStatus(text, status = 'checking') {
 }
 
 function updateComposer() {
-    const ready = state.chatReady && !state.busy && !state.uploadingAttachments;
+    const voiceInputActive = ['starting', 'listening', 'processing'].includes(state.voiceInputState);
+    const ready = state.chatReady && !state.busy && !state.uploadingAttachments && !voiceInputActive;
     const hasDraft = elements.chatInput.value.trim().length > 0 || state.pendingAttachments.length > 0;
     const canSend = ready && hasDraft;
     elements.sendButton.disabled = !canSend;
     elements.attachButton.disabled = !ready;
+    elements.voiceInputButton.disabled = !browserSpeechRecognition.supported ||
+        state.busy ||
+        state.uploadingAttachments ||
+        (!state.chatReady && !voiceInputActive);
+    elements.voiceInputButton.dataset.state = state.voiceInputState;
+    elements.voiceInputButton.setAttribute('aria-pressed', String(voiceInputActive));
+    elements.voiceInputButton.setAttribute(
+        'aria-label',
+        voiceInputActive ? '结束语音输入' : '语音输入'
+    );
+    elements.voiceInputButton.title = browserSpeechRecognition.supported
+        ? (voiceInputActive ? '结束语音输入' : '语音输入')
+        : '当前浏览器不支持语音输入，请使用最新版 Chrome 或 Edge';
     elements.quickButtons.forEach((button) => {
         button.disabled = !ready;
     });
     elements.voiceSelect.disabled = state.busy;
+    elements.voicePreviewButton.disabled = state.busy || !state.modelReady || state.ttsPreviewPlaying;
     elements.messageList.setAttribute('aria-busy', String(state.busy));
     elements.dialogueContent.setAttribute('aria-busy', String(state.busy));
 
-    if (state.uploadingAttachments) {
+    if (state.ttsPreviewPlaying) {
+        elements.composerStatus.textContent = '正在试听当前语音';
+    } else if (state.voiceInputStatus) {
+        elements.composerStatus.textContent = state.voiceInputStatus;
+    } else if (state.uploadingAttachments) {
         elements.composerStatus.textContent = '正在上传附件';
     } else if (state.busy) {
         elements.composerStatus.textContent = 'AILIS 正在回应';
@@ -308,6 +379,60 @@ function updateComposer() {
     } else {
         elements.composerStatus.textContent = '正在连接在线服务';
     }
+}
+
+async function previewCurrentVoice() {
+    const petWindow = getPetWindow();
+    if (state.ttsPreviewPlaying || !petWindow?.speechProvider || !petWindow?.audioPlayer) {
+        return;
+    }
+
+    const previewText = '你好，我是 AILIS。很高兴听见你的声音。';
+    state.ttsPreviewPlaying = true;
+    updateComposer();
+    try {
+        applyTtsVoiceToPet();
+        await petWindow.audioPlayer.unlock?.();
+        const result = await petWindow.speechProvider.playSpeech({
+            payload: { display_text: previewText, tts_text: previewText },
+            displayText: previewText,
+            vrmSystem: petWindow.vrmSystem,
+            audioPlayer: petWindow.audioPlayer,
+            updateMessageContent: () => {},
+            scrollToBottom: () => {}
+        });
+        if (!result?.played) {
+            throw new Error(petWindow.speechProvider.getLastTTSFailureMessage?.() || '当前语音没有成功播放');
+        }
+    } catch (error) {
+        showSystemNotice({
+            level: 'warning',
+            message: `语音试听失败：${error?.message || '请稍后再试'}`
+        });
+    } finally {
+        state.ttsPreviewPlaying = false;
+        updateComposer();
+    }
+}
+
+function toggleBrowserVoiceInput() {
+    if (!browserSpeechRecognition.supported) {
+        showSystemNotice({
+            level: 'warning',
+            message: '当前浏览器不支持语音输入，请使用最新版 Chrome 或 Edge。'
+        });
+        return;
+    }
+    if (['starting', 'listening', 'processing'].includes(state.voiceInputState)) {
+        browserSpeechRecognition.stop();
+        return;
+    }
+
+    state.voiceDraftBase = elements.chatInput.value;
+    state.voiceFinalTranscript = '';
+    state.voiceInputStatus = '正在请求麦克风权限';
+    browserSpeechRecognition.start();
+    updateComposer();
 }
 
 function formatAttachmentBytes(bytes) {
@@ -793,6 +918,9 @@ async function sendPrompt(content) {
     }
 
     elements.chatInput.value = '';
+    state.voiceInputStatus = '';
+    state.voiceDraftBase = '';
+    state.voiceFinalTranscript = '';
     state.followLatestMessage = true;
     resizeInput();
     updateComposer();
@@ -839,6 +967,11 @@ elements.messageList.addEventListener('scroll', () => {
     state.followLatestMessage = isMessageListNearBottom();
 }, { passive: true });
 elements.chatInput.addEventListener('input', () => {
+    if (!elements.chatInput.value.trim() && state.voiceInputState === 'idle') {
+        state.voiceInputStatus = '';
+        state.voiceDraftBase = '';
+        state.voiceFinalTranscript = '';
+    }
     resizeInput();
     updateComposer();
 });
@@ -862,6 +995,7 @@ elements.attachButton.addEventListener('click', () => {
         elements.fileInput.click();
     }
 });
+elements.voiceInputButton.addEventListener('click', toggleBrowserVoiceInput);
 elements.fileInput.addEventListener('change', () => {
     const files = elements.fileInput.files;
     elements.fileInput.value = '';
@@ -930,6 +1064,12 @@ document.addEventListener('keydown', (event) => {
         setHistoryOpen(false);
         elements.historyToggle.focus();
     }
+});
+elements.voicePreviewButton.addEventListener('click', () => {
+    void previewCurrentVoice();
+});
+window.addEventListener('pagehide', () => {
+    browserSpeechRecognition.cancel();
 });
 
 restoreScene();

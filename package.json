@@ -121,6 +121,7 @@
     "test:ailis-web-vrm": "node --test tests/ailis-web-vrm.test.mjs",
     "test:openclaw-tools": "node --test tests/openclaw-tool-surface.test.mjs",
     "test:desktop-llm": "node --test tests/desktop-llm-provider.test.mjs",
+    "test:voice-ux": "node --test tests/browser-speech-recognition.test.mjs tests/realtime-voice-tts.test.mjs tests/tts-audio-player-interrupt.test.mjs tests/tts-speech-text.test.mjs tests/chat-tts-streaming-lip-sync.test.mjs tests/voice-runtime-bootstrap.test.mjs",
     "test:ailis-persona-renderer": "node --test tests/ailis-persona-renderer.test.mjs",
     "test:ailis-character-runtime": "node --test tests/ailis-character-runtime.test.mjs",
     "motion:intake:scan": "node scripts/scan-motion-intake.mjs",

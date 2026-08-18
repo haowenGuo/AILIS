@@ -1,5 +1,8 @@
 import { CONFIG } from './config.js';
-import { createDesktopSpeechRecognitionService } from './desktop-speech-recognition.js';
+import {
+    createDesktopSpeechRecognitionService,
+    getDesktopSpeechErrorMessage
+} from './desktop-speech-recognition.js';
 import {
     getDefaultMessageForAttachments,
     normalizeChatAttachments,
@@ -73,6 +76,13 @@ window.addEventListener('DOMContentLoaded', () => {
     let continuousPausedUntil = 0;
     let activeContinuousRecording = false;
     const speechRecognition = createDesktopSpeechRecognitionService();
+    let asrRuntimeReadiness = {
+        status: speechRecognition?.supportsRecognition ? 'unknown' : 'unsupported',
+        ready: speechRecognition?.supportsRecognition ? null : false,
+        detail: ''
+    };
+    let asrRuntimeCheckedAt = 0;
+    let asrRuntimeCheckPromise = null;
     applyI18n(document, { skipSelectors: ['#message-list', '#file-preview'] });
 
     function scrollToBottom() {
@@ -94,6 +104,9 @@ window.addEventListener('DOMContentLoaded', () => {
         }
         if (speechStatusText) {
             return speechStatusText;
+        }
+        if (asrRuntimeReadiness.ready === false && asrRuntimeReadiness.status !== 'unsupported') {
+            return t('本地语音识别尚未安装，点击麦克风前往设置');
         }
         if (interruptPending) {
             return t('正在中断当前对话...');
@@ -136,11 +149,16 @@ window.addEventListener('DOMContentLoaded', () => {
         if (voiceBtnEl) {
             voiceBtnEl.hidden = !speechRecognition.supportsRecognition;
             voiceBtnEl.disabled = !speechRecognition.supportsRecognition ||
+                asrRuntimeReadiness.status === 'checking' ||
                 isTranscribing ||
                 isCapturingVision ||
                 (!isRecording && isBusy);
+            voiceBtnEl.dataset.runtime = asrRuntimeReadiness.status;
             voiceBtnEl.dataset.recording = isRecording ? 'true' : 'false';
-            if (getRecognitionMode() === 'continuous') {
+            if (asrRuntimeReadiness.ready === false) {
+                voiceBtnEl.dataset.state = 'mic';
+                setIconButtonLabel(voiceBtnEl, t('安装语音识别组件'));
+            } else if (getRecognitionMode() === 'continuous') {
                 voiceBtnEl.dataset.state = 'pause';
                 setIconButtonLabel(voiceBtnEl, t('暂停自动听'));
             } else if (isRecording) {
@@ -149,7 +167,10 @@ window.addEventListener('DOMContentLoaded', () => {
                 setIconButtonLabel(voiceBtnEl, isVadMode ? t('取消语音输入') : t('停止录音'));
             } else {
                 voiceBtnEl.dataset.state = 'mic';
-                setIconButtonLabel(voiceBtnEl, isVadRecognitionMode(getRecognitionMode()) ? t('自动听') : t('语音输入'));
+                const label = asrRuntimeReadiness.ready === false
+                    ? t('安装语音识别组件')
+                    : isVadRecognitionMode(getRecognitionMode()) ? t('自动听') : t('语音输入');
+                setIconButtonLabel(voiceBtnEl, label);
             }
         }
 
@@ -661,6 +682,7 @@ window.addEventListener('DOMContentLoaded', () => {
             attachments,
             source: 'chat-panel'
         });
+        speechStatusText = '';
         if (getRecognitionMode() === 'continuous') {
             continuousPausedUntil = Date.now() + 2500;
             clearContinuousRestart();
@@ -698,8 +720,39 @@ window.addEventListener('DOMContentLoaded', () => {
         return normalizeAsrRecognitionMode(currentRecognitionMode);
     }
 
+    async function refreshAsrRuntimeReadiness({ force = false } = {}) {
+        if (!speechRecognition.supportsRecognition) {
+            return asrRuntimeReadiness;
+        }
+        if (!force && asrRuntimeCheckPromise) {
+            return asrRuntimeCheckPromise;
+        }
+        if (!force && asrRuntimeCheckedAt && Date.now() - asrRuntimeCheckedAt < 30000) {
+            return asrRuntimeReadiness;
+        }
+
+        asrRuntimeReadiness = {
+            ...asrRuntimeReadiness,
+            status: 'checking'
+        };
+        updateComposerState();
+        asrRuntimeCheckPromise = speechRecognition.getRuntimeReadiness()
+            .then((readiness) => {
+                asrRuntimeReadiness = readiness;
+                asrRuntimeCheckedAt = Date.now();
+                return readiness;
+            })
+            .finally(() => {
+                asrRuntimeCheckPromise = null;
+                updateComposerState();
+            });
+        return asrRuntimeCheckPromise;
+    }
+
     function canStartContinuousAsr() {
         return speechRecognition.supportsRecognition &&
+            asrRuntimeReadiness.ready !== false &&
+            asrRuntimeReadiness.status !== 'checking' &&
             getRecognitionMode() === 'continuous' &&
             !isBusy &&
             !isRecording &&
@@ -791,6 +844,14 @@ window.addEventListener('DOMContentLoaded', () => {
             return;
         }
         if (continuous && getRecognitionMode() !== 'continuous') {
+            return;
+        }
+
+        const runtimeReadiness = await refreshAsrRuntimeReadiness();
+        if (runtimeReadiness.ready === false) {
+            if (!continuous) {
+                setTransientStatus(t('本地语音识别尚未安装，请在设置的“声音通道”中安装 ASR'), 6500);
+            }
             return;
         }
 
@@ -933,7 +994,7 @@ window.addEventListener('DOMContentLoaded', () => {
             }, asrPreset.maxRecordMs);
         } catch (error) {
             console.error('启动本地语音识别失败：', error);
-            setTransientStatus(t('语音识别失败：{reason}', { reason: error.message || t('无法打开麦克风') }));
+            setTransientStatus(t('语音识别失败：{reason}', { reason: getDesktopSpeechErrorMessage(error) }), 6500);
             activeContinuousRecording = false;
             activeAsrPreset = null;
             syncContinuousAsr(3000);
@@ -999,15 +1060,22 @@ window.addEventListener('DOMContentLoaded', () => {
                 await captureVision(visionTarget, { transientStatus: false });
             }
 
-            inputEl.value = transcript;
+            inputEl.value = [inputEl.value.trim(), transcript].filter(Boolean).join(' ');
             isTranscribing = false;
-            speechStatusText = '';
+            speechStatusText = wasContinuousRecording
+                ? ''
+                : t('已识别，可以修改后发送');
             updateComposerState();
-            sendCurrentMessage();
+            if (wasContinuousRecording) {
+                sendCurrentMessage();
+            } else {
+                inputEl.focus();
+                inputEl.setSelectionRange(inputEl.value.length, inputEl.value.length);
+            }
         } catch (error) {
             console.error('本地语音识别失败：', error);
             if (!wasContinuousRecording) {
-                setTransientStatus(t('语音识别失败：{reason}', { reason: error.message || t('本地模型未完成识别') }));
+                setTransientStatus(t('语音识别失败：{reason}', { reason: getDesktopSpeechErrorMessage(error) }), 6500);
             }
         } finally {
             isTranscribing = false;
@@ -1017,12 +1085,21 @@ window.addEventListener('DOMContentLoaded', () => {
     }
 
     async function toggleVoiceInput() {
-        if (getRecognitionMode() === 'continuous') {
-            pauseContinuousAsr();
-            return;
-        }
         if (isRecording) {
             await stopVoiceInput({ cancel: isVadRecognitionMode(getRecognitionMode()) });
+            return;
+        }
+
+        const runtimeReadiness = await refreshAsrRuntimeReadiness({
+            force: asrRuntimeReadiness.ready === false
+        });
+        if (runtimeReadiness.ready === false) {
+            setTransientStatus(t('请在设置的“声音通道”中安装本地 ASR 组件'), 6500);
+            void window.ailisDesktop?.showControlPanel?.();
+            return;
+        }
+        if (getRecognitionMode() === 'continuous') {
+            pauseContinuousAsr();
             return;
         }
 
@@ -1206,6 +1283,9 @@ window.addEventListener('DOMContentLoaded', () => {
     });
 
     window.addEventListener('focus', () => {
+        void refreshAsrRuntimeReadiness({ force: true }).then(() => {
+            syncContinuousAsr(0);
+        });
         window.ailisDesktop?.requestChatStateSync?.();
     });
 
@@ -1219,5 +1299,8 @@ window.addEventListener('DOMContentLoaded', () => {
     });
 
     updateComposerState();
+    void refreshAsrRuntimeReadiness().then(() => {
+        syncContinuousAsr(0);
+    });
     syncContinuousAsr(700);
 });

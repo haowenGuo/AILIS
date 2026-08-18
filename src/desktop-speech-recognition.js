@@ -11,6 +11,43 @@ function isDesktopRuntime() {
     return window.ailisDesktop?.platform === 'electron';
 }
 
+export function getDesktopSpeechErrorMessage(error) {
+    const name = String(error?.name || error?.code || '').trim();
+    const message = String(error?.message || error || '').trim();
+    if (['NotAllowedError', 'PermissionDeniedError', 'SecurityError'].includes(name)) {
+        return '没有麦克风权限，请在 Windows 隐私设置中允许 AILIS 使用麦克风。';
+    }
+    if (['NotFoundError', 'DevicesNotFoundError'].includes(name)) {
+        return '没有找到可用的麦克风，请检查设备连接。';
+    }
+    if (['NotReadableError', 'TrackStartError'].includes(name)) {
+        return '麦克风正被其他应用占用，请关闭占用程序后重试。';
+    }
+    if (/asr|whisper|transformers|python|模型|运行时|runtime/i.test(message)) {
+        return '本地语音识别组件尚未就绪，请在设置的“声音通道”中安装 ASR。';
+    }
+    return message || '语音输入没有成功，请稍后再试。';
+}
+
+export function getDesktopAsrRuntimeReadiness(runtimeState) {
+    const components = Array.isArray(runtimeState?.components) ? runtimeState.components : [];
+    const asr = components.find((component) => component?.id === 'asr-runtime');
+    if (!asr) {
+        return {
+            status: 'unknown',
+            ready: null,
+            detail: '无法读取本地 ASR 运行时状态。'
+        };
+    }
+    return {
+        status: asr.ready ? 'ready' : (asr.status || 'missing'),
+        ready: Boolean(asr.ready),
+        detail: String(asr.detail || (asr.ready
+            ? '本地语音识别已就绪。'
+            : '本地语音识别组件尚未安装。'))
+    };
+}
+
 function getRecordingMimeType() {
     if (typeof MediaRecorder === 'undefined') {
         return '';
@@ -144,6 +181,22 @@ export function createDesktopSpeechRecognitionService() {
 
     return {
         supportsRecognition,
+        async getRuntimeReadiness() {
+            if (typeof window.ailisDesktop?.runtimeComponents?.getStatus !== 'function') {
+                return getDesktopAsrRuntimeReadiness(null);
+            }
+            try {
+                const runtimeState = await window.ailisDesktop.runtimeComponents.getStatus();
+                return getDesktopAsrRuntimeReadiness(runtimeState);
+            } catch (error) {
+                return {
+                    status: 'unknown',
+                    ready: null,
+                    detail: getDesktopSpeechErrorMessage(error),
+                    error
+                };
+            }
+        },
         async createRecorder({ preferredDeviceId = '', timesliceMs = 200 } = {}) {
             if (!supportsRecognition) {
                 throw new Error('当前桌面环境不支持本地语音识别');

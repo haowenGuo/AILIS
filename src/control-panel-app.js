@@ -216,6 +216,7 @@ const elements = {
     statusText: document.getElementById('status-text'),
     ttsPitch: document.getElementById('tts-pitch'),
     ttsPitchValue: document.getElementById('tts-pitch-value'),
+    ttsPreviewBtn: document.getElementById('tts-preview-btn'),
     ttsRate: document.getElementById('tts-rate'),
     ttsRateValue: document.getElementById('tts-rate-value'),
     ttsVolume: document.getElementById('tts-volume'),
@@ -706,6 +707,53 @@ let vllmDownloadDirDescriptor = null;
 let vllmRuntimePollTimer = null;
 let ollamaRuntimePollTimer = null;
 let voiceRuntimePollTimer = null;
+let ttsPreviewAudio = null;
+
+function syncTtsPreviewButton() {
+    if (!elements.ttsPreviewBtn) {
+        return;
+    }
+    elements.ttsPreviewBtn.disabled = !elements.speechMode?.value || elements.speechMode.value === 'off';
+    elements.ttsPreviewBtn.title = elements.ttsPreviewBtn.disabled
+        ? '先选择一个语音输出模式'
+        : '试听当前语音输出模式';
+}
+
+async function previewDesktopTts() {
+    const mode = String(elements.speechMode?.value || 'off');
+    if (mode === 'off' || typeof window.ailisDesktop?.tts?.synthesize !== 'function') {
+        setStatus('请先选择 ElevenLabs 或 CosyVoice3，再试听。');
+        return;
+    }
+
+    elements.ttsPreviewBtn.disabled = true;
+    elements.ttsPreviewBtn.textContent = '合成中...';
+    setStatus('正在合成语音试听...');
+    try {
+        ttsPreviewAudio?.pause?.();
+        ttsPreviewAudio = null;
+        const result = await window.ailisDesktop.tts.synthesize({
+            provider: mode === 'cosyvoice3' ? 'cosyvoice3' : 'server',
+            text: '你好，我是 AILIS。很高兴听见你的声音。'
+        });
+        if (result?.ok === false) {
+            throw new Error(result.error || '当前语音运行时尚未就绪');
+        }
+        const audioBase64 = String(result?.audio_base64 || result?.audioBase64 || '');
+        if (!audioBase64) {
+            throw new Error('语音服务没有返回可播放音频');
+        }
+        const mimeType = String(result?.mime_type || result?.mimeType || 'audio/mpeg');
+        ttsPreviewAudio = new Audio(`data:${mimeType};base64,${audioBase64}`);
+        await ttsPreviewAudio.play();
+        setStatus(`正在试听：${speechModeLabels[mode] || mode}`);
+    } catch (error) {
+        setStatus(`语音试听失败：${error?.message || error}`);
+    } finally {
+        elements.ttsPreviewBtn.textContent = '试听';
+        syncTtsPreviewButton();
+    }
+}
 let runtimeComponentsPollTimer = null;
 let ollamaLocalModelDescriptor = null;
 let ollamaModelCatalogResults = [];
@@ -5344,6 +5392,7 @@ function fillForm(preferences) {
     elements.petScale.value = normalized.petScale;
     elements.petShowTaskbar.checked = !normalized.petSkipTaskbar;
     elements.speechMode.value = normalized.speechMode;
+    syncTtsPreviewButton();
     elements.chunkedTtsEnabled.checked = normalized.chunkedTtsEnabled;
     elements.recognitionMode.value = normalized.recognitionMode;
     if (elements.uiLanguage) {
@@ -7054,6 +7103,11 @@ function endDialoguePreviewDrag(event) {
 
 elements.emberHarnessMode?.addEventListener('change', () => {
     renderEmberHarnessStatus(null, elements.emberHarnessMode.value);
+});
+
+elements.speechMode?.addEventListener('change', syncTtsPreviewButton);
+elements.ttsPreviewBtn?.addEventListener('click', () => {
+    void previewDesktopTts();
 });
 
 elements.avatarBubblePreview?.addEventListener('pointerdown', beginDialogueBubbleDrag);
