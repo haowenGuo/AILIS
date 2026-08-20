@@ -352,9 +352,8 @@ test('web server TTS falls back to Chrome speech synthesis with native playback 
     }
 });
 
-test('native web speech mode uses the exact Chrome voice selected by voiceURI', async () => {
+test('native web speech mode automatically selects the highest-quality online Chinese voice', async () => {
     const previousWindow = globalThis.window;
-    let spokenUtterance = null;
 
     class FakeSpeechSynthesisUtterance {
         constructor(text) {
@@ -362,20 +361,18 @@ test('native web speech mode uses the exact Chrome voice selected by voiceURI', 
         }
     }
 
+    let spokenUtterance = null;
     const selectedVoice = {
-        voiceURI: 'chrome-yunxi',
-        name: 'Microsoft Yunxi Online',
-        lang: 'zh-CN',
-        localService: false
-    };
-    const autoVoice = {
         voiceURI: 'chrome-xiaoxiao',
         name: 'Microsoft Xiaoxiao Online (Natural)',
         lang: 'zh-CN',
         localService: false
     };
     const synth = {
-        getVoices: () => [autoVoice, selectedVoice],
+        getVoices: () => [
+            { voiceURI: 'chrome-yunxi', name: 'Microsoft Yunxi Online', lang: 'zh-CN', localService: false },
+            selectedVoice
+        ],
         cancel() {},
         speak(utterance) {
             spokenUtterance = utterance;
@@ -396,30 +393,17 @@ test('native web speech mode uses the exact Chrome voice selected by voiceURI', 
     try {
         const provider = createSpeechProvider({
             speechMode: 'native',
-            nativeVoiceId: selectedVoice.voiceURI
+            nativeVoiceId: ''
         });
         assert.equal(provider.mode, 'native');
-        assert.deepEqual(
-            provider.ttsCandidates.map((candidate) => candidate.id),
-            ['browser-speech-synthesis']
-        );
+        assert.equal(provider.supportsTTS, true);
 
         const result = await provider.playSpeech({
-            payload: { speech_text: '这是指定的浏览器语音。' },
-            displayText: '这是指定的浏览器语音。',
-            vrmSystem: {
-                startFallbackSpeech() {},
-                stopSpeaking() {}
-            },
-            updateMessageContent() {},
-            scrollToBottom() {},
-            onAvatarPlaybackStart() {}
+            payload: { speech_text: '这是自动优选的在线语音。' },
+            displayText: '这是自动优选的在线语音。'
         });
 
-        assert.deepEqual(result, {
-            played: true,
-            provider: 'browser-speech-synthesis'
-        });
+        assert.deepEqual(result, { played: true, provider: 'browser-speech-synthesis' });
         assert.equal(spokenUtterance.voice, selectedVoice);
         assert.equal(spokenUtterance.lang, 'zh-CN');
     } finally {

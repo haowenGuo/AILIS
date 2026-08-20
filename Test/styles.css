@@ -426,8 +426,7 @@ svg {
 }
 
 .scene-picker,
-.render-picker,
-.voice-picker {
+.render-picker {
     display: flex;
     align-items: center;
     gap: 6px;
@@ -436,33 +435,6 @@ svg {
     border-radius: 8px;
     background: rgba(255, 255, 255, 0.86);
     backdrop-filter: blur(14px);
-}
-
-.voice-picker {
-    min-width: 0;
-    gap: 7px;
-    color: var(--muted);
-    font-size: 11px;
-    font-weight: 800;
-}
-
-.voice-picker span {
-    flex: 0 0 auto;
-    padding-left: 3px;
-}
-
-.voice-picker select {
-    width: clamp(150px, 20vw, 230px);
-    min-width: 0;
-    height: 31px;
-    padding: 0 28px 0 9px;
-    border: 0;
-    border-radius: 6px;
-    color: #28454c;
-    background: rgba(238, 248, 249, 0.96);
-    cursor: pointer;
-    font: inherit;
-    font-weight: 700;
 }
 
 .render-picker {
@@ -512,7 +484,6 @@ svg {
 }
 
 .scene-option:focus-visible,
-.voice-picker select:focus-visible,
 .composer:focus-within,
 .stage-icon-button:focus-visible,
 .drawer-close:focus-visible {
@@ -1243,25 +1214,6 @@ svg {
         min-width: 40px;
         height: 27px;
         padding: 0 5px;
-        font-size: 10px;
-    }
-
-    .voice-picker {
-        flex: 1 1 auto;
-        width: auto;
-        max-width: none;
-        min-width: 0;
-        box-sizing: border-box;
-    }
-
-    .voice-picker span {
-        display: none;
-    }
-
-    .voice-picker select {
-        flex: 1 1 auto;
-        width: 0;
-        height: 27px;
         font-size: 10px;
     }
 

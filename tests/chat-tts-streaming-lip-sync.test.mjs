@@ -451,13 +451,14 @@ test('discarded background Persona stream removes its uncommitted bubble', async
     assert.equal(system.messageHistory.length, 0);
 });
 
-test('web experience enables server TTS and unlocks audio from the send gesture', async () => {
+test('web experience uses one auto-ranked online voice and unlocks audio from the send gesture', async () => {
     const source = await readFile(new URL('../Test/app.js', import.meta.url), 'utf8');
     const html = await readFile(new URL('../Test/index.html', import.meta.url), 'utf8');
-    assert.match(html, /id="tts-voice-select"/);
-    assert.match(source, /speechSynthesis\?\.getVoices/);
-    assert.match(source, /speechMode: useCloudVoice \? 'server' : 'native'/);
-    assert.match(source, /petUrl\.searchParams\.set\('ttsVoice', state\.ttsVoiceId\)/);
+    assert.doesNotMatch(html, /id="tts-voice-select"/);
+    assert.doesNotMatch(source, /speechSynthesis\?\.getVoices/);
+    assert.match(source, /speechMode: 'native'/);
+    assert.match(source, /petUrl\.searchParams\.set\('speechMode', 'native'\)/);
+    assert.match(source, /localStorage\?\.removeItem\(LEGACY_TTS_VOICE_STORAGE_KEY\)/);
     assert.match(source, /__AILIS_BUILD_REVISION__/);
     assert.match(source, /petUrl\.searchParams\.set\('assetVersion', WEB_ASSET_VERSION\)/);
     assert.match(source, /payload\.type === 'system-notice'/);
