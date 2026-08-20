@@ -25,7 +25,7 @@ class TTSAlignment(BaseModel):
 
 
 class TTSSynthesizeRequest(BaseModel):
-    text: str = Field(..., description="需要直接送入 ElevenLabs 合成的净化文本")
+    text: str = Field(..., description="需要交给服务端语音引擎合成的净化文本")
 
 
 class TTSSynthesizeResponse(BaseModel):
@@ -35,6 +35,9 @@ class TTSSynthesizeResponse(BaseModel):
     alignment: Optional[TTSAlignment] = Field(default=None, description="原始文本字符级时间戳")
     normalized_alignment: Optional[TTSAlignment] = Field(default=None, description="规范化文本字符级时间戳")
     duration_hint_seconds: Optional[float] = Field(default=None, description="根据时间戳估算的音频时长")
+    provider: Optional[str] = Field(default=None, description="实际使用的服务端语音引擎")
+    voice: Optional[str] = Field(default=None, description="实际使用的声线")
+    cache_hit: bool = Field(default=False, description="是否命中服务端音频缓存")
 
 
 class ChatTTSResponse(BaseModel):
@@ -50,6 +53,9 @@ class ChatTTSResponse(BaseModel):
     alignment: Optional[TTSAlignment] = Field(default=None, description="原始文本字符级时间戳")
     normalized_alignment: Optional[TTSAlignment] = Field(default=None, description="规范化文本字符级时间戳")
     duration_hint_seconds: Optional[float] = Field(default=None, description="根据时间戳估算的音频时长")
+    provider: Optional[str] = Field(default=None, description="实际使用的服务端语音引擎")
+    voice: Optional[str] = Field(default=None, description="实际使用的声线")
+    cache_hit: bool = Field(default=False, description="是否命中服务端音频缓存")
 
 
 class ChatTextResponse(BaseModel):

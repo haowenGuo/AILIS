@@ -155,7 +155,7 @@ function applyTtsVoiceToPet() {
         return false;
     }
     petWindow.setAilisSpeechVoice({
-        speechMode: 'native',
+        speechMode: 'server',
         nativeVoiceId: ''
     });
     return true;
@@ -271,7 +271,7 @@ function updateComposer() {
     elements.dialogueContent.setAttribute('aria-busy', String(state.busy));
 
     if (state.ttsPreviewPlaying) {
-        elements.composerStatus.textContent = '正在试听 AILIS 经典在线语音';
+        elements.composerStatus.textContent = '正在试听 AILIS 温柔在线语音';
     } else if (state.voiceInputStatus) {
         elements.composerStatus.textContent = state.voiceInputStatus;
     } else if (state.uploadingAttachments) {
@@ -858,7 +858,7 @@ async function sendPrompt(content) {
 function configurePetFrame() {
     const petUrl = new URL('../pet.html', window.location.href);
     petUrl.searchParams.set('backend', backendBaseUrl);
-    petUrl.searchParams.set('speechMode', 'native');
+    petUrl.searchParams.set('speechMode', 'server');
     petUrl.searchParams.set('web', '1');
     petUrl.searchParams.set('camera', 'close');
     petUrl.searchParams.set('renderProfile', state.renderProfileId);

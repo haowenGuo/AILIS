@@ -12,7 +12,7 @@ from backend.api.schemas import (
 from backend.core.database import get_db
 from backend.services.conversation_service import ConversationService
 from backend.services.reply_markup_service import parse_reply_markup
-from backend.services.tts_service import ElevenLabsTTSService, ElevenLabsTTSServiceError
+from backend.services.tts_service import TTSServiceError, create_tts_service
 
 
 router = APIRouter()
@@ -44,7 +44,7 @@ async def chat_tts_endpoint(
     一次性完成：
     1. 生成最终回复文本
     2. 解析动作 / 表情控制标签
-    3. 调 ElevenLabs 生成音频与时间戳
+    3. 调用配置的服务端语音引擎生成音频
 
     这个接口专门服务“完整文本 + 完整音频”场景，避免影响原有流式 /chat。
     """
@@ -59,11 +59,11 @@ async def chat_tts_endpoint(
         raise HTTPException(status_code=502, detail="AI 回复为空，无法生成语音")
 
     try:
-        tts_service = ElevenLabsTTSService()
+        tts_service = create_tts_service()
         tts_result = await tts_service.synthesize(parsed_reply.speech_text)
-    except ElevenLabsTTSServiceError as exc:
-        print(f"[TTS Error] ElevenLabs 语音生成失败: {exc}")
-        raise HTTPException(status_code=502, detail=f"ElevenLabs 语音生成失败：{exc}") from exc
+    except TTSServiceError as exc:
+        print(f"[TTS Error] 服务端语音生成失败: {exc}")
+        raise HTTPException(status_code=502, detail=f"服务端语音生成失败：{exc}") from exc
 
     return ChatTTSResponse(
         session_id=turn.session_id,
@@ -80,13 +80,16 @@ async def chat_tts_endpoint(
         duration_hint_seconds=_estimate_duration_seconds(
             tts_result.normalized_alignment or tts_result.alignment
         ),
+        provider=tts_result.provider or None,
+        voice=tts_result.voice or None,
+        cache_hit=tts_result.cache_hit,
     )
 
 
 @router.post("/tts/synthesize", response_model=TTSSynthesizeResponse)
 async def tts_synthesize_endpoint(request: TTSSynthesizeRequest):
     """
-    仅负责把已有文本交给 ElevenLabs 合成音频。
+    仅负责把已有文本交给配置的服务端语音引擎合成音频。
 
     桌面端 AILIS 的回复由本地 Agent Loop 产生，因此不能复用 /chat/tts
     的“生成回复 + 合成音频”一体流程，否则会绕开任务执行结果。
@@ -96,11 +99,11 @@ async def tts_synthesize_endpoint(request: TTSSynthesizeRequest):
         raise HTTPException(status_code=400, detail="TTS 输入文本不能为空")
 
     try:
-        tts_service = ElevenLabsTTSService()
+        tts_service = create_tts_service()
         tts_result = await tts_service.synthesize(clean_text)
-    except ElevenLabsTTSServiceError as exc:
-        print(f"[TTS Error] ElevenLabs 语音生成失败: {exc}")
-        raise HTTPException(status_code=502, detail=f"ElevenLabs 语音生成失败：{exc}") from exc
+    except TTSServiceError as exc:
+        print(f"[TTS Error] 服务端语音生成失败: {exc}")
+        raise HTTPException(status_code=502, detail=f"服务端语音生成失败：{exc}") from exc
 
     return TTSSynthesizeResponse(
         audio_base64=tts_result.audio_base64,
@@ -111,6 +114,9 @@ async def tts_synthesize_endpoint(request: TTSSynthesizeRequest):
         duration_hint_seconds=_estimate_duration_seconds(
             tts_result.normalized_alignment or tts_result.alignment
         ),
+        provider=tts_result.provider or None,
+        voice=tts_result.voice or None,
+        cache_hit=tts_result.cache_hit,
     )
 
 
