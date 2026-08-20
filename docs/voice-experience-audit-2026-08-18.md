@@ -51,6 +51,11 @@ Date: 2026-08-18
 - `node --check` passed for all changed JavaScript entry points.
 - Web layout checked at 1280x720 and 390x844: no horizontal overflow or composer overlap.
 
-## Deployment boundary
+## Deployment status
 
-The repository has no documented production deployment command or CI deployment workflow for the IP-hosted Web experience. The deployed page was therefore audited but not overwritten from this worktree. Deploy the generated `dist` only through the server's established release process, then repeat the HTTPS microphone-permission and TTS preview smoke tests.
+- The Web voice experience was deployed on 2026-08-20 through the existing versioned-release layout on `101.133.239.56`.
+- The active release is `/var/www/ailis/releases/20260820-145307-99378c4-voice-ux`, selected through the atomic `/var/www/ailis/current` symlink.
+- The previous release, `/var/www/ailis/releases/20260812-08f2946-lipsync`, remains intact as the immediate rollback target.
+- Deployment copied the previous release and overlaid only the `/Test/` dependency closure. Backend services, Nginx configuration, desktop assets, and unrelated Web pages were not changed.
+- Server-side and external HTTPS smoke tests confirmed `v1.4.0`, the microphone control, the TTS preview control, and the shipped `SpeechRecognition` implementation.
+- A real browser microphone-permission test still requires an interactive browser and user permission; automated verification did not record audio.
