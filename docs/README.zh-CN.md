@@ -54,6 +54,7 @@ Memory Runtime 与持久状态同时支持 Persona 和 TaskAgent 两条链路。
 - [完整评测数据总表](ailis-evaluation-master-scorecard-20260817.md)
 - [记忆检索基线](ailis-memory-bm25-mmr-baseline.md)
 - [发布构建系统](ailis-release-build-system.md)
+- [v1.4.0 发布素材与内测](launch/README.md)
 - [版本与实验登记](ailis-version-registry.md)
 - [Harness 架构审计](ailis-harness-architecture-audit-roadmap.md)
 - [代码重构审计](ailis-codebase-refactor-audit.md)

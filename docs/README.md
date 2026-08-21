@@ -56,6 +56,7 @@ These pages are useful when changing the runtime or reproducing measurements:
 - [Full Evaluation Scorecard](ailis-evaluation-master-scorecard-20260817.md)
 - [Memory Retrieval Baseline](ailis-memory-bm25-mmr-baseline.md)
 - [Release Build System](ailis-release-build-system.md)
+- [v1.4.0 Launch Kit](launch/README.md)
 - [Version and Experiment Registry](ailis-version-registry.md)
 - [Harness Architecture Audit](ailis-harness-architecture-audit-roadmap.md)
 - [Codebase Refactor Audit](ailis-codebase-refactor-audit.md)
