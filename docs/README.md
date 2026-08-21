@@ -4,6 +4,8 @@ This directory contains the design record, operating guides, evaluation plans, a
 
 ## Start Here
 
+- [Getting Started](getting-started.md) - install, configure, run, package, and validate AILIS.
+- [快速开始](getting-started.zh-CN.md) - AILIS 安装、配置、运行、打包与验证。
 - [Embodied Agent Architecture](ailis-embodied-agent-architecture.md) - product and runtime overview.
 - [System TaskAgent Architecture](ailis-system-taskagent-architecture.md) - Persona/TaskAgent responsibilities and handoff contract.
 - [Codex Multi-Agent Data-Flow Migration](ailis-codex-multi-agent-dataflow-migration.md) - current agent object and result flow.
