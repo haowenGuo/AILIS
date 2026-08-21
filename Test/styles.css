@@ -739,7 +739,7 @@ svg {
 .composer {
     min-width: 0;
     display: grid;
-    grid-template-columns: 36px minmax(0, 1fr) 42px;
+    grid-template-columns: 36px minmax(0, 1fr) 36px 42px;
     gap: 8px;
     align-items: end;
     padding: 5px;
@@ -748,7 +748,8 @@ svg {
     background: rgba(255, 255, 255, 0.16);
 }
 
-.attach-button {
+.attach-button,
+.voice-input-button {
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -762,17 +763,20 @@ svg {
     cursor: pointer;
 }
 
-.attach-button:hover:enabled {
+.attach-button:hover:enabled,
+.voice-input-button:hover:enabled {
     color: #ffffff;
     background: rgba(255, 255, 255, 0.12);
 }
 
-.attach-button:disabled {
+.attach-button:disabled,
+.voice-input-button:disabled {
     cursor: not-allowed;
     opacity: 0.42;
 }
 
 .attach-button svg,
+.voice-input-button svg,
 .send-button svg {
     width: 20px;
     height: 20px;
@@ -781,6 +785,38 @@ svg {
     stroke-linecap: round;
     stroke-linejoin: round;
     stroke-width: 1.8;
+}
+
+.voice-input-button[data-state="starting"],
+.voice-input-button[data-state="listening"],
+.voice-input-button[data-state="processing"] {
+    color: #ffffff;
+    background: rgba(203, 83, 118, 0.82);
+}
+
+.voice-input-button[data-state="listening"] {
+    animation: voice-input-pulse 1.4s ease-in-out infinite;
+}
+
+.voice-input-button .voice-icon-stop {
+    display: none;
+}
+
+.voice-input-button[data-state="starting"] .voice-icon-mic,
+.voice-input-button[data-state="listening"] .voice-icon-mic,
+.voice-input-button[data-state="processing"] .voice-icon-mic {
+    display: none;
+}
+
+.voice-input-button[data-state="starting"] .voice-icon-stop,
+.voice-input-button[data-state="listening"] .voice-icon-stop,
+.voice-input-button[data-state="processing"] .voice-icon-stop {
+    display: block;
+}
+
+@keyframes voice-input-pulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(255, 255, 255, 0.08); }
+    50% { box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.18); }
 }
 
 .experience[data-dragging-files="true"] .dialogue-box {

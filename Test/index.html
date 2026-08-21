@@ -222,6 +222,24 @@
                             placeholder="想和 AILIS 说什么？"
                         ></textarea>
                         <button
+                            id="voice-input-button"
+                            class="voice-input-button"
+                            type="button"
+                            aria-label="语音输入"
+                            aria-pressed="false"
+                            title="语音输入"
+                            data-state="idle"
+                        >
+                            <svg class="voice-icon voice-icon-mic" viewBox="0 0 24 24" aria-hidden="true">
+                                <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"></path>
+                                <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
+                                <path d="M12 19v3"></path>
+                            </svg>
+                            <svg class="voice-icon voice-icon-stop" viewBox="0 0 24 24" aria-hidden="true">
+                                <rect x="6" y="6" width="12" height="12" rx="1"></rect>
+                            </svg>
+                        </button>
+                        <button
                             id="send-button"
                             class="send-button"
                             type="submit"
