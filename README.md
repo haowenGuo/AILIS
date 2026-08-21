@@ -36,21 +36,21 @@ AILIS is an evaluated Agent system, not only a character demo. Under the same Lu
 
 ### Headline scores
 
-| Benchmark | Capability | AILIS score | Scale | Model / runtime |
-| --- | --- | ---: | ---: | --- |
-| **GAIA public validation** | General research, tools, multi-hop reasoning | **119 / 165, 72.12%** | Complete L1-L3, 165 tasks | `gpt-5.6-luna` medium |
-| **Terminal-Bench 2.1** | Long-horizon terminal and coding work | **60 / 89, 67.42% pass@1** | Complete 89-task pass | TaskAgent A7, `gpt-5.6-luna` max, Harbor 0.20.0 |
-| **Apple ToolSandbox** | Stateful tool use | **71.51%** frozen-holdout mean | 239 / 239 scored | Production Agent + official user simulator |
-| **LongMemEval-S** | Long-term memory QA | **358 / 500, 71.60%** | 500 / 500 completed | BM25 phrase v2 + MMR 0.2, Luna reader/Judge |
-| **LoCoMo** | Conversational memory and multi-hop synthesis | **24.69 token-F1** | 1,986 / 1,986 completed | BM25 phrase v2 + MMR 0.2 |
-| **PersonaMem Balanced-140** | Preference and persona continuity | **92 / 140, 65.71%** | 140 / 140 completed | Ledger + BM25/MMR, Luna medium |
+| Benchmark | Capability | AILIS |
+| --- | --- | ---: |
+| **GAIA public validation** | General research, tools, multi-hop reasoning | **72.12%** |
+| **Terminal-Bench 2.1** | Long-horizon terminal and coding work | **67.42%** |
+| **Apple ToolSandbox** | Stateful tool use | **71.51%** |
+| **LongMemEval-S** | Long-term memory QA | **71.60%** |
+| **LoCoMo** | Conversational memory and multi-hop synthesis | **24.69 token-F1** |
+| **PersonaMem Balanced-140** | Preference and persona continuity | **65.71%** |
 
 ### Same-model comparison with Codex
 
-| Benchmark | Shared model | AILIS | Codex | Result |
-| --- | --- | ---: | ---: | --- |
-| **GAIA, 165 tasks** | `gpt-5.6-luna` medium | **72.12%** | 64.85% | **AILIS +7.27 pp** |
-| **Terminal-Bench 2.1** | `gpt-5.6-luna` max | **67.42%** | 75.73% +/- 1.32% | AILIS reaches **89.0%** of the Codex score |
+| Benchmark | AILIS | Codex | Delta |
+| --- | ---: | ---: | ---: |
+| **GAIA 165 · Luna medium** | **72.12%** | 64.85% | **+7.27 pp** |
+| **Terminal-Bench 2.1 · Luna max** | **67.42%** | 75.73% +/- 1.32% | -8.31 pp |
 
 #### GAIA by level
 
@@ -95,12 +95,12 @@ AILIS is an evaluated Agent system, not only a character demo. Under the same Lu
 
 ### Memory and stateful-task performance
 
-| Track | Score | Retrieval performance | End-to-end latency | Scale / resources |
-| --- | ---: | --- | --- | --- |
-| **ToolSandbox frozen holdout** | **71.51%** mean | Stateful trajectory scoring | **3.08 min/scenario** | 239 scenarios, 2,602 LLM calls, 22.05M tokens |
-| **LongMemEval-S** | **71.60%** QA | Session R@8 93.53%; turn R@8 83.31% | **P50 18.6 s / P95 39.1 s** | 500 / 500 completed |
-| **PersonaMem Balanced-140** | **65.71%** | Retrieval mean 1.15 s; P95 1.78 s | **P50 26.41 s / P95 53.83 s** | 140 / 140 completed; 39 / 39 audits passed |
-| **LoCoMo** | **24.69 token-F1** | Session R@8 89.67%; turn R@8 71.75% | **P50 12.72 s / P95 30.44 s** | 1,986 / 1,986 completed |
+| Track | Score | Retrieval performance | End-to-end latency |
+| --- | ---: | --- | ---: |
+| **ToolSandbox frozen holdout** | **71.51%** | Stateful trajectory scoring | **3.08 min/scenario** |
+| **LongMemEval-S** | **71.60%** | Session R@8 93.53%; turn R@8 83.31% | **P50 18.6 s / P95 39.1 s** |
+| **PersonaMem Balanced-140** | **65.71%** | Retrieval mean 1.15 s; P95 1.78 s | **P50 26.41 s / P95 53.83 s** |
+| **LoCoMo** | **24.69 token-F1** | Session R@8 89.67%; turn R@8 71.75% | **P50 12.72 s / P95 30.44 s** |
 
 [Complete evaluation scorecard](docs/ailis-evaluation-master-scorecard-20260817.md) ·
 [Machine-readable scorecard](evals/benchmark-catalog/ailis-evaluation-master-scorecard-20260817.json) ·

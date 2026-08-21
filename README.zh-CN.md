@@ -29,21 +29,21 @@ AILIS 不只是角色演示，而是一套经过端到端评测的 Agent 系统�
 
 ### 核心成绩
 
-| Benchmark | 核心能力 | AILIS 成绩 | 规模 | 模型 / 运行时 |
-| --- | --- | ---: | ---: | --- |
-| **GAIA public validation** | 通用研究、工具调用、多跳推理 | **119 / 165，72.12%** | L1-L3 全部 165 题 | `gpt-5.6-luna` medium |
-| **Terminal-Bench 2.1** | 长程终端与代码任务 | **60 / 89，67.42% pass@1** | 完整 89 题 | TaskAgent A7，`gpt-5.6-luna` max，Harbor 0.20.0 |
-| **Apple ToolSandbox** | 有状态工具执行 | **71.51%** frozen-holdout 均值 | 239 / 239 | production Agent + 官方 user simulator |
-| **LongMemEval-S** | 长期记忆问答 | **358 / 500，71.60%** | 500 / 500 | BM25 phrase v2 + MMR 0.2，Luna Reader/Judge |
-| **LoCoMo** | 对话记忆与多跳合成 | **24.69 token-F1** | 1,986 / 1,986 | BM25 phrase v2 + MMR 0.2 |
-| **PersonaMem Balanced-140** | 偏好与 Persona 连续性 | **92 / 140，65.71%** | 140 / 140 | Ledger + BM25/MMR，Luna medium |
+| Benchmark | 核心能力 | AILIS |
+| --- | --- | ---: |
+| **GAIA public validation** | 通用研究、工具调用、多跳推理 | **72.12%** |
+| **Terminal-Bench 2.1** | 长程终端与代码任务 | **67.42%** |
+| **Apple ToolSandbox** | 有状态工具执行 | **71.51%** |
+| **LongMemEval-S** | 长期记忆问答 | **71.60%** |
+| **LoCoMo** | 对话记忆与多跳合成 | **24.69 token-F1** |
+| **PersonaMem Balanced-140** | 偏好与 Persona 连续性 | **65.71%** |
 
 ### 与 Codex 的同模型对照
 
-| Benchmark | 相同模型 | AILIS | Codex | 对照结果 |
-| --- | --- | ---: | ---: | --- |
-| **GAIA，165 题** | `gpt-5.6-luna` medium | **72.12%** | 64.85% | **AILIS +7.27 pp** |
-| **Terminal-Bench 2.1** | `gpt-5.6-luna` max | **67.42%** | 75.73% +/- 1.32% | AILIS 达到 Codex 分数的 **89.0%** |
+| Benchmark | AILIS | Codex | 差值 |
+| --- | ---: | ---: | ---: |
+| **GAIA 165 · Luna medium** | **72.12%** | 64.85% | **+7.27 pp** |
+| **Terminal-Bench 2.1 · Luna max** | **67.42%** | 75.73% +/- 1.32% | -8.31 pp |
 
 #### GAIA 分级成绩
 
@@ -88,12 +88,12 @@ AILIS 不只是角色演示，而是一套经过端到端评测的 Agent 系统�
 
 ### 长期记忆与有状态任务性能
 
-| 评测 | 成绩 | 检索性能 | 端到端时延 | 规模 / 资源 |
-| --- | ---: | --- | --- | --- |
-| **ToolSandbox frozen holdout** | **71.51%** 均值 | 有状态轨迹评分 | **3.08 分钟/场景** | 239 场景，2,602 次 LLM 调用，22.05M Token |
-| **LongMemEval-S** | **71.60%** QA | Session R@8 93.53%；Turn R@8 83.31% | **P50 18.6s / P95 39.1s** | 500 / 500 完成 |
-| **PersonaMem Balanced-140** | **65.71%** | Retrieval mean 1.15s；P95 1.78s | **P50 26.41s / P95 53.83s** | 140 / 140 完成；39 / 39 审计通过 |
-| **LoCoMo** | **24.69 token-F1** | Session R@8 89.67%；Turn R@8 71.75% | **P50 12.72s / P95 30.44s** | 1,986 / 1,986 完成 |
+| 评测 | 成绩 | 检索性能 | 端到端时延 |
+| --- | ---: | --- | ---: |
+| **ToolSandbox frozen holdout** | **71.51%** | 有状态轨迹评分 | **3.08 分钟/场景** |
+| **LongMemEval-S** | **71.60%** | Session R@8 93.53%；Turn R@8 83.31% | **P50 18.6s / P95 39.1s** |
+| **PersonaMem Balanced-140** | **65.71%** | Retrieval mean 1.15s；P95 1.78s | **P50 26.41s / P95 53.83s** |
+| **LoCoMo** | **24.69 token-F1** | Session R@8 89.67%；Turn R@8 71.75% | **P50 12.72s / P95 30.44s** |
 
 [完整评测总表](docs/ailis-evaluation-master-scorecard-20260817.md) ·
 [机器可读总表](evals/benchmark-catalog/ailis-evaluation-master-scorecard-20260817.json) ·
