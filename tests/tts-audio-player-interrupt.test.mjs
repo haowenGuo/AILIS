@@ -3,7 +3,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import test from 'node:test';
 
-import { mapAudioEnvelopeToMouthValue } from '../src/tts-audio-player.js';
+import { mapAudioEnvelopeToMouthValue, TTSAudioPlayer } from '../src/tts-audio-player.js';
 
 test('audio envelope mapping keeps speech visible without over-opening the mouth', () => {
     assert.equal(mapAudioEnvelopeToMouthValue(0), 0);
@@ -13,6 +13,60 @@ test('audio envelope mapping keeps speech visible without over-opening the mouth
     assert.ok(mapAudioEnvelopeToMouthValue(0.25) >= 0.4);
     assert.ok(mapAudioEnvelopeToMouthValue(0.25) <= 0.5);
     assert.equal(mapAudioEnvelopeToMouthValue(1), 0.72);
+});
+
+test('audio envelope mapping preserves visible articulation during sustained speech', () => {
+    const closedSyllable = mapAudioEnvelopeToMouthValue(0.25, 0);
+    const midSyllable = mapAudioEnvelopeToMouthValue(0.25, 0.5);
+    const openSyllable = mapAudioEnvelopeToMouthValue(0.25, 1);
+
+    assert.ok(closedSyllable >= 0.1);
+    assert.ok(closedSyllable < midSyllable);
+    assert.ok(midSyllable < openSyllable);
+    assert.ok(openSyllable - closedSyllable >= 0.3);
+    assert.equal(mapAudioEnvelopeToMouthValue(1, 1), 0.72);
+});
+
+test('audio player keeps opening and closing under a sustained audio envelope', () => {
+    const previousAudio = globalThis.Audio;
+    globalThis.Audio = class FakeAudio {
+        constructor() {
+            this.currentTime = 0;
+            this.preload = '';
+        }
+    };
+
+    try {
+        const mouthValues = [];
+        const player = new TTSAudioPlayer({
+            setLipSyncValue(value) {
+                mouthValues.push(value);
+            }
+        });
+        player.timeDomainData = new Uint8Array(64);
+        player.analyserNode = {
+            getByteTimeDomainData(buffer) {
+                for (let index = 0; index < buffer.length; index += 1) {
+                    buffer[index] = index % 2 === 0 ? 160 : 96;
+                }
+            }
+        };
+
+        for (let frame = 1; frame <= 60; frame += 1) {
+            player.audioElement.currentTime = frame / 60;
+            player.updateLipSyncFromAudio();
+        }
+
+        const stableValues = mouthValues.slice(10);
+        assert.ok(Math.max(...stableValues) <= 0.72);
+        assert.ok(Math.max(...stableValues) - Math.min(...stableValues) >= 0.35);
+    } finally {
+        if (previousAudio === undefined) {
+            delete globalThis.Audio;
+        } else {
+            globalThis.Audio = previousAudio;
+        }
+    }
 });
 
 function withTimeout(promise, timeoutMs = 250) {
