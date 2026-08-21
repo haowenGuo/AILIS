@@ -1,0 +1,55 @@
+name: Bug report
+description: Report a reproducible AILIS product or runtime problem.
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Thanks for helping improve AILIS. Remove credentials and private memory from logs before attaching them.
+  - type: input
+    id: version
+    attributes:
+      label: AILIS version
+      placeholder: v1.4.0-rc.2 or commit SHA
+    validations:
+      required: true
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Area
+      options:
+        - Desktop UI or character
+        - Voice or audio
+        - TaskAgent or model runtime
+        - Memory
+        - Tool execution or approval
+        - Packaging or installation
+        - Documentation
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction steps
+      description: Describe the smallest sequence that reproduces the problem.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior and logs
+      description: Include relevant errors, screenshots, or sanitized logs.
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      placeholder: Windows version, CPU/GPU, Node version when developing from source

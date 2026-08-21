@@ -9,7 +9,7 @@
   </p>
   <p>
     <a href="https://101.133.239.56/Test/"><strong>AILIS ausprobieren</strong></a> ·
-    <a href="https://github.com/haowenGuo/AILIS/releases/latest"><strong>Herunterladen</strong></a> ·
+    <a href="https://github.com/haowenGuo/AILIS/releases"><strong>Herunterladen</strong></a> ·
     <a href="docs/getting-started.md">Schnellstart</a> ·
     <a href="docs/README.md">Dokumentation</a>
   </p>
@@ -80,7 +80,7 @@ AILIS wird mit vollständigen End-to-End-Aufgaben statt nur mit Feature-Demos ge
 
 ## Schnellstart
 
-Lade den Desktop-Build unter [Releases](https://github.com/haowenGuo/AILIS/releases/latest) herunter oder lerne AILIS über die [Web-Erfahrung](https://101.133.239.56/Test/) kennen.
+Lade den Desktop-Build unter [Releases](https://github.com/haowenGuo/AILIS/releases) herunter oder lerne AILIS über die [Web-Erfahrung](https://101.133.239.56/Test/) kennen.
 
 ```bash
 pnpm install

@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Documentation
+    url: https://github.com/haowenGuo/AILIS/blob/main/docs/README.md
+    about: Check installation, architecture, tools, memory, and evaluation documentation.

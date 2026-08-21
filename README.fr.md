@@ -9,7 +9,7 @@
   </p>
   <p>
     <a href="https://101.133.239.56/Test/"><strong>Essayer AILIS</strong></a> ·
-    <a href="https://github.com/haowenGuo/AILIS/releases/latest"><strong>Télécharger</strong></a> ·
+    <a href="https://github.com/haowenGuo/AILIS/releases"><strong>Télécharger</strong></a> ·
     <a href="docs/getting-started.md">Démarrage rapide</a> ·
     <a href="docs/README.md">Documentation</a>
   </p>
@@ -80,7 +80,7 @@ AILIS est évalué sur des tâches complètes de bout en bout, pas seulement sur
 
 ## Démarrage rapide
 
-Téléchargez l'application depuis [Releases](https://github.com/haowenGuo/AILIS/releases/latest), ou découvrez AILIS via [l'expérience Web](https://101.133.239.56/Test/).
+Téléchargez l'application depuis [Releases](https://github.com/haowenGuo/AILIS/releases), ou découvrez AILIS via [l'expérience Web](https://101.133.239.56/Test/).
 
 ```bash
 pnpm install

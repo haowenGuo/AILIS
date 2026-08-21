@@ -9,7 +9,7 @@
   </p>
   <p>
     <a href="https://101.133.239.56/Test/"><strong>Try AILIS</strong></a> ·
-    <a href="https://github.com/haowenGuo/AILIS/releases/latest"><strong>Download</strong></a> ·
+    <a href="https://github.com/haowenGuo/AILIS/releases"><strong>Download</strong></a> ·
     <a href="docs/getting-started.md">Quick Start</a> ·
     <a href="docs/README.md">Documentation</a>
   </p>
@@ -84,7 +84,7 @@ AILIS is tested on complete end-to-end tasks, not only feature demos. With the s
 
 ### Use AILIS
 
-Download the desktop build from [Releases](https://github.com/haowenGuo/AILIS/releases/latest), or meet AILIS first through the [web experience](https://101.133.239.56/Test/).
+Download the desktop build from [Releases](https://github.com/haowenGuo/AILIS/releases), or meet AILIS first through the [web experience](https://101.133.239.56/Test/).
 
 ### Develop Locally
 
@@ -110,6 +110,10 @@ AILIS is neither a roleplay chat app with no execution ability nor a terminal wr
   <a href="docs/README.md"><strong>Documentation Center</strong></a> ·
   <a href="docs/evaluation.md"><strong>Complete Evaluation Scorecard</strong></a>
 </p>
+
+## Community
+
+If AILIS is useful to you, star the repository to follow its progress. Bug reports, workflow ideas, and focused pull requests are welcome through [Issues](https://github.com/haowenGuo/AILIS/issues) and the [contribution guide](CONTRIBUTING.md).
 
 ## Privacy and Control
 

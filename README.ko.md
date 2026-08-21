@@ -9,7 +9,7 @@
   </p>
   <p>
     <a href="https://101.133.239.56/Test/"><strong>AILIS 체험</strong></a> ·
-    <a href="https://github.com/haowenGuo/AILIS/releases/latest"><strong>다운로드</strong></a> ·
+    <a href="https://github.com/haowenGuo/AILIS/releases"><strong>다운로드</strong></a> ·
     <a href="docs/getting-started.md">빠른 시작</a> ·
     <a href="docs/README.md">문서</a>
   </p>
@@ -80,7 +80,7 @@ AILIS는 기능 데모가 아니라 완전한 엔드투엔드 작업으로 평�
 
 ## 빠른 시작
 
-[Releases](https://github.com/haowenGuo/AILIS/releases/latest)에서 데스크톱 빌드를 받거나 [웹 체험](https://101.133.239.56/Test/)으로 먼저 만나볼 수 있습니다.
+[Releases](https://github.com/haowenGuo/AILIS/releases)에서 데스크톱 빌드를 받거나 [웹 체험](https://101.133.239.56/Test/)으로 먼저 만나볼 수 있습니다.
 
 ```bash
 pnpm install

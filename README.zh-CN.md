@@ -9,7 +9,7 @@
   </p>
   <p>
     <a href="https://101.133.239.56/Test/"><strong>在线体验</strong></a> ·
-    <a href="https://github.com/haowenGuo/AILIS/releases/latest"><strong>下载桌面版</strong></a> ·
+    <a href="https://github.com/haowenGuo/AILIS/releases"><strong>下载桌面版</strong></a> ·
     <a href="docs/getting-started.zh-CN.md">快速开始</a> ·
     <a href="docs/README.zh-CN.md">文档</a>
   </p>
@@ -84,7 +84,7 @@ AILIS 不只展示功能，也持续用完整端到端任务检验 Agent Harness
 
 ### 直接使用
 
-从 [Releases](https://github.com/haowenGuo/AILIS/releases/latest) 下载桌面版，或先打开 [Web 体验](https://101.133.239.56/Test/) 认识 AILIS。
+从 [Releases](https://github.com/haowenGuo/AILIS/releases) 下载桌面版，或先打开 [Web 体验](https://101.133.239.56/Test/) 认识 AILIS。
 
 ### 本地开发
 
@@ -110,6 +110,10 @@ AILIS 的目标不是做一个只会扮演角色的聊天应用，也不是把�
   <a href="docs/README.zh-CN.md"><strong>中文文档中心</strong></a> ·
   <a href="docs/evaluation.zh-CN.md"><strong>完整评测成绩</strong></a>
 </p>
+
+## 参与项目
+
+如果 AILIS 对你有帮助，可以 Star 仓库关注后续进展。欢迎通过 [Issues](https://github.com/haowenGuo/AILIS/issues) 提交 Bug、真实工作流和功能建议，代码贡献说明见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
 ## 隐私与控制
 

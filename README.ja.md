@@ -9,7 +9,7 @@
   </p>
   <p>
     <a href="https://101.133.239.56/Test/"><strong>AILIS を試す</strong></a> ·
-    <a href="https://github.com/haowenGuo/AILIS/releases/latest"><strong>ダウンロード</strong></a> ·
+    <a href="https://github.com/haowenGuo/AILIS/releases"><strong>ダウンロード</strong></a> ·
     <a href="docs/getting-started.md">クイックスタート</a> ·
     <a href="docs/README.md">ドキュメント</a>
   </p>
@@ -80,7 +80,7 @@ AILIS は機能デモだけでなく、完全なエンドツーエンドタス�
 
 ## クイックスタート
 
-[Releases](https://github.com/haowenGuo/AILIS/releases/latest) からデスクトップ版を入手するか、[Web 体験](https://101.133.239.56/Test/) で AILIS を試せます。
+[Releases](https://github.com/haowenGuo/AILIS/releases) からデスクトップ版を入手するか、[Web 体験](https://101.133.239.56/Test/) で AILIS を試せます。
 
 ```bash
 pnpm install

@@ -1,0 +1,28 @@
+name: Feature request
+description: Propose a general capability or user-experience improvement.
+title: "[Feature]: "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What user problem or repeated workflow should AILIS handle better?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed experience
+      description: Describe the expected behavior without prescribing benchmark-specific logic.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Examples or evidence
+      description: Screenshots, workflows, public references, or measurements are welcome.
