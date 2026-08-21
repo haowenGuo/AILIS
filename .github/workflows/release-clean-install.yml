@@ -1,0 +1,68 @@
+name: Release clean-install gate
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-clean-install:
+    name: Build and validate on clean Windows
+    runs-on: windows-2025
+    timeout-minutes: 60
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run release tests
+        run: >-
+          pnpm exec node --test
+          tests/ailis-web-vrm.test.mjs
+          tests/ailis-character-runtime.test.mjs
+          tests/ailis-persona-renderer.test.mjs
+          tests/desktop-llm-provider.test.mjs
+          tests/ailis-runtime.test.mjs
+          tests/ailis-gateway.test.mjs
+          tests/ailis-agent-execution-flow.test.mjs
+
+      - name: Build release packages
+        run: pnpm release:core -- --output-root "${{ github.workspace }}\release"
+
+      - name: Validate clean install, first launch, portable launch, and uninstall
+        shell: pwsh
+        run: >-
+          ./scripts/validate-clean-install.ps1
+          -ArtifactRoot "${{ github.workspace }}\release\core"
+          -ExpectedVersion "1.4.0"
+          -ReportRoot "${{ github.workspace }}\release-smoke"
+
+      - name: Upload release packages and clean-install evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ailis-v1.4.0-clean-install-${{ github.sha }}
+          compression-level: 0
+          retention-days: 7
+          path: |
+            release/core/*.exe
+            release/core/*.blockmap
+            release/core/*.yml
+            release/core/*.json
+            release/core/SHA256SUMS.txt
+            release-smoke/**
