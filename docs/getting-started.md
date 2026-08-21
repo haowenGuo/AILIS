@@ -1,5 +1,7 @@
 # Getting Started with AILIS
 
+[Documentation](README.md) · [简体中文](getting-started.zh-CN.md) · [Architecture](architecture.md)
+
 This guide contains desktop development, the current model connection, voice runtime, optional backend, packaging, and validation instructions. Return to the [project homepage](../README.md) for the product overview.
 
 ## Prerequisites
@@ -90,3 +92,10 @@ tests/      Runtime, memory, tool, Gateway, and Agent tests
 ## Secrets and Local Data
 
 Do not commit API keys, account credentials, chat transcripts, runtime logs, or generated evaluation outputs. Model-visible conversation context, tool results, and user-approved image or file content can be sent to the current model service. Tool execution and persistent memory databases remain local by default.
+
+## Next Steps
+
+- Understand the runtime in [System Architecture](architecture.md).
+- Follow one complete execution in [TaskAgent Runtime](taskagent.md).
+- Explore current capabilities in [Tool Runtime](tools.md).
+- Review measured quality and efficiency in [AILIS Evaluation](evaluation.md).

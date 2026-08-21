@@ -66,7 +66,7 @@ AILIS is tested on complete end-to-end tasks, not only feature demos. With the s
 </p>
 
 <p align="center">
-  <a href="docs/ailis-evaluation-master-scorecard-20260817.md"><strong>View complete scores, efficiency metrics, and reproducible evidence</strong></a>
+  <a href="docs/evaluation.md"><strong>View complete scores, efficiency metrics, and reproducible evidence</strong></a>
 </p>
 
 ## What Works Today
@@ -93,7 +93,7 @@ pnpm install
 pnpm desktop:dev
 ```
 
-Builds, model providers, local voice, the optional backend, and packaging are documented in the [Getting Started guide](docs/getting-started.md).
+Desktop builds, voice, validation, the optional backend, and packaging are documented in the [Getting Started guide](docs/getting-started.md).
 
 ## Direction
 
@@ -108,7 +108,7 @@ AILIS is neither a roleplay chat app with no execution ability nor a terminal wr
 <p align="center">
   <a href="docs/getting-started.md"><strong>Install and Configure</strong></a> ·
   <a href="docs/README.md"><strong>Documentation Center</strong></a> ·
-  <a href="docs/ailis-evaluation-master-scorecard-20260817.md"><strong>Complete Evaluation Scorecard</strong></a>
+  <a href="docs/evaluation.md"><strong>Complete Evaluation Scorecard</strong></a>
 </p>
 
 ## Privacy and Control

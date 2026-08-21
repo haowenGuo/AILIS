@@ -66,7 +66,7 @@ AILIS 不只展示功能，也持续用完整端到端任务检验 Agent Harness
 </p>
 
 <p align="center">
-  <a href="docs/ailis-evaluation-master-scorecard-20260817.md"><strong>查看完整评测、效率指标与可复现证据</strong></a>
+  <a href="docs/evaluation.zh-CN.md"><strong>查看完整评测、效率指标与可复现证据</strong></a>
 </p>
 
 ## 现在可以做什么
@@ -93,7 +93,7 @@ pnpm install
 pnpm desktop:dev
 ```
 
-构建、模型供应商、本地语音、可选后端和打包说明统一放在 [快速开始文档](docs/getting-started.zh-CN.md)。
+桌面构建、语音、验证、可选后端和打包说明统一放在 [快速开始文档](docs/getting-started.zh-CN.md)。
 
 ## 项目方向
 
@@ -108,7 +108,7 @@ AILIS 的目标不是做一个只会扮演角色的聊天应用，也不是把�
 <p align="center">
   <a href="docs/getting-started.zh-CN.md"><strong>安装与配置</strong></a> ·
   <a href="docs/README.zh-CN.md"><strong>中文文档中心</strong></a> ·
-  <a href="docs/ailis-evaluation-master-scorecard-20260817.md"><strong>完整评测成绩</strong></a>
+  <a href="docs/evaluation.zh-CN.md"><strong>完整评测成绩</strong></a>
 </p>
 
 ## 隐私与控制

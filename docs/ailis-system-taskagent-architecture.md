@@ -1,5 +1,7 @@
 # AILIS System TaskAgent Architecture
 
+> **Historical implementation snapshot.** Read [TaskAgent Runtime](taskagent.md) for the maintained Thread/Turn, context, checkpoint, and completion contract.
+
 Last verified against: `fbf2454dbf32562d995b221386ce95d996b9fcb9`
 
 State schema: `TASK_HARNESS_STATE_VERSION = 3`

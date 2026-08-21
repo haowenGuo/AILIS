@@ -1,10 +1,17 @@
 <div align="center">
-  <h1>AILIS Assistant</h1>
-  <p><strong>Un assistant IA incarné pour desktop, open source, avec personnage VRM, voix temps réel, contexte visuel, mémoire et Agent Harness inspiré de Codex.</strong></p>
+  <img width="220" alt="AILIS fait signe de la main" src="Resources/Emotes/ailis/wave.png">
+  <h1>AILIS</h1>
+  <p><strong>Un compagnon IA de bureau open source qui peut voir, écouter, mémoriser et accomplir un travail réel.</strong></p>
   <p>
-    <img alt="Version" src="https://img.shields.io/badge/version-1.4.0-2563eb?style=for-the-badge">
-    <img alt="Runtime" src="https://img.shields.io/badge/runtime-Electron-0f172a?style=for-the-badge">
-    <img alt="License" src="https://img.shields.io/badge/license-MIT-059669?style=for-the-badge">
+    <img alt="Version" src="https://img.shields.io/badge/version-1.4.0-2563eb?style=flat-square">
+    <img alt="Desktop" src="https://img.shields.io/badge/desktop-Electron-0f172a?style=flat-square">
+    <img alt="License" src="https://img.shields.io/badge/license-MIT-059669?style=flat-square">
+  </p>
+  <p>
+    <a href="https://101.133.239.56/Test/"><strong>Essayer AILIS</strong></a> ·
+    <a href="https://github.com/haowenGuo/AILIS/releases/latest"><strong>Télécharger</strong></a> ·
+    <a href="docs/getting-started.md">Démarrage rapide</a> ·
+    <a href="docs/README.md">Documentation</a>
   </p>
   <p>
     <a href="README.md">English</a> ·
@@ -16,161 +23,92 @@
   </p>
 </div>
 
----
+## Plus qu'une fenêtre de chat
 
-## Qu'est-ce qu'AILIS
+AILIS est conçu comme une IA personnelle qui vit réellement sur le bureau. Son personnage 3D visible, sa voix, ses expressions et sa mémoire à long terme s'appuient sur un Agent Runtime capable de rechercher, lire des fichiers, écrire du code, organiser du contenu et utiliser l'ordinateur.
 
-AILIS Assistant est un assistant IA incarné conçu d'abord pour le desktop. Il réunit un personnage 3D VRM, des fenêtres Electron, l'interaction vocale, le contexte visuel basé sur des captures d'écran, la mémoire et un Agent Runtime structuré.
+Parlez naturellement à AILIS. Lorsqu'un travail est nécessaire, elle comprend le contexte d'écran et de fichiers autorisé, choisit les bons outils, termine la tâche et mémorise les préférences utiles.
 
-AILIS n'est pas un simple chatbot web. Le projet vise un assistant personnel de bureau capable de parler avec l'utilisateur, de comprendre le contexte de l'écran avec permission, de retenir les préférences utiles et d'exécuter des tâches via des outils explicites et auditables.
+## Expérience centrale
+
+<table>
+  <tr>
+    <td width="33%" valign="top"><h3>Visible</h3>Un personnage VRM avec expressions, mouvements, synchronisation labiale et bulles de dialogue.</td>
+    <td width="33%" valign="top"><h3>Conversationnelle</h3>Entrée vocale et parole naturelle complètent une interaction texte rapide.</td>
+    <td width="33%" valign="top"><h3>Contextuelle</h3>Avec autorisation, AILIS comprend écrans, fenêtres, zones capturées et fichiers locaux.</td>
+  </tr>
+  <tr>
+    <td width="33%" valign="top"><h3>Capable</h3>Recherche, code, fichiers, Web, e-mail et actions ordinateur partagent un chemin auditable.</td>
+    <td width="33%" valign="top"><h3>Mémoire</h3>Les préférences, projets et relations utiles sont conservés pour mieux collaborer.</td>
+    <td width="33%" valign="top"><h3>Contrôlable</h3>Les actions importantes passent par des flux d'approbation et d'audit.</td>
+  </tr>
+</table>
+
+## Comment fonctionne AILIS
+
+| 1. Décrire | 2. Comprendre | 3. Exécuter | 4. Mémoriser |
+| :---: | :---: | :---: | :---: |
+| Expliquer l'objectif naturellement | Lire le contexte autorisé | Utiliser recherche, code, fichiers et ordinateur | Conserver préférences et contexte projet |
+
+## Capacité Agent évaluée
+
+AILIS est évalué sur des tâches complètes de bout en bout, pas seulement sur des démonstrations. Avec le même modèle Luna, son Agent Harness se situe dans la même plage de performance que Codex.
+
+| Benchmark | AILIS | Codex, même modèle |
+| :--- | ---: | ---: |
+| **GAIA public validation · 165 tâches** | **72.12%** | 64.85% |
+| **Terminal-Bench 2.1 · 89 tâches** | 67.42% | **75.73% ± 1.32%** |
 
 <p align="center">
-  <img alt="Comment utiliser AILIS comme compagnon IA de bureau" src="docs/assets/readme-localized/fr/ailis-user-flow.png">
+  <strong>ToolSandbox 71.51%</strong> ·
+  <strong>LongMemEval-S 71.60%</strong> ·
+  <strong>PersonaMem 65.71%</strong>
 </p>
 
-## Direction du projet
+<p align="center"><a href="docs/evaluation.md"><strong>Voir les scores complets, l'efficacité et les preuves reproductibles</strong></a></p>
 
-AILIS cherche à combiner l'expressivité d'un personnage et la fiabilité d'un système d'exécution.
+## Fonctionnalités disponibles
 
-- Une couche personnage avec présence, expressions, mouvements, voix et continuité relationnelle.
-- Un Agent Harness pour planifier, router les outils, demander validation, journaliser les preuves et récupérer après erreur.
-- Un runtime desktop où les actions importantes sont approuvées, journalisées et récupérables après erreur.
-
-## Capacités actuelles
-
-- Personnage VRM desktop avec expressions, motions, lip sync et bulles de dialogue.
-- Fenêtre de mascotte Electron, fenêtre de chat, panneau de contrôle, intégration tray et état local persistant.
-- Workers TTS desktop, chemins de voix cloud et worker optionnel de reconnaissance vocale locale.
-- Contexte visuel avec permissions via captures d'écran, fenêtres et régions.
-- Blocs de mémoire, contexte de projet, état relationnel et réflexion légère.
-- Couche d'outils pour fichiers, code, actions ordinateur, email, compétences MCP, Web/Search et utilitaires locaux.
-- Modèle d'approbation explicite pour les actions affectant fichiers, applications, comptes ou services externes.
-- Évaluations d'expérience humaine, tests de contrats d'outils, vérifications Gateway et smoke tests d'agent.
-
-## Architecture
-
-<p align="center">
-  <img alt="Architecture d'exécution de l'assistant IA desktop AILIS" src="docs/assets/readme-localized/fr/ailis-architecture.png">
-</p>
-
-```text
-Utilisateur / Voix / Écran
-        |
-        v
-AILIS Desktop UI
-  - Personnage VRM
-  - Fenêtre de chat
-  - Panneau de contrôle
-        |
-        v
-Agent Harness
-  - planner
-  - tool router
-  - approval gate
-  - evidence log
-  - recovery loop
-        |
-        v
-Runtime Services
-  - model providers
-  - voice / ASR / TTS
-  - vision capture
-  - memory store
-  - local tools / MCP
-        |
-        v
-Validation
-  - tests
-  - evals
-  - smoke checks
-```
-
-## Structure du dépôt
-
-```text
-electron/   Processus principal Electron, preload bridge, services runtime, adaptateurs d'outils locaux
-src/        Applications renderer pour mascotte, chat, contrôle, voix, vision UI et bulles
-backend/    Backend FastAPI optionnel, schémas API, services mémoire et assets statiques
-Resources/  Modèle VRM, motions VRMA, audio de référence et assets personnage
-docs/       Architecture, mémoire, écosystème d'outils, évaluation et planning de release
-evals/      Scénarios d'expérience humaine et données d'évaluation long terme
-scripts/    Préparation runtime, validation, smoke tests, benchmarks et packaging
-tests/      Tests runtime, mémoire, outils, contrats, gateway et comportement agent
-```
+- [x] Personnage VRM résident, chat et panneau de contrôle sous Windows
+- [x] Interaction en temps réel par texte, voix, expressions et mouvements
+- [x] Contexte autorisé d'écran, fenêtres, fichiers et code
+- [x] Outils de recherche, Web, code, fichiers, e-mail et ordinateur
+- [x] Mémoire à long terme des préférences, projets et relations
+- [x] Approbation, preuves et récupération pour les actions importantes
+- [ ] Fiabilité, cache et récupération renforcés pour les tâches longues
+- [ ] Expérience voix temps réel, multi-appareils et plugins plus complète
 
 ## Démarrage rapide
+
+Téléchargez l'application depuis [Releases](https://github.com/haowenGuo/AILIS/releases/latest), ou découvrez AILIS via [l'expérience Web](https://101.133.239.56/Test/).
 
 ```bash
 pnpm install
 pnpm desktop:dev
 ```
 
-Construire et lancer:
+La construction, la voix, la validation, le backend optionnel et le packaging sont décrits dans [Getting Started](docs/getting-started.md).
 
-```bash
-pnpm desktop:start
-```
+## Direction
 
-Packager l'application Windows:
+AILIS n'est ni un chat de rôle sans capacité d'exécution, ni un terminal habillé d'un avatar.
 
-```bash
-pnpm desktop:package
-```
+1. **Un compagnon numérique présent** : conversation, voix, expressions, relations et mémoire.
+2. **Un Agent personnel fiable** : compréhension du contexte, outils généraux et tâches longues.
+3. **Un système compréhensible et contrôlable** : actions approuvées, progrès traçables et erreurs récupérables.
 
-Backend optionnel:
+## En savoir plus
 
-```bash
-python -m venv .venv
-.venv\Scripts\activate
-pip install -r requirements.txt
-copy backend\.env.example backend\.env
-python -m uvicorn backend.main:app --reload
-```
+<p align="center">
+  <a href="docs/getting-started.md"><strong>Installer et configurer</strong></a> ·
+  <a href="docs/README.md"><strong>Documentation</strong></a> ·
+  <a href="docs/evaluation.md"><strong>Évaluations</strong></a>
+</p>
 
-## Modèles et voix
+## Vie privée et contrôle
 
-La version actuelle se connecte au service de modèle via AILIS Cloud. Persona, mémoire, TaskAgent, approbations et outils de fichiers ou d'ordinateur continuent de fonctionner sur le PC de l'utilisateur.
-
-- Préparation optionnelle du runtime ASR local et TTS desktop.
-
-Ne committez jamais de vraies clés API, identifiants, transcriptions, logs runtime ou résultats d'évaluation générés.
-
-## Commandes utiles
-
-```bash
-pnpm test:ailis-runtime
-pnpm test:ailis-agent
-pnpm test:ailis-tool-contracts
-pnpm test:ailis-memory
-pnpm ailis:validate-harness
-```
-
-Validation Gateway complète:
-
-```bash
-pnpm ailis:validate-gateway
-```
-
-## Documents clés
-
-- [Embodied Agent Architecture](docs/ailis-embodied-agent-architecture.md)
-- [Memory Architecture V2](docs/ailis-memory-architecture-v2.md)
-- [Humanlike Eval](docs/ailis-humanlike-eval.md)
-- [Tool Ecosystem Driver Guide](docs/tool-ecosystem-driver-guide.md)
-
-## État du projet
-
-Ligne de release actuelle : `v1.4.0`.
-
-AILIS est en développement actif. Le runtime desktop, l'Agent Harness, la couche d'outils et la surface d'évaluation sont déjà importants, mais le projet doit encore être considéré comme un product/runtime en phase alpha plutôt qu'un Agent OS de production. Les priorités immédiates sont les contrats d'outils, les validations plus sûres, une meilleure mémoire, une configuration locale plus fluide et des évaluations end-to-end plus solides.
-
-## Confidentialité et sécurité
-
-- La capture visuelle est basée sur la permission et sert à comprendre le contexte.
-- Les actions qui affectent fichiers, applications, comptes ou services externes doivent passer par une approbation explicite.
-- La mémoire et l'état runtime restent locaux sauf choix contraire de l'utilisateur.
-- Les secrets doivent rester dans la configuration locale, jamais dans le dépôt.
+Le contexte visuel nécessite une autorisation. Les actions affectant fichiers, applications, comptes ou services externes passent par une approbation, et la mémoire locale ainsi que l'état Runtime restent par défaut sur l'ordinateur de l'utilisateur. Seul le contexte nécessaire à la requête active est envoyé au service modèle configuré.
 
 ## Licence
 
-Le code source d'AILIS est publié sous [MIT License](LICENSE). Certains assets, modèles, motions ou ressources vocales inclus ou tiers peuvent avoir leurs propres licences; vérifiez les notes associées avant redistribution.
+Le code source AILIS est publié sous [licence MIT](LICENSE). Certains modèles, mouvements, voix et ressources de personnage peuvent avoir leurs propres licences.

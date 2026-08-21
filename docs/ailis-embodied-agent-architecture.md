@@ -1,5 +1,7 @@
 # AILIS Embodied Agent Architecture
 
+> **Historical design record.** This page predates the current modular Agent Loop and `v1.4.0` public documentation. Read [System Architecture](architecture.md) for the maintained runtime description.
+
 ## 0. 结论
 
 AILIS 的目标不是把一个工具控制台套上二次元皮肤，也不是把执行能力削弱成普通聊天机器人。正确方向是：

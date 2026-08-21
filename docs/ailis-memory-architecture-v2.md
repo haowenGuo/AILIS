@@ -1,5 +1,7 @@
 # AILIS Memory Architecture V2
 
+> **Historical design record.** Read [AILIS Memory System](memory.md) for the maintained implementation, retrieval, privacy, and current-limit description.
+
 ## 0. 设计结论
 
 AILIS 的记忆系统建议做成一套 **Persona Memory Runtime**，而不是普通的 RAG 数据库。

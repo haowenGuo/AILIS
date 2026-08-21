@@ -1,5 +1,7 @@
 # AILIS 快速开始
 
+[文档中心](README.zh-CN.md) · [English](getting-started.md) · [系统架构](architecture.zh-CN.md)
+
 本页集中说明桌面开发、当前模型连接、语音运行时、可选后端、打包和基础验证。产品介绍请返回[项目首页](../README.zh-CN.md)。
 
 ## 环境准备
@@ -90,3 +92,10 @@ tests/      Runtime、Memory、Tools、Gateway 与 Agent 测试
 ## 密钥与本地数据
 
 不要把 API Key、账号凭证、聊天记录、运行日志或生成的评测结果提交到仓库。模型可见的对话上下文、工具结果，以及用户允许加入当前请求的图片或文件内容，可能发送给当前模型服务。工具实际执行和持久化记忆数据库默认保留在本机。
+
+## 继续阅读
+
+- 通过[系统架构](architecture.zh-CN.md)理解当前 Runtime。
+- 在 [TaskAgent Runtime](taskagent.zh-CN.md) 中跟踪完整执行链。
+- 通过[工具运行时](tools.zh-CN.md)了解当前能力。
+- 在[评测成绩](evaluation.zh-CN.md)中查看质量与效率数据。

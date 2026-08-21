@@ -1,5 +1,7 @@
 # AILIS Demo and Benchmark Scorecard
 
+> **Historical score-development record.** Current public results and same-model Codex comparisons are maintained in [AILIS Evaluation](evaluation.md).
+
 Generated: 2026-07-20
 
 ## Positioning

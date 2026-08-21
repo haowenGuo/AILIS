@@ -1,10 +1,17 @@
 <div align="center">
-  <h1>AILIS Assistant</h1>
-  <p><strong>VRM 캐릭터, 실시간 음성, 시각 컨텍스트, 기억, Codex 스타일 Agent Harness를 갖춘 오픈소스 데스크톱 체화형 AI 어시스턴트입니다.</strong></p>
+  <img width="220" alt="손을 흔드는 AILIS" src="Resources/Emotes/ailis/wave.png">
+  <h1>AILIS</h1>
+  <p><strong>보고, 듣고, 기억하며 실제 작업을 끝낼 수 있는 오픈소스 데스크톱 AI 동반자.</strong></p>
   <p>
-    <img alt="Version" src="https://img.shields.io/badge/version-1.4.0-2563eb?style=for-the-badge">
-    <img alt="Runtime" src="https://img.shields.io/badge/runtime-Electron-0f172a?style=for-the-badge">
-    <img alt="License" src="https://img.shields.io/badge/license-MIT-059669?style=for-the-badge">
+    <img alt="Version" src="https://img.shields.io/badge/version-1.4.0-2563eb?style=flat-square">
+    <img alt="Desktop" src="https://img.shields.io/badge/desktop-Electron-0f172a?style=flat-square">
+    <img alt="License" src="https://img.shields.io/badge/license-MIT-059669?style=flat-square">
+  </p>
+  <p>
+    <a href="https://101.133.239.56/Test/"><strong>AILIS 체험</strong></a> ·
+    <a href="https://github.com/haowenGuo/AILIS/releases/latest"><strong>다운로드</strong></a> ·
+    <a href="docs/getting-started.md">빠른 시작</a> ·
+    <a href="docs/README.md">문서</a>
   </p>
   <p>
     <a href="README.md">English</a> ·
@@ -16,161 +23,92 @@
   </p>
 </div>
 
----
+## 채팅 창 그 이상
 
-## AILIS란 무엇인가
+AILIS는 데스크톱에서 실제로 함께하는 개인 AI를 목표로 합니다. 보이는 3D 캐릭터, 음성, 표정, 장기 기억에 더해 조사, 파일 읽기, 코드 작성, 콘텐츠 정리, 컴퓨터 조작을 수행하는 Agent Runtime을 갖추고 있습니다.
 
-AILIS Assistant는 데스크톱 우선으로 설계된 체화형 AI 어시스턴트입니다. 3D VRM 캐릭터, Electron 데스크톱 창, 음성 상호작용, 스크린샷 기반 시각 컨텍스트, 기억, 구조화된 Agent Runtime을 하나의 시스템으로 묶습니다.
+자연스럽게 말하면 허용된 화면과 파일 컨텍스트를 이해하고, 알맞은 도구를 선택해 작업을 완료하며, 다음 협업에 필요한 선호를 기억합니다.
 
-AILIS는 단순한 웹 챗봇이 아닙니다. 사용자의 허가를 받아 화면 맥락을 이해하고, 유용한 선호를 기억하며, 명시적으로 승인된 도구를 통해 실제 작업을 돕는 개인 데스크톱 어시스턴트를 목표로 합니다.
+## 핵심 경험
+
+<table>
+  <tr>
+    <td width="33%" valign="top"><h3>존재감</h3>표정, 모션, 립싱크, 말풍선을 지원하는 VRM 데스크톱 캐릭터.</td>
+    <td width="33%" valign="top"><h3>자연스러운 대화</h3>빠른 텍스트 상호작용과 음성 입력·출력을 함께 제공합니다.</td>
+    <td width="33%" valign="top"><h3>컨텍스트 이해</h3>허용된 화면, 창, 영역, 로컬 파일을 이해합니다.</td>
+  </tr>
+  <tr>
+    <td width="33%" valign="top"><h3>실행 능력</h3>검색, 코드, 파일, 웹, 이메일, 컴퓨터 작업을 하나의 감사 가능한 경로로 실행합니다.</td>
+    <td width="33%" valign="top"><h3>장기 기억</h3>선호, 프로젝트 배경, 관계 컨텍스트를 보존해 협업을 개선합니다.</td>
+    <td width="33%" valign="top"><h3>제어 가능</h3>중요한 작업은 승인과 감사 흐름을 거쳐 계획과 결과를 확인할 수 있습니다.</td>
+  </tr>
+</table>
+
+## AILIS의 동작 방식
+
+| 1. 설명 | 2. 이해 | 3. 실행 | 4. 기억 |
+| :---: | :---: | :---: | :---: |
+| 목표를 자연스럽게 설명 | 허용된 화면과 파일 읽기 | 검색, 코드, 파일, 컴퓨터 도구 사용 | 선호와 프로젝트 배경 유지 |
+
+## 평가된 Agent 능력
+
+AILIS는 기능 데모가 아니라 완전한 엔드투엔드 작업으로 평가됩니다. 동일한 Luna 모델에서 AILIS Agent Harness는 Codex와 같은 성능 구간에 도달했습니다.
+
+| Benchmark | AILIS | Codex, 동일 모델 |
+| :--- | ---: | ---: |
+| **GAIA public validation · 165 tasks** | **72.12%** | 64.85% |
+| **Terminal-Bench 2.1 · 89 tasks** | 67.42% | **75.73% ± 1.32%** |
 
 <p align="center">
-  <img alt="AILIS를 데스크톱 AI 동반자로 사용하는 흐름" src="docs/assets/readme-localized/ko/ailis-user-flow.png">
+  <strong>ToolSandbox 71.51%</strong> ·
+  <strong>LongMemEval-S 71.60%</strong> ·
+  <strong>PersonaMem 65.71%</strong>
 </p>
 
-## 프로젝트 방향
+<p align="center"><a href="docs/evaluation.md"><strong>전체 점수, 효율 지표, 재현 가능한 근거 보기</strong></a></p>
 
-AILIS는 표현력 있는 캐릭터 경험과 신뢰할 수 있는 작업 실행 능력을 함께 추구합니다.
+## 현재 제공되는 기능
 
-- 존재감, 표정, 동작, 음성, 관계감을 가진 캐릭터 레이어.
-- 계획, 도구 라우팅, 승인, 증거 로그, 복구를 담당하는 Agent Harness.
-- 중요한 도구 작업을 승인하고 기록하며 실패에서 복구할 수 있는 데스크톱 runtime.
-
-## 현재 기능
-
-- 표정, 모션, 립싱크, 대화 말풍선을 지원하는 VRM 데스크톱 캐릭터.
-- Electron 펫 창, 채팅 창, 제어판, 트레이 통합, 로컬 상태 저장.
-- 데스크톱 TTS worker, 클라우드 음성 경로, 선택적 로컬 음성 인식 worker.
-- 스크린샷, 창, 영역 캡처를 통한 권한 인식 시각 컨텍스트.
-- 기억 블록, 프로젝트 컨텍스트, 관계 상태, 가벼운 reflection.
-- 파일, 코드, 컴퓨터 조작, 이메일, MCP 기술, Web/Search, 로컬 runtime 도구 레이어.
-- 파일, 앱, 계정, 외부 서비스에 영향을 주는 작업을 위한 명시적 승인 모델.
-- 인간다운 경험 평가, 도구 계약 테스트, Gateway 검사, Agent 실행 smoke test.
-
-## 아키텍처
-
-<p align="center">
-  <img alt="AILIS 데스크톱 AI 실행 아키텍처" src="docs/assets/readme-localized/ko/ailis-architecture.png">
-</p>
-
-```text
-사용자 / 음성 / 화면
-        |
-        v
-AILIS Desktop UI
-  - VRM 캐릭터
-  - 채팅 창
-  - 제어판
-        |
-        v
-Agent Harness
-  - planner
-  - tool router
-  - approval gate
-  - evidence log
-  - recovery loop
-        |
-        v
-Runtime Services
-  - model providers
-  - voice / ASR / TTS
-  - vision capture
-  - memory store
-  - local tools / MCP
-        |
-        v
-Validation
-  - tests
-  - evals
-  - smoke checks
-```
-
-## 저장소 구조
-
-```text
-electron/   Electron 메인 프로세스, preload bridge, runtime service, 로컬 도구 adapter
-src/        펫, 채팅, 제어판, 음성, 시각 UI, 말풍선 renderer 앱
-backend/    선택적 FastAPI backend, API schema, 기억 service, 정적 asset
-Resources/  VRM model, VRMA motion, reference audio, character asset
-docs/       아키텍처, 기억, 도구 생태계, 평가, release planning
-evals/      인간다운 경험과 장기 동반자 평가 scenario data
-scripts/    runtime 준비, validation, smoke test, benchmark, packaging helper
-tests/      runtime, memory, tools, contracts, gateway, agent behavior 테스트
-```
+- [x] Windows 상주 VRM 캐릭터, 채팅 창, 제어판
+- [x] 텍스트, 음성, 표정, 모션 기반 실시간 상호작용
+- [x] 권한을 고려한 화면, 창, 파일, 코드 컨텍스트
+- [x] 검색, 웹, 코드, 파일, 이메일, 컴퓨터 작업 도구
+- [x] 선호, 프로젝트, 관계 컨텍스트 장기 기억
+- [x] 중요한 작업을 위한 승인, 근거, 복구 경로
+- [ ] 장기 작업의 신뢰성, 캐시, 복구 강화
+- [ ] 더 완전한 실시간 음성, 크로스 디바이스, 플러그인 경험
 
 ## 빠른 시작
+
+[Releases](https://github.com/haowenGuo/AILIS/releases/latest)에서 데스크톱 빌드를 받거나 [웹 체험](https://101.133.239.56/Test/)으로 먼저 만나볼 수 있습니다.
 
 ```bash
 pnpm install
 pnpm desktop:dev
 ```
 
-빌드 후 실행:
+빌드, 음성, 검증, 선택적 백엔드, 패키징은 [Getting Started](docs/getting-started.md)를 참고하세요.
 
-```bash
-pnpm desktop:start
-```
+## 프로젝트 방향
 
-Windows 데스크톱 앱 패키징:
+AILIS는 실행 능력이 없는 역할극 채팅도, 아바타를 씌운 터미널도 아닙니다.
 
-```bash
-pnpm desktop:package
-```
+1. **존재감 있는 디지털 동반자**: 대화, 음성, 표정, 관계, 장기 기억.
+2. **신뢰할 수 있는 개인 Agent**: 컨텍스트 이해, 범용 도구, 장기 작업 실행.
+3. **이해하고 제어할 수 있는 실행 시스템**: 승인된 작업, 추적 가능한 진행, 복구 가능한 실패.
 
-선택적 backend:
+## 더 알아보기
 
-```bash
-python -m venv .venv
-.venv\Scripts\activate
-pip install -r requirements.txt
-copy backend\.env.example backend\.env
-python -m uvicorn backend.main:app --reload
-```
+<p align="center">
+  <a href="docs/getting-started.md"><strong>설치와 설정</strong></a> ·
+  <a href="docs/README.md"><strong>문서 센터</strong></a> ·
+  <a href="docs/evaluation.md"><strong>평가 결과</strong></a>
+</p>
 
-## 모델 및 음성 설정
+## 개인정보와 제어
 
-현재 릴리스는 AILIS Cloud를 통해 모델 서비스에 연결합니다. Persona, Memory, TaskAgent, 승인, 파일 및 컴퓨터 도구 실행은 사용자의 PC에서 동작합니다.
-
-- 선택적 local ASR 및 desktop TTS runtime preparation.
-
-실제 API key, 계정 자격 증명, 대화 기록, runtime log, 생성된 eval output을 저장소에 커밋하지 마세요.
-
-## 자주 쓰는 명령
-
-```bash
-pnpm test:ailis-runtime
-pnpm test:ailis-agent
-pnpm test:ailis-tool-contracts
-pnpm test:ailis-memory
-pnpm ailis:validate-harness
-```
-
-전체 Gateway 검증:
-
-```bash
-pnpm ailis:validate-gateway
-```
-
-## 핵심 문서
-
-- [Embodied Agent Architecture](docs/ailis-embodied-agent-architecture.md)
-- [Memory Architecture V2](docs/ailis-memory-architecture-v2.md)
-- [Humanlike Eval](docs/ailis-humanlike-eval.md)
-- [Tool Ecosystem Driver Guide](docs/tool-ecosystem-driver-guide.md)
-
-## 상태
-
-현재 release line: `v1.4.0`.
-
-AILIS는 활발히 개발 중입니다. 데스크톱 runtime, Agent Harness, 도구 레이어, 평가 표면은 이미 상당하지만, 아직 production-grade Agent OS가 아니라 alpha 단계의 product/runtime으로 보는 것이 맞습니다. 단기 우선순위는 도구 계약, 승인 안전성, 기억 품질, 장기 작업, end-to-end 평가를 강화하는 것입니다.
-
-## 개인정보와 안전
-
-- 시각 캡처는 권한을 전제로 하며, 맥락 이해를 위해 사용됩니다.
-- 파일, 앱, 계정, 외부 서비스에 영향을 주는 작업은 명시적 승인을 거칩니다.
-- 기억과 runtime state는 사용자가 선택하지 않는 한 로컬에 남습니다.
-- secret은 로컬 설정에 두고 source control에 포함하지 않습니다.
+시각 컨텍스트에는 사용자의 허가가 필요합니다. 파일, 앱, 계정, 외부 서비스에 영향을 주는 작업은 승인 흐름에 들어가며 로컬 기억과 Runtime 상태는 기본적으로 사용자 컴퓨터에 남습니다. 현재 요청에 필요한 컨텍스트만 설정된 모델 서비스로 전송됩니다.
 
 ## 라이선스
 
-AILIS source code는 [MIT License](LICENSE)로 공개됩니다. 일부 bundled asset, third-party model, motion, voice resource는 별도 라이선스를 가질 수 있으므로 재배포 전에 각 asset 설명을 확인하세요.
+AILIS 소스 코드는 [MIT License](LICENSE)로 공개됩니다. 일부 모델, 모션, 음성, 캐릭터 자산에는 별도 라이선스가 적용될 수 있습니다.

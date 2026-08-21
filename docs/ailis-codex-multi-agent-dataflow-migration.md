@@ -1,5 +1,7 @@
 # AILIS Codex Multi-Agent Data-Flow Migration
 
+> **Historical migration record.** The maintained product flow is documented in [System Architecture](architecture.md) and [TaskAgent Runtime](taskagent.md).
+
 Date: 2026-07-11
 
 ## Source Baseline

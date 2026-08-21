@@ -1,10 +1,17 @@
 <div align="center">
-  <h1>AILIS Assistant</h1>
-  <p><strong>VRM キャラクター、リアルタイム音声、視覚コンテキスト、記憶、Codex 風の Agent Harness を備えたオープンソースのデスクトップ具身 AI アシスタントです。</strong></p>
+  <img width="220" alt="手を振る AILIS" src="Resources/Emotes/ailis/wave.png">
+  <h1>AILIS</h1>
+  <p><strong>見て、聞いて、記憶し、実際の仕事を完了できるオープンソースのデスクトップ AI コンパニオン。</strong></p>
   <p>
-    <img alt="Version" src="https://img.shields.io/badge/version-1.4.0-2563eb?style=for-the-badge">
-    <img alt="Runtime" src="https://img.shields.io/badge/runtime-Electron-0f172a?style=for-the-badge">
-    <img alt="License" src="https://img.shields.io/badge/license-MIT-059669?style=for-the-badge">
+    <img alt="Version" src="https://img.shields.io/badge/version-1.4.0-2563eb?style=flat-square">
+    <img alt="Desktop" src="https://img.shields.io/badge/desktop-Electron-0f172a?style=flat-square">
+    <img alt="License" src="https://img.shields.io/badge/license-MIT-059669?style=flat-square">
+  </p>
+  <p>
+    <a href="https://101.133.239.56/Test/"><strong>AILIS を試す</strong></a> ·
+    <a href="https://github.com/haowenGuo/AILIS/releases/latest"><strong>ダウンロード</strong></a> ·
+    <a href="docs/getting-started.md">クイックスタート</a> ·
+    <a href="docs/README.md">ドキュメント</a>
   </p>
   <p>
     <a href="README.md">English</a> ·
@@ -16,161 +23,92 @@
   </p>
 </div>
 
----
+## チャットウィンドウを超えて
 
-## AILIS とは
+AILIS は、デスクトップ上で実際に共に過ごすパーソナル AI を目指しています。見える 3D キャラクター、音声、表情、長期記憶に加え、調査、ファイル読解、コード作成、情報整理、コンピューター操作を行う Agent Runtime を備えています。
 
-AILIS Assistant は、デスクトップを中心に設計された具身 AI アシスタントです。3D VRM キャラクター、Electron デスクトップウィンドウ、音声対話、スクリーンショットに基づく視覚コンテキスト、記憶、構造化された Agent Runtime を一つのシステムにまとめています。
+自然な言葉で話しかけるだけで、許可された画面やファイルのコンテキストを理解し、適切なツールを選び、タスクを完了し、次回に役立つ好みを記憶します。
 
-AILIS は単なる Web チャットボットではありません。ユーザーと自然に会話し、許可された範囲で画面コンテキストを理解し、有用な好みを記憶し、明示的に承認されたツールを通じて実作業を支援することを目指しています。
+## コア体験
+
+<table>
+  <tr>
+    <td width="33%" valign="top"><h3>存在感</h3>表情、モーション、リップシンク、吹き出しを備えた VRM デスクトップキャラクター。</td>
+    <td width="33%" valign="top"><h3>自然な対話</h3>高速なテキスト操作と、音声入力・自然な音声出力を両立します。</td>
+    <td width="33%" valign="top"><h3>コンテキスト理解</h3>許可された画面、ウィンドウ、領域、ローカルファイルを理解します。</td>
+  </tr>
+  <tr>
+    <td width="33%" valign="top"><h3>実行能力</h3>検索、コード、ファイル、Web、メール、コンピューター操作を一つの監査可能な経路で実行します。</td>
+    <td width="33%" valign="top"><h3>長期記憶</h3>好み、プロジェクト背景、関係コンテキストを保存し、協働を改善します。</td>
+    <td width="33%" valign="top"><h3>制御可能</h3>重要な操作は承認と監査を通り、計画と結果を確認できます。</td>
+  </tr>
+</table>
+
+## AILIS の動作
+
+| 1. 伝える | 2. 理解する | 3. 実行する | 4. 記憶する |
+| :---: | :---: | :---: | :---: |
+| 目的を自然に説明 | 許可された画面とファイルを読む | 検索、コード、ファイル、コンピューターツールを使う | 好みとプロジェクト背景を保存 |
+
+## 評価された Agent 能力
+
+AILIS は機能デモだけでなく、完全なエンドツーエンドタスクで評価されています。同じ Luna モデルでは、AILIS の Agent Harness は Codex と同等の性能帯に到達しています。
+
+| Benchmark | AILIS | Codex、同一モデル |
+| :--- | ---: | ---: |
+| **GAIA public validation · 165 tasks** | **72.12%** | 64.85% |
+| **Terminal-Bench 2.1 · 89 tasks** | 67.42% | **75.73% ± 1.32%** |
 
 <p align="center">
-  <img alt="AILIS をデスクトップ AI パートナーとして使う流れ" src="docs/assets/readme-localized/ja/ailis-user-flow.png">
+  <strong>ToolSandbox 71.51%</strong> ·
+  <strong>LongMemEval-S 71.60%</strong> ·
+  <strong>PersonaMem 65.71%</strong>
 </p>
 
-## プロジェクトの方向性
+<p align="center"><a href="docs/evaluation.md"><strong>完全なスコア、効率指標、再現可能な証拠を見る</strong></a></p>
 
-多くのアシスタントは、表現力のあるアバターだが実行能力が弱いもの、または強力だが開発者コンソールのように感じるものに分かれがちです。AILIS はその両方をつなぐことを目指します。
+## 現在利用できる機能
 
-- 存在感、表情、動作、音声、関係性を持つキャラクター体験。
-- 計画、ツールルーティング、承認、証拠ログ、回復を扱う Agent Harness。
-- 重要なツール操作を承認・記録し、失敗から回復できるデスクトップ runtime。
-
-## 現在の機能
-
-- 表情、モーション、リップシンク、吹き出しを備えた VRM デスクトップキャラクター。
-- Electron のペットウィンドウ、チャットウィンドウ、コントロールパネル、トレイ統合、ローカル状態保存。
-- デスクトップ TTS worker、クラウド音声経路、オプションのローカル音声認識 worker。
-- スクリーンショット、ウィンドウ、領域キャプチャによる権限意識のある視覚コンテキスト。
-- 記憶ブロック、プロジェクトコンテキスト、関係状態、軽量なリフレクション。
-- ファイル、コード、コンピューター操作、メール、MCP スキル、Web/Search、ローカル runtime ツール層。
-- ファイル、アプリ、アカウント、外部サービスに影響する操作のための明示的承認モデル。
-- 人間らしさの評価、ツール契約テスト、Gateway チェック、Agent 実行 smoke test。
-
-## アーキテクチャ
-
-<p align="center">
-  <img alt="AILIS デスクトップ AI の実行アーキテクチャ" src="docs/assets/readme-localized/ja/ailis-architecture.png">
-</p>
-
-```text
-ユーザー / 音声 / 画面
-        |
-        v
-AILIS Desktop UI
-  - VRM キャラクター
-  - チャットウィンドウ
-  - コントロールパネル
-        |
-        v
-Agent Harness
-  - プランナー
-  - ツールルーター
-  - 承認ゲート
-  - 証拠ログ
-  - 回復ループ
-        |
-        v
-Runtime Services
-  - モデルプロバイダー
-  - 音声 / ASR / TTS
-  - 視覚キャプチャ
-  - 記憶ストア
-  - ローカルツール / MCP
-        |
-        v
-Validation
-  - テスト
-  - 評価
-  - smoke check
-```
-
-## リポジトリ構成
-
-```text
-electron/   Electron メインプロセス、preload bridge、runtime service、ローカルツール adapter
-src/        ペット、チャット、コントロールパネル、音声、視覚 UI、吹き出しの renderer
-backend/    任意の FastAPI backend、API schema、記憶 service、静的 asset
-Resources/  VRM model、VRMA motion、reference audio、character asset
-docs/       アーキテクチャ、記憶、ツールエコシステム、評価、release planning
-evals/      人間らしさと長期コンパニオン評価の scenario data
-scripts/    runtime 準備、validation、smoke test、benchmark、package helper
-tests/      runtime、memory、tools、contracts、gateway、agent behavior の test
-```
+- [x] Windows 上の常駐 VRM キャラクター、チャット、コントロールパネル
+- [x] テキスト、音声、表情、モーションによるリアルタイム対話
+- [x] 権限を考慮した画面、ウィンドウ、ファイル、コードのコンテキスト
+- [x] 検索、Web、コード、ファイル、メール、コンピューター操作ツール
+- [x] 好み、プロジェクト、関係コンテキストの長期記憶
+- [x] 重要な操作の承認、証拠、回復経路
+- [ ] 長期タスクの信頼性、キャッシュ、回復のさらなる改善
+- [ ] より完全なリアルタイム音声、クロスデバイス、プラグイン体験
 
 ## クイックスタート
+
+[Releases](https://github.com/haowenGuo/AILIS/releases/latest) からデスクトップ版を入手するか、[Web 体験](https://101.133.239.56/Test/) で AILIS を試せます。
 
 ```bash
 pnpm install
 pnpm desktop:dev
 ```
 
-ビルドして起動:
+ビルド、音声、検証、オプションのバックエンド、パッケージングは [Getting Started](docs/getting-started.md) を参照してください。
 
-```bash
-pnpm desktop:start
-```
+## プロジェクトの方向
 
-Windows デスクトップアプリをパッケージ:
+AILIS は、実行能力のないロールプレイチャットでも、アバターを被せただけのターミナルでもありません。
 
-```bash
-pnpm desktop:package
-```
+1. **存在感のあるデジタルコンパニオン**：対話、音声、表情、関係、長期記憶。
+2. **信頼できるパーソナル Agent**：コンテキスト理解、汎用ツール、長期タスク実行。
+3. **理解・制御できる実行システム**：承認された操作、追跡可能な進捗、回復可能な失敗。
 
-任意の backend:
+## 詳細
 
-```bash
-python -m venv .venv
-.venv\Scripts\activate
-pip install -r requirements.txt
-copy backend\.env.example backend\.env
-python -m uvicorn backend.main:app --reload
-```
+<p align="center">
+  <a href="docs/getting-started.md"><strong>インストールと設定</strong></a> ·
+  <a href="docs/README.md"><strong>ドキュメント</strong></a> ·
+  <a href="docs/evaluation.md"><strong>評価結果</strong></a>
+</p>
 
-## モデルと音声設定
+## プライバシーと制御
 
-現在のリリースは AILIS Cloud を通じてモデルサービスに接続します。Persona、Memory、TaskAgent、承認、ファイルとコンピュータのツール実行はユーザーの PC 上で動作します。
-
-- 任意の local ASR と desktop TTS runtime preparation。
-
-本物の API key、アカウント認証情報、会話ログ、runtime log、生成された eval output を repository に commit しないでください。
-
-## よく使うコマンド
-
-```bash
-pnpm test:ailis-runtime
-pnpm test:ailis-agent
-pnpm test:ailis-tool-contracts
-pnpm test:ailis-memory
-pnpm ailis:validate-harness
-```
-
-重い full gateway validation:
-
-```bash
-pnpm ailis:validate-gateway
-```
-
-## 主要ドキュメント
-
-- [Embodied Agent Architecture](docs/ailis-embodied-agent-architecture.md)
-- [Memory Architecture V2](docs/ailis-memory-architecture-v2.md)
-- [Humanlike Eval](docs/ailis-humanlike-eval.md)
-- [Tool Ecosystem Driver Guide](docs/tool-ecosystem-driver-guide.md)
-
-## 状態
-
-現在の release line: `v1.4.0`。
-
-AILIS は活発に開発中です。デスクトップ runtime、Agent Harness、ツール層、評価基盤はすでに大きく育っていますが、現時点では production-grade Agent OS ではなく alpha 段階の product/runtime として扱うべきです。短期的な重点は、ツール契約、承認、安全性、記憶品質、長時間タスク、end-to-end 評価の改善です。
-
-## プライバシーと安全性
-
-- 視覚キャプチャは権限を前提とし、コンテキスト理解のために使います。
-- ファイル、アプリ、アカウント、外部サービスに影響する操作は明示的承認を通します。
-- 記憶と runtime state は、ユーザーが選ばない限りローカルに残します。
-- secret はローカル設定に置き、source control に含めません。
+視覚コンテキストには許可が必要です。ファイル、アプリ、アカウント、外部サービスに影響する操作は承認フローに入り、ローカル記憶と Runtime 状態は標準でユーザーのコンピューターに残ります。現在のリクエストに必要なコンテキストだけが設定されたモデルサービスへ送信されます。
 
 ## ライセンス
 
-AILIS の source code は [MIT License](LICENSE) で公開されています。一部の bundled asset、third-party model、motion、voice resource には個別のライセンスがある場合があります。再配布前に各 asset の説明を確認してください。
+AILIS のソースコードは [MIT License](LICENSE) で公開されています。一部のモデル、モーション、音声、キャラクター資産には個別のライセンスが適用されます。
