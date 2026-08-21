@@ -1,8 +1,5 @@
-<picture>
-  <img width="100%" alt="How people use AILIS" src="docs/assets/readme-localized/en/ailis-user-flow.png">
-</picture>
-
 <div align="center">
+  <img width="220" alt="AILIS waving" src="Resources/Emotes/ailis/wave.png">
   <h1>AILIS</h1>
   <p><strong>An open-source desktop AI companion that can see, listen, remember, and get real work done.</strong></p>
   <p>
@@ -43,17 +40,15 @@ Talk to AILIS naturally, like a companion. When there is work to do, she can und
   <tr>
     <td width="33%" valign="top"><h3>Capable</h3>Search, code, files, web, email, and computer actions share one auditable tool execution path.</td>
     <td width="33%" valign="top"><h3>Memorable</h3>Long-term memory keeps useful preferences, project background, and relationship context for better collaboration.</td>
-    <td width="33%" valign="top"><h3>Yours</h3>Use AILIS Cloud, OpenAI-compatible APIs, Ollama, or vLLM. Memory and tool execution remain local-first.</td>
+    <td width="33%" valign="top"><h3>Controllable</h3>Important tool actions enter approval and audit flows, so users know what the system plans to do and what it has done.</td>
   </tr>
 </table>
 
-## One Character, a Complete Agent Runtime
+## How AILIS Works
 
-<picture>
-  <img width="100%" alt="AILIS runtime architecture for a desktop AI character" src="docs/assets/readme-localized/en/ailis-architecture.png">
-</picture>
-
-AILIS separates the character experience, Agent execution, tools and memory, and model providers into clear layers. The experience can become more natural without giving up replaceable providers, approvals, recovery, or auditability.
+| 1. Describe | 2. Understand | 3. Execute | 4. Remember |
+| :---: | :---: | :---: | :---: |
+| Explain the goal naturally | Read approved screen and file context | Use search, code, file, and computer tools | Keep useful preferences and project background |
 
 ## Evaluated Agent Capability
 
@@ -81,7 +76,6 @@ AILIS is tested on complete end-to-end tasks, not only feature demos. With the s
 - [x] Permission-aware screen, window, file, and code context
 - [x] Search, web, code, file, email, and computer-operation tools
 - [x] Long-term memory for preferences, projects, and relationship context
-- [x] AILIS Cloud, OpenAI-compatible services, Ollama, and vLLM
 - [x] Approval, evidence, and recovery paths for consequential tool actions
 - [ ] Stronger reliability, caching, and recovery for long-horizon work
 - [ ] A more complete realtime voice, cross-device, and plugin experience
@@ -107,20 +101,19 @@ AILIS is neither a roleplay chat app with no execution ability nor a terminal wr
 
 1. **A digital companion with presence**: conversation, voice, expression, relationships, and long-term memory.
 2. **A reliable personal Agent**: contextual understanding, general tools, and long-horizon task execution.
-3. **A user-owned runtime**: replaceable models, controllable data, approved actions, and an extensible system.
+3. **An understandable, controllable execution system**: approved actions, traceable progress, and recoverable failures.
 
-## Documentation
+## Learn More
 
-| Start Using AILIS | Understand the System |
-| :--- | :--- |
-| [Install and configure](docs/getting-started.md) | [Embodied Agent architecture](docs/ailis-embodied-agent-architecture.md) |
-| [Documentation index](docs/README.md) | [TaskAgent architecture](docs/ailis-system-taskagent-architecture.md) |
-| [Versions and releases](docs/ailis-version-registry.md) | [Memory system](docs/ailis-memory-architecture-v2.md) |
-| [Complete evaluation scorecard](docs/ailis-evaluation-master-scorecard-20260817.md) | [Tool ecosystem](docs/tool-ecosystem-driver-guide.md) |
+<p align="center">
+  <a href="docs/getting-started.md"><strong>Install and Configure</strong></a> ·
+  <a href="docs/README.md"><strong>Documentation Center</strong></a> ·
+  <a href="docs/ailis-evaluation-master-scorecard-20260817.md"><strong>Complete Evaluation Scorecard</strong></a>
+</p>
 
 ## Privacy and Control
 
-AILIS is built for personal desktop use. Visual context requires permission, actions that affect files, apps, accounts, or external services enter an approval flow, and local memory and runtime state remain on the user's machine by default. You can use a managed model, bring your own API, or run a fully local model service.
+AILIS is built for personal desktop use. Visual context requires permission, actions that affect files, apps, accounts, or external services enter an approval flow, and local memory and runtime state remain on the user's machine by default. Only context needed for the current request is sent to the configured model service.
 
 ## License
 

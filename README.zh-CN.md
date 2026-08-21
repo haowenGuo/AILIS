@@ -1,8 +1,5 @@
-<picture>
-  <img width="100%" alt="普通人如何使用 AILIS" src="docs/assets/ailis-zhihu/ailis-user-flow-image2.png">
-</picture>
-
 <div align="center">
+  <img width="220" alt="AILIS 向你挥手" src="Resources/Emotes/ailis/wave.png">
   <h1>AILIS</h1>
   <p><strong>能看、能听、能记住，也能真正把事情做完的开源桌面 AI 伙伴。</strong></p>
   <p>
@@ -14,7 +11,7 @@
     <a href="https://101.133.239.56/Test/"><strong>在线体验</strong></a> ·
     <a href="https://github.com/haowenGuo/AILIS/releases/latest"><strong>下载桌面版</strong></a> ·
     <a href="docs/getting-started.zh-CN.md">快速开始</a> ·
-    <a href="docs/README.md">文档</a>
+    <a href="docs/README.zh-CN.md">文档</a>
   </p>
   <p>
     <a href="README.md">English</a> ·
@@ -43,17 +40,15 @@ AILIS 希望成为真正生活在桌面上的个人 AI。她有可见的 3D 角�
   <tr>
     <td width="33%" valign="top"><h3>会做事</h3>搜索、代码、文件、网页、邮件与电脑操作统一进入可审计的工具执行链。</td>
     <td width="33%" valign="top"><h3>记得你</h3>长期记忆保存偏好、项目背景和关系状态，让后续协作更自然、更准确。</td>
-    <td width="33%" valign="top"><h3>属于你</h3>支持 AILIS Cloud、OpenAI 兼容 API、Ollama 与 vLLM；记忆和工具执行优先留在本机。</td>
+    <td width="33%" valign="top"><h3>可控制</h3>重要工具动作进入审批与记录流程，用户始终知道系统准备做什么、已经做了什么。</td>
   </tr>
 </table>
 
-## 一个角色，一套完整 Agent Runtime
+## AILIS 如何工作
 
-<picture>
-  <img width="100%" alt="AILIS 桌面 AI 角色运行架构" src="docs/assets/ailis-zhihu/ailis-architecture-image2.png">
-</picture>
-
-AILIS 将角色体验、Agent 执行、工具与记忆、模型供应商分成清晰的层次。上层可以持续变得更自然，底层仍保持可替换、可审批、可恢复和可审计。
+| 1. 说出需求 | 2. 理解现场 | 3. 调用工具 | 4. 记住重点 |
+| :---: | :---: | :---: | :---: |
+| 用自然语言描述目标 | 读取获准的屏幕与文件 | 搜索、代码、文件与电脑操作 | 保存有价值的偏好与项目背景 |
 
 ## 已验证的任务执行能力
 
@@ -81,7 +76,6 @@ AILIS 不只展示功能，也持续用完整端到端任务检验 Agent Harness
 - [x] 在许可范围内读取屏幕、窗口、文件与代码上下文
 - [x] 调用搜索、网页、代码、文件、邮件和电脑操作工具
 - [x] 保存长期记忆、用户偏好、项目上下文和关系状态
-- [x] 切换托管模型、OpenAI 兼容服务、Ollama 或 vLLM
 - [x] 对有影响的工具动作进行审批、记录与恢复
 - [ ] 进一步提升长程任务的稳定性、缓存效率和错误恢复
 - [ ] 让实时语音、跨设备体验和插件生态更加完整
@@ -107,20 +101,19 @@ AILIS 的目标不是做一个只会扮演角色的聊天应用，也不是把�
 
 1. **有存在感的数字伙伴**：自然对话、声音、表情、关系与长期记忆。
 2. **可靠的个人 Agent**：理解上下文，调用通用工具，完成长程任务。
-3. **用户拥有的运行时**：模型可替换、数据可掌控、动作可审批、系统可扩展。
+3. **可理解、可控制的执行系统**：工具动作可审批，过程可追踪，失败可以恢复。
 
-## 文档
+## 继续了解
 
-| 开始使用 | 深入了解 |
-| :--- | :--- |
-| [安装与配置](docs/getting-started.zh-CN.md) | [具身 Agent 架构](docs/ailis-embodied-agent-architecture.md) |
-| [完整文档导航](docs/README.md) | [TaskAgent 架构](docs/ailis-system-taskagent-architecture.md) |
-| [版本与发布](docs/ailis-version-registry.md) | [记忆系统](docs/ailis-memory-architecture-v2.md) |
-| [完整评测成绩](docs/ailis-evaluation-master-scorecard-20260817.md) | [工具生态](docs/tool-ecosystem-driver-guide.md) |
+<p align="center">
+  <a href="docs/getting-started.zh-CN.md"><strong>安装与配置</strong></a> ·
+  <a href="docs/README.zh-CN.md"><strong>中文文档中心</strong></a> ·
+  <a href="docs/ailis-evaluation-master-scorecard-20260817.md"><strong>完整评测成绩</strong></a>
+</p>
 
 ## 隐私与控制
 
-AILIS 面向个人桌面使用。视觉上下文需要用户许可；会影响文件、应用、账号或外部服务的动作进入审批流程；本地记忆与运行状态默认保存在用户机器上。你可以使用托管模型，也可以切换到自己的 API 或完全本地的模型服务。
+AILIS 面向个人桌面使用。视觉上下文需要用户许可；会影响文件、应用、账号或外部服务的动作进入审批流程；本地记忆与运行状态默认保存在用户机器上。发送给模型服务的内容以完成当前请求所需的上下文为限。
 
 ## License
 

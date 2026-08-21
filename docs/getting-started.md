@@ -1,6 +1,6 @@
 # Getting Started with AILIS
 
-This guide contains local development, model provider, voice runtime, optional backend, packaging, and validation instructions. Return to the [project homepage](../README.md) for the product overview.
+This guide contains desktop development, the current model connection, voice runtime, optional backend, packaging, and validation instructions. Return to the [project homepage](../README.md) for the product overview.
 
 ## Prerequisites
 
@@ -29,18 +29,9 @@ Build Windows installer and portable packages:
 pnpm desktop:package
 ```
 
-## Model Providers
+## Model Connection
 
-New desktop installations default to AILIS Cloud, so users can start without entering an API key. Persona orchestration, memory storage, TaskAgent, approvals, and computer and file tools continue to run on the user's PC. Model inference requests are relayed through the managed AILIS service.
-
-Advanced users can switch providers in the desktop control panel:
-
-- OpenAI-compatible cloud providers
-- Custom base URLs and model names
-- Ollama
-- Local vLLM endpoints
-
-See [Local LLM Providers](local-llm-providers.md) for the local model workflow.
+The current release uses AILIS Cloud to connect to the model service, so users can start without entering an API key. Persona orchestration, memory storage, TaskAgent, approvals, and computer and file tools continue to run on the user's PC. Model context required for the current request is relayed through the managed AILIS service.
 
 ## Voice Runtime
 
@@ -98,4 +89,4 @@ tests/      Runtime, memory, tool, Gateway, and Agent tests
 
 ## Secrets and Local Data
 
-Do not commit API keys, account credentials, chat transcripts, local model caches, runtime logs, or generated evaluation outputs. Model-visible conversation context, tool results, and user-approved image or file content can be sent to the selected model provider. Tool execution and persistent memory databases remain local by default.
+Do not commit API keys, account credentials, chat transcripts, runtime logs, or generated evaluation outputs. Model-visible conversation context, tool results, and user-approved image or file content can be sent to the current model service. Tool execution and persistent memory databases remain local by default.

@@ -34,13 +34,12 @@ AILIS cherche à combiner l'expressivité d'un personnage et la fiabilité d'un 
 
 - Une couche personnage avec présence, expressions, mouvements, voix et continuité relationnelle.
 - Un Agent Harness pour planifier, router les outils, demander validation, journaliser les preuves et récupérer après erreur.
-- Un runtime desktop local-first où les paramètres, mémoires, logs et modèles restent sous le contrôle de l'utilisateur.
+- Un runtime desktop où les actions importantes sont approuvées, journalisées et récupérables après erreur.
 
 ## Capacités actuelles
 
 - Personnage VRM desktop avec expressions, motions, lip sync et bulles de dialogue.
 - Fenêtre de mascotte Electron, fenêtre de chat, panneau de contrôle, intégration tray et état local persistant.
-- Configuration de fournisseurs de modèles compatibles OpenAI, avec base URL personnalisée et workflows locaux.
 - Workers TTS desktop, chemins de voix cloud et worker optionnel de reconnaissance vocale locale.
 - Contexte visuel avec permissions via captures d'écran, fenêtres et régions.
 - Blocs de mémoire, contexte de projet, état relationnel et réflexion légère.
@@ -130,15 +129,11 @@ python -m uvicorn backend.main:app --reload
 
 ## Modèles et voix
 
-AILIS n'est pas lié à un fournisseur unique. La configuration peut se faire via le panneau de contrôle desktop ou les fichiers d'environnement locaux.
+La version actuelle se connecte au service de modèle via AILIS Cloud. Persona, mémoire, TaskAgent, approbations et outils de fichiers ou d'ordinateur continuent de fonctionner sur le PC de l'utilisateur.
 
-- Fournisseurs cloud compatibles OpenAI.
-- Endpoints vLLM locaux.
-- Workflows locaux orientés Ollama.
-- Base URL, nom de modèle, timeout et clés privées personnalisés.
 - Préparation optionnelle du runtime ASR local et TTS desktop.
 
-Ne committez jamais de vraies clés API, identifiants, transcriptions, caches de modèles, logs runtime ou résultats d'évaluation générés.
+Ne committez jamais de vraies clés API, identifiants, transcriptions, logs runtime ou résultats d'évaluation générés.
 
 ## Commandes utiles
 

@@ -34,13 +34,12 @@ AILIS は単なる Web チャットボットではありません。ユーザー
 
 - 存在感、表情、動作、音声、関係性を持つキャラクター体験。
 - 計画、ツールルーティング、承認、証拠ログ、回復を扱う Agent Harness。
-- 設定、記憶、ログ、モデル構成をユーザーの手元に置くローカルファーストなデスクトップ runtime。
+- 重要なツール操作を承認・記録し、失敗から回復できるデスクトップ runtime。
 
 ## 現在の機能
 
 - 表情、モーション、リップシンク、吹き出しを備えた VRM デスクトップキャラクター。
 - Electron のペットウィンドウ、チャットウィンドウ、コントロールパネル、トレイ統合、ローカル状態保存。
-- カスタム base URL やローカルモデル運用を含む OpenAI 互換モデルプロバイダー設定。
 - デスクトップ TTS worker、クラウド音声経路、オプションのローカル音声認識 worker。
 - スクリーンショット、ウィンドウ、領域キャプチャによる権限意識のある視覚コンテキスト。
 - 記憶ブロック、プロジェクトコンテキスト、関係状態、軽量なリフレクション。
@@ -130,15 +129,11 @@ python -m uvicorn backend.main:app --reload
 
 ## モデルと音声設定
 
-AILIS はアプリケーション層で特定のモデル事業者に固定されません。デスクトップのコントロールパネルまたはローカル環境ファイルから設定できます。
+現在のリリースは AILIS Cloud を通じてモデルサービスに接続します。Persona、Memory、TaskAgent、承認、ファイルとコンピュータのツール実行はユーザーの PC 上で動作します。
 
-- OpenAI 互換クラウドプロバイダー。
-- ローカル vLLM endpoint。
-- Ollama 系のローカル workflow。
-- カスタム base URL、model name、timeout、private API key。
 - 任意の local ASR と desktop TTS runtime preparation。
 
-本物の API key、アカウント認証情報、会話ログ、ローカルモデル cache、runtime log、生成された eval output を repository に commit しないでください。
+本物の API key、アカウント認証情報、会話ログ、runtime log、生成された eval output を repository に commit しないでください。
 
 ## よく使うコマンド
 
@@ -167,7 +162,7 @@ pnpm ailis:validate-gateway
 
 現在の release line: `v1.4.0`。
 
-AILIS は活発に開発中です。デスクトップ runtime、Agent Harness、ツール層、評価基盤はすでに大きく育っていますが、現時点では production-grade Agent OS ではなく alpha 段階の product/runtime として扱うべきです。短期的な重点は、ツール契約、承認、安全性、記憶品質、ローカルモデル設定、end-to-end 評価の改善です。
+AILIS は活発に開発中です。デスクトップ runtime、Agent Harness、ツール層、評価基盤はすでに大きく育っていますが、現時点では production-grade Agent OS ではなく alpha 段階の product/runtime として扱うべきです。短期的な重点は、ツール契約、承認、安全性、記憶品質、長時間タスク、end-to-end 評価の改善です。
 
 ## プライバシーと安全性
 

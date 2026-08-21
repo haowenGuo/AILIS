@@ -34,13 +34,12 @@ AILIS verbindet eine ausdrucksstarke Charakterebene mit zuverlässiger Aufgabena
 
 - Eine Charakterebene mit Präsenz, Ausdrücken, Bewegungen, Stimme und Beziehungsgefühl.
 - Ein Agent Harness für Planung, Tool-Routing, Genehmigungen, Evidence Logs und Recovery.
-- Ein local-first Desktop Runtime, bei dem Einstellungen, Gedächtnis, Logs und Modellkonfiguration beim Nutzer bleiben.
+- Eine Desktop Runtime, in der wichtige Tool-Aktionen genehmigt, protokolliert und nach Fehlern wiederhergestellt werden können.
 
 ## Aktuelle Fähigkeiten
 
 - VRM-Desktopcharakter mit Ausdrücken, Bewegungen, Lip Sync und Dialogblasen.
 - Electron-Pet-Fenster, Chatfenster, Control Panel, Tray-Integration und lokaler persistenter Zustand.
-- Konfiguration OpenAI-kompatibler Modellanbieter, inklusive eigener base URL und lokaler Modell-Workflows.
 - Desktop-TTS-Worker, Cloud-Voice-Pfade und optionaler lokaler Spracherkennungs-Worker.
 - Berechtigungsbewusster visueller Kontext über Screenshot-, Fenster- und Region-Capture.
 - Memory Blocks, Projektkontext, Beziehungszustand und leichte Reflection.
@@ -130,15 +129,11 @@ python -m uvicorn backend.main:app --reload
 
 ## Modell- und Sprachkonfiguration
 
-AILIS ist auf Anwendungsebene nicht an einen einzelnen Modellanbieter gebunden. Die Konfiguration erfolgt über das Desktop Control Panel oder lokale Environment-Dateien.
+Die aktuelle Version verbindet sich über AILIS Cloud mit dem Modelldienst. Persona, Memory, TaskAgent, Genehmigungen sowie Datei- und Computer-Tools laufen weiterhin auf dem PC des Nutzers.
 
-- OpenAI-kompatible Cloud-Anbieter.
-- Lokale vLLM Endpoints.
-- Ollama-orientierte lokale Workflows.
-- Eigene base URL, model name, timeout und private API keys.
 - Optionale Vorbereitung von local ASR und desktop TTS runtime.
 
-Committen Sie niemals echte API keys, Zugangsdaten, Chat-Transkripte, lokale Modell-Caches, Runtime Logs oder generierte Eval-Ergebnisse.
+Committen Sie niemals echte API keys, Zugangsdaten, Chat-Transkripte, Runtime Logs oder generierte Eval-Ergebnisse.
 
 ## Nützliche Befehle
 
@@ -167,7 +162,7 @@ pnpm ailis:validate-gateway
 
 Aktuelle Release-Linie: `v1.4.0`.
 
-AILIS wird aktiv entwickelt. Desktop Runtime, Agent Harness, Tool-Layer und Evaluation Surface sind bereits substanziell, das Projekt sollte aber noch als Alpha-Produkt/Runtime und nicht als production-grade Agent OS betrachtet werden. Kurzfristige Prioritäten sind klarere Tool Contracts, sicherere Genehmigungen, bessere Memory-Qualität, einfachere lokale Modellkonfiguration und robustere End-to-End-Evaluation.
+AILIS wird aktiv entwickelt. Desktop Runtime, Agent Harness, Tool-Layer und Evaluation Surface sind bereits substanziell, das Projekt sollte aber noch als Alpha-Produkt/Runtime und nicht als production-grade Agent OS betrachtet werden. Kurzfristige Prioritäten sind klarere Tool Contracts, sicherere Genehmigungen, bessere Memory-Qualität, zuverlässigere Langzeitaufgaben und robustere End-to-End-Evaluation.
 
 ## Datenschutz und Sicherheit
 
