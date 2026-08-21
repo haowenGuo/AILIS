@@ -202,6 +202,8 @@ function buildPlanForProfile(profileName, profile, options, componentManifest, o
                 'electron-builder',
                 '--config',
                 profile.builderConfig || 'electron-builder.yml',
+                '--publish',
+                'never',
                 ...(profile.builderTargets || []),
                 `--config.directories.output=${outputDir}`
             ]
