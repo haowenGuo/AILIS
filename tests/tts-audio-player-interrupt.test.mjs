@@ -8,11 +8,11 @@ import { mapAudioEnvelopeToMouthValue, TTSAudioPlayer } from '../src/tts-audio-p
 test('audio envelope mapping keeps speech visible without over-opening the mouth', () => {
     assert.equal(mapAudioEnvelopeToMouthValue(0), 0);
     assert.equal(mapAudioEnvelopeToMouthValue(0.03), 0);
-    assert.ok(mapAudioEnvelopeToMouthValue(0.08) >= 0.18);
-    assert.ok(mapAudioEnvelopeToMouthValue(0.08) <= 0.24);
-    assert.ok(mapAudioEnvelopeToMouthValue(0.25) >= 0.4);
-    assert.ok(mapAudioEnvelopeToMouthValue(0.25) <= 0.5);
-    assert.equal(mapAudioEnvelopeToMouthValue(1), 0.72);
+    assert.ok(mapAudioEnvelopeToMouthValue(0.08) >= 0.25);
+    assert.ok(mapAudioEnvelopeToMouthValue(0.08) <= 0.3);
+    assert.ok(mapAudioEnvelopeToMouthValue(0.25) >= 0.5);
+    assert.ok(mapAudioEnvelopeToMouthValue(0.25) <= 0.57);
+    assert.equal(mapAudioEnvelopeToMouthValue(1), 0.86);
 });
 
 test('audio envelope mapping preserves visible articulation during sustained speech', () => {
@@ -20,11 +20,12 @@ test('audio envelope mapping preserves visible articulation during sustained spe
     const midSyllable = mapAudioEnvelopeToMouthValue(0.25, 0.5);
     const openSyllable = mapAudioEnvelopeToMouthValue(0.25, 1);
 
-    assert.ok(closedSyllable >= 0.1);
+    assert.ok(closedSyllable >= 0.07);
+    assert.ok(closedSyllable <= 0.1);
     assert.ok(closedSyllable < midSyllable);
     assert.ok(midSyllable < openSyllable);
-    assert.ok(openSyllable - closedSyllable >= 0.3);
-    assert.equal(mapAudioEnvelopeToMouthValue(1, 1), 0.72);
+    assert.ok(openSyllable - closedSyllable >= 0.4);
+    assert.equal(mapAudioEnvelopeToMouthValue(1, 1), 0.86);
 });
 
 test('audio player keeps opening and closing under a sustained audio envelope', () => {
@@ -58,8 +59,10 @@ test('audio player keeps opening and closing under a sustained audio envelope', 
         }
 
         const stableValues = mouthValues.slice(10);
-        assert.ok(Math.max(...stableValues) <= 0.72);
-        assert.ok(Math.max(...stableValues) - Math.min(...stableValues) >= 0.35);
+        assert.ok(Math.max(...stableValues) <= 0.86);
+        assert.ok(Math.max(...stableValues) >= 0.8);
+        assert.ok(Math.min(...stableValues) <= 0.2);
+        assert.ok(Math.max(...stableValues) - Math.min(...stableValues) >= 0.6);
     } finally {
         if (previousAudio === undefined) {
             delete globalThis.Audio;

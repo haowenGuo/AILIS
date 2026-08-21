@@ -71,6 +71,24 @@ services:
         value: mp3_44100_128
       - key: ELEVENLABS_TIMEOUT_SECONDS
         value: "60"
+      - key: TTS_PROVIDER
+        value: edge
+      - key: EDGE_TTS_VOICE
+        value: zh-CN-XiaoyiNeural
+      - key: EDGE_TTS_RATE
+        value: "-8%"
+      - key: EDGE_TTS_PITCH
+        value: "+12Hz"
+      - key: EDGE_TTS_VOLUME
+        value: "-2%"
+      - key: EDGE_TTS_TIMEOUT_SECONDS
+        value: "30"
+      - key: EDGE_TTS_MAX_TEXT_CHARS
+        value: "2000"
+      - key: EDGE_TTS_CACHE_MAX_BYTES
+        value: "536870912"
+      - key: EDGE_TTS_CACHE_TTL_SECONDS
+        value: "7776000"
     disk:
       name: backend-data
       mountPath: /opt/render/project/src/backend/data

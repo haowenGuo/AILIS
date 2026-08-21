@@ -451,13 +451,18 @@ test('discarded background Persona stream removes its uncommitted bubble', async
     assert.equal(system.messageHistory.length, 0);
 });
 
-test('web experience enables server TTS and unlocks audio from the send gesture', async () => {
+test('web experience exposes one switch for the fixed AILIS remote voice', async () => {
     const source = await readFile(new URL('../Test/app.js', import.meta.url), 'utf8');
     const html = await readFile(new URL('../Test/index.html', import.meta.url), 'utf8');
-    assert.match(html, /id="tts-voice-select"/);
-    assert.match(source, /speechSynthesis\?\.getVoices/);
-    assert.match(source, /speechMode: useCloudVoice \? 'server' : 'native'/);
-    assert.match(source, /petUrl\.searchParams\.set\('ttsVoice', state\.ttsVoiceId\)/);
+    assert.doesNotMatch(html, /id="tts-voice-select"/);
+    assert.doesNotMatch(html, /id="tts-language-select"/);
+    assert.match(html, /id="tts-enabled-toggle"/);
+    assert.match(html, /type="checkbox"/);
+    assert.match(html, /role="switch"/);
+    assert.doesNotMatch(source, /speechSynthesis\?\.getVoices/);
+    assert.match(source, /speechMode: state\.ttsEnabled \? 'server' : 'off'/);
+    assert.match(source, /petUrl\.searchParams\.set\('speechMode', state\.ttsEnabled \? 'server' : 'off'\)/);
+    assert.match(source, /TTS_ENABLED_STORAGE_KEY/);
     assert.match(source, /__AILIS_BUILD_REVISION__/);
     assert.match(source, /petUrl\.searchParams\.set\('assetVersion', WEB_ASSET_VERSION\)/);
     assert.match(source, /payload\.type === 'system-notice'/);

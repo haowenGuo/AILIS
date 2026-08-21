@@ -110,6 +110,18 @@ class Settings(BaseSettings):
     ELEVENLABS_SPEED: float = 1.0
     ELEVENLABS_USE_SPEAKER_BOOST: bool = True
 
+    # ================= Server TTS =================
+    TTS_PROVIDER: str = "edge"
+    EDGE_TTS_VOICE: str = "zh-CN-XiaoyiNeural"
+    EDGE_TTS_RATE: str = "-8%"
+    EDGE_TTS_PITCH: str = "+12Hz"
+    EDGE_TTS_VOLUME: str = "-2%"
+    EDGE_TTS_TIMEOUT_SECONDS: int = 30
+    EDGE_TTS_MAX_TEXT_CHARS: int = 2000
+    EDGE_TTS_CACHE_DIR: str = ""
+    EDGE_TTS_CACHE_MAX_BYTES: int = 512 * 1024 * 1024
+    EDGE_TTS_CACHE_TTL_SECONDS: int = 90 * 24 * 60 * 60
+
     class Config:
         # 同时兼容两种启动方式：
         # 1. 在 backend 目录内启动：python main.py

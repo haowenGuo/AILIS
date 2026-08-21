@@ -125,11 +125,18 @@
                 </div>
 
                 <div class="stage-customizer">
-                    <label class="voice-picker" for="tts-voice-select">
+                    <label class="speech-toggle" for="tts-enabled-toggle">
                         <span>语音</span>
-                        <select id="tts-voice-select" aria-label="选择 AILIS 语音">
-                            <option value="cloud">AILIS 云端语音</option>
-                        </select>
+                        <input
+                            id="tts-enabled-toggle"
+                            type="checkbox"
+                            role="switch"
+                            aria-label="开启 AILIS 远端语音"
+                            checked
+                        >
+                        <span class="speech-toggle__track" aria-hidden="true">
+                            <span class="speech-toggle__thumb"></span>
+                        </span>
                     </label>
                     <div class="render-picker" role="group" aria-label="角色渲染风格">
                         <button

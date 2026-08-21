@@ -427,7 +427,7 @@ svg {
 
 .scene-picker,
 .render-picker,
-.voice-picker {
+.speech-toggle {
     display: flex;
     align-items: center;
     gap: 6px;
@@ -438,31 +438,57 @@ svg {
     backdrop-filter: blur(14px);
 }
 
-.voice-picker {
-    min-width: 0;
-    gap: 7px;
+.speech-toggle {
+    gap: 8px;
     color: var(--muted);
     font-size: 11px;
     font-weight: 800;
+    cursor: pointer;
 }
 
-.voice-picker span {
+.speech-toggle > span:first-child {
     flex: 0 0 auto;
     padding-left: 3px;
 }
 
-.voice-picker select {
-    width: clamp(150px, 20vw, 230px);
-    min-width: 0;
-    height: 31px;
-    padding: 0 28px 0 9px;
-    border: 0;
-    border-radius: 6px;
-    color: #28454c;
-    background: rgba(238, 248, 249, 0.96);
-    cursor: pointer;
-    font: inherit;
-    font-weight: 700;
+.speech-toggle input {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    opacity: 0;
+    pointer-events: none;
+}
+
+.speech-toggle__track {
+    position: relative;
+    width: 42px;
+    height: 24px;
+    border: 1px solid rgba(143, 168, 174, 0.95);
+    border-radius: 999px;
+    background: rgba(220, 232, 235, 0.98);
+    transition: border-color 160ms ease, background 160ms ease;
+}
+
+.speech-toggle__thumb {
+    position: absolute;
+    top: 3px;
+    left: 3px;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: #ffffff;
+    box-shadow: 0 1px 4px rgba(39, 67, 73, 0.26);
+    transition: transform 160ms ease;
+}
+
+.speech-toggle input:checked + .speech-toggle__track {
+    border-color: var(--teal);
+    background: var(--teal);
+}
+
+.speech-toggle input:checked + .speech-toggle__track .speech-toggle__thumb {
+    transform: translateX(18px);
 }
 
 .render-picker {
@@ -512,7 +538,7 @@ svg {
 }
 
 .scene-option:focus-visible,
-.voice-picker select:focus-visible,
+.speech-toggle:has(input:focus-visible),
 .composer:focus-within,
 .stage-icon-button:focus-visible,
 .drawer-close:focus-visible {
@@ -1199,23 +1225,9 @@ svg {
         font-size: 10px;
     }
 
-    .voice-picker {
-        flex: 1 1 auto;
-        width: auto;
-        max-width: none;
-        min-width: 0;
-        box-sizing: border-box;
-    }
-
-    .voice-picker span {
-        display: none;
-    }
-
-    .voice-picker select {
-        flex: 1 1 auto;
-        width: 0;
-        height: 27px;
-        font-size: 10px;
+    .speech-toggle {
+        flex: 0 0 auto;
+        min-height: 27px;
     }
 
     .dialogue-box {
