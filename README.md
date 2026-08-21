@@ -34,39 +34,67 @@
 
 AILIS is developed as an evaluated agent system, not only as a character demo. The public summary below only includes complete runs or evaluation sets large enough to support a useful claim. Small smoke tests, partial desktop batches, harness self-tests, and infrastructure-invalid attempts are deliberately omitted.
 
+### Complete benchmark results
+
+| Benchmark | AILIS result | Scale | Model and protocol | Claim boundary |
+| --- | ---: | ---: | --- | --- |
+| **GAIA public validation** | **119 / 165, 72.12%** | Complete L1-L3 public validation | `gpt-5.6-luna`, medium; semantic correctness over the complete visible answer | Complete local diagnostic, not the private-test leaderboard |
+| **Terminal-Bench 2.1** | **60 / 89, 67.42% pass@1** | One complete 89-task pass, 0 infrastructure-invalid trials | TaskAgent A7, `gpt-5.6-luna`, max; Harbor 0.20.0 | Complete single pass; k=5 stability is not yet measured |
+| **Apple ToolSandbox** | **71.51%** frozen-holdout mean | 239 / 239 officially scored, 0 errors | Production Agent and official on-policy user simulator | Continuous trajectory-quality score, not binary accuracy |
+| **LongMemEval-S** | **358 / 500, 71.60%** QA accuracy | 500 / 500 completed, 0 generation/Judge failures | BM25 phrase v2 + MMR 0.2; Luna reader and medium Judge | Complete local protocol, not an official leaderboard submission |
+| **LoCoMo** | **24.69 token-F1** | 1,986 / 1,986 completed | BM25 phrase v2 + MMR 0.2 | Complete local protocol |
+| **PersonaMem Balanced-140** | **92 / 140, 65.71%** | 140 / 140 completed; 39 / 39 state audits passed | Ledger + BM25/MMR; Luna medium | Internal engineering set |
+
 ### Same-model comparison with Codex
 
-| Benchmark | Shared model and protocol | AILIS | Codex | AILIS delta |
-| --- | --- | ---: | ---: | ---: |
-| **GAIA public validation** | `gpt-5.6-luna`, medium; same 165 tasks and semantic scorer | **119 / 165, 72.12%** | 107 / 165, 64.85% | **+12 tasks, +7.27 pp** |
-| **Terminal-Bench 2.1** | `gpt-5.6-luna`, max; same 89-task benchmark | **60 / 89, 67.42%** | **75.73% +/- 1.32%** official aggregate | **-8.31 pp** |
+The GAIA comparison is fully controlled: both agents use the same 165 task IDs, `gpt-5.6-luna` at medium reasoning, complete user-visible answers, and the same semantic scorer.
 
-The GAIA comparison is a direct local controlled run: the task manifest, model, reasoning effort, answer visibility, and scorer are matched. The Terminal-Bench model and task set are matched, but the statistical protocol is not identical: AILIS reports one complete 89-task pass, while the official Codex result aggregates five passes (`445` trials).
+| GAIA level | AILIS-Luna | Codex-Luna | AILIS delta |
+| --- | ---: | ---: | ---: |
+| L1 | **43 / 53, 81.13%** | 41 / 53, 77.36% | **+2 tasks, +3.77 pp** |
+| L2 | **64 / 86, 74.42%** | 57 / 86, 66.28% | **+7 tasks, +8.14 pp** |
+| L3 | **12 / 26, 46.15%** | 9 / 26, 34.62% | **+3 tasks, +11.54 pp** |
+| **All levels** | **119 / 165, 72.12%** | **107 / 165, 64.85%** | **+12 tasks, +7.27 pp** |
 
-| Terminal-Bench efficiency | AILIS A7 | Codex-Luna Max |
-| --- | ---: | ---: |
-| Mean trial time | **1,088.0 s** | **457.3 s** |
-| Logical input per task | 2.569M | 3.183M |
-| Uncached input per task | **1.299M** | **89.9K** |
-| Output per task | 23.95K | 23.89K |
-| Input cache rate | **49.44%** | **97.17%** |
-| Capability timeouts | 21 / 89 | 15 / 445 |
-
-The similar output volume but much higher uncached input and wall time show that AILIS's largest measured Terminal-Bench gap is execution and context efficiency, not simply a smaller reasoning budget.
-
-### Other sufficiently sized evaluations
-
-These tracks do not currently have a Codex result under the same frozen model and protocol, so they are reported without an artificial comparison.
-
-| Evaluation track | Result | Scale and protocol | Evidence status |
+| GAIA resource metric | AILIS-Luna | Codex-Luna | Comparability note |
 | --- | ---: | ---: | --- |
-| **Apple ToolSandbox** | **71.51%** frozen holdout mean | 239 / 239 officially scored, 0 errors | Primary stateful tool-use quality result |
-| **LongMemEval-S** | **358 / 500, 71.60%** QA accuracy | 500 / 500 completed; Luna reader and judge | Complete local protocol |
-| **PersonaMem Balanced-140** | **92 / 140, 65.71%** | Ledger + BM25/MMR retrieval; Luna medium | Complete internal engineering set |
-| **LoCoMo** | **24.69 token-F1** | 1,986 / 1,986 completed | Complete local protocol; retrieval is stronger than answer synthesis |
-| **Longitudinal companion eval** | **78.46 / 100** weighted mean | 171 judged checkpoints from 30-day scenarios | Internal product evaluation |
+| Input / output tokens | 31.04M / 330.7K | 68.56M / 497.0K | Same task set; gross logical tokens |
+| Cached / uncached input | Not available | 60.88M / 7.69M | AILIS transport did not report cache usage; recorded zero is telemetry absence |
+| Model / tool events | 1,881 / 3,628 | Not disclosed / 1,959 | Tool instrumentation differs, so call-count ratios are not valid |
+| Mean task time | **210.4 s** | 255.9 s | End-to-end accepted-task duration |
+| P50 / P95 task time | **140.1 s / 575.0 s** | 229.3 s / 584.7 s |  |
+| Capability timeouts | Not available in accepted set | 4 / 165 | Infrastructure-invalid attempts are excluded |
 
-> **Metric boundary:** ToolSandbox is a continuous scenario-quality score, GAIA and Terminal-Bench are task success rates, and LoCoMo is token-F1. They measure different capabilities and must not be averaged into one synthetic score.
+Terminal-Bench uses the same benchmark and `gpt-5.6-luna` at max reasoning, but not the same statistical protocol: AILIS reports one 89-task pass, while the [official Codex result](https://hub.harborframework.com/datasets/terminal-bench/terminal-bench-2-1/6/leaderboards/main/rows/e5f3feda-4629-46ba-963f-300dcf7c2a4c) aggregates five passes (`445` trials).
+
+| Terminal-Bench metric | AILIS A7 | Official Codex-Luna Max | Difference |
+| --- | ---: | ---: | ---: |
+| Score | **60 / 89, 67.42%** | **75.73% +/- 1.32%** | -8.31 pp |
+| Mean trial time | 1,088.0 s | **457.3 s** | AILIS 2.38x |
+| Logical input per task | 2.569M | 3.183M | AILIS uses less logical input |
+| Cached input per task | 1.270M | **3.093M** |  |
+| Uncached input per task | **1.299M** | **89.9K** | AILIS 14.44x |
+| Output per task | 23.95K | 23.89K | Nearly identical |
+| Input cache rate | 49.44% | **97.17%** | -47.73 pp |
+| Timeout records | 21 / 89 `AgentTimeoutError` | 15 / 445 | AILIS rate about 7.0x |
+| Recorded monetary cost | Not captured in the frozen result | **$241.45 total, $0.543/trial** | Dollar cost is not directly comparable |
+
+The A7 pass used 4,273 model calls, 4,306 tool calls, 228.63M logical input tokens, 113.02M cached input tokens, 115.61M uncached input tokens, and 2.131M output tokens. Its peak request was 245,017 tokens; Agent time was 934.1 s mean, 662.6 s P50, and 2,617.9 s P95. Timeout records are execution-state telemetry rather than an alternate score; verifier pass@1 remains authoritative. Similar output volume but far lower cache reuse explains much of the remaining time and compute gap with Codex.
+
+### Memory and stateful-task performance
+
+These tracks do not have a Codex result under the same frozen model and protocol, so no synthetic comparison is shown.
+
+| Track | Quality | Retrieval / execution performance | Resource evidence |
+| --- | ---: | --- | --- |
+| **ToolSandbox frozen holdout** | **71.51%** mean | Approx. **3.08 min/scenario** | 2,602 LLM calls; 22.05M tokens; approx. 92.3K tokens/scenario |
+| **LongMemEval-S** | **71.60%** QA | Session R@8 93.53%; turn R@8 83.31%; E2E P50/P95 **18.6/39.1 s** | 500/500 complete, zero generation/Judge failures |
+| **PersonaMem Balanced-140** | **65.71%** | Retrieval mean/P95 **1.15/1.78 s**; E2E P50/P95 **26.41/53.83 s** | Deterministic local retrieval; no retrieval-time model call |
+| **LoCoMo** | **24.69 token-F1** | Session R@8 89.67%; turn R@8 71.75%; E2E P50/P95 **12.72/30.44 s** | 1,986/1,986 complete |
+
+LoCoMo's high retrieval recall but much lower answer F1 is an important negative result: the remaining weakness is multi-hop evidence synthesis and answer construction, not only retrieval. A partial OSWorld development batch reached 9/15 (60.00%, 264.47 s mean), but it is excluded from the headline table because only 15 of the planned 36 tasks were scored. The historical GAIA L1 two-run mean (85.85%) and the strict-memory first run (77.36%) remain documented below, but neither supersedes the complete 165-task current result.
+
+> **Metric boundary:** ToolSandbox is a continuous scenario-quality score, GAIA and Terminal-Bench are task success rates, and LoCoMo is token-F1. They measure different capabilities and must not be averaged into one synthetic score. Token totals are logical usage, not dollar cost; missing telemetry is reported as unavailable rather than as zero.
 
 [Complete evaluation scorecard](docs/ailis-evaluation-master-scorecard-20260817.md) ·
 [Machine-readable scorecard](evals/benchmark-catalog/ailis-evaluation-master-scorecard-20260817.json) ·

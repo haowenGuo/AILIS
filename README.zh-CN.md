@@ -8,8 +8,8 @@
   </p>
   <p>
     <img alt="ToolSandbox 冻结 holdout 均值 71.51%" src="https://img.shields.io/badge/ToolSandbox_holdout-71.51%25-2563eb?style=for-the-badge">
-    <img alt="GAIA Level 1 严格协议第一轮 77.36%" src="https://img.shields.io/badge/GAIA_L1_strict_run_1-77.36%25-059669?style=for-the-badge">
-    <img alt="内部长期陪伴评测 78.46 分" src="https://img.shields.io/badge/Humanlike_longitudinal-78.46%2F100-059669?style=for-the-badge">
+    <img alt="AILIS-LUNA GAIA 165 题语义分 72.12%" src="https://img.shields.io/badge/AILIS--LUNA_GAIA_165-72.12%25-059669?style=for-the-badge">
+    <img alt="AILIS TaskAgent A7 Terminal-Bench 2.1 pass at one 67.42%" src="https://img.shields.io/badge/Terminal--Bench_2.1-67.42%25-d97706?style=for-the-badge">
   </p>
   <p>
     <a href="README.md">English</a> ·
@@ -25,26 +25,76 @@
 
 ## 评测结果总览
 
-AILIS 不只是角色演示，而是一套持续接受端到端评测的 Agent 系统。当前证据覆盖有状态工具调用、通用助理任务、长期陪伴表现和桌面操作；每个分数都同时公开样本规模与可宣称边界。
+AILIS 不只是角色演示，而是一套持续接受端到端评测的 Agent 系统。下面的主表只纳入完整运行，或样本量足以支撑明确结论的评测；smoke、partial、Harness 自测和基础设施无效尝试不混入正式能力分数。
 
-| 评测方向 | 结果 | 规模 | 证据定位 |
+### 完整评测成绩
+
+| Benchmark | AILIS 结果 | 规模 | 模型与协议 | 可宣称边界 |
+| --- | ---: | ---: | --- | --- |
+| **GAIA public validation** | **119 / 165，72.12%** | L1-L3 全部 165 题 | `gpt-5.6-luna` medium；按完整可见回答做语义评分 | 完整本地诊断，不是 private-test 排行榜提交 |
+| **Terminal-Bench 2.1** | **60 / 89，67.42% pass@1** | 完整单轮 89 题，0 个 infrastructure-invalid | TaskAgent A7，`gpt-5.6-luna` max；Harbor 0.20.0 | 完整单轮；尚未取得 k=5 稳定性结果 |
+| **Apple ToolSandbox** | 冻结 holdout 均值 **71.51%** | 239 / 239 官方评分，0 errors | production Agent + 官方 on-policy user simulator | 连续轨迹质量分，不是二元正确率 |
+| **LongMemEval-S** | **358 / 500，71.60%** QA accuracy | 500 / 500 完成，0 generation/Judge failures | BM25 phrase v2 + MMR 0.2；Luna Reader 与 medium Judge | 完整本地协议，不是官方排行榜提交 |
+| **LoCoMo** | **24.69 token-F1** | 1,986 / 1,986 完成 | BM25 phrase v2 + MMR 0.2 | 完整本地协议 |
+| **PersonaMem Balanced-140** | **92 / 140，65.71%** | 140 / 140 完成；39 / 39 状态审计通过 | Ledger + BM25/MMR；Luna medium | 内部工程集 |
+
+### 与 Codex 的同模型对照
+
+GAIA 是严格同协议对照：两边使用相同 165 个 task ID、`gpt-5.6-luna` medium、完整用户可见回答和同一个语义评分器。
+
+| GAIA 难度 | AILIS-Luna | Codex-Luna | AILIS 差值 |
+| --- | ---: | ---: | ---: |
+| L1 | **43 / 53，81.13%** | 41 / 53，77.36% | **+2 题，+3.77 pp** |
+| L2 | **64 / 86，74.42%** | 57 / 86，66.28% | **+7 题，+8.14 pp** |
+| L3 | **12 / 26，46.15%** | 9 / 26，34.62% | **+3 题，+11.54 pp** |
+| **总计** | **119 / 165，72.12%** | **107 / 165，64.85%** | **+12 题，+7.27 pp** |
+
+| GAIA 资源指标 | AILIS-Luna | Codex-Luna | 可比性说明 |
 | --- | ---: | ---: | --- |
-| **Apple ToolSandbox** | 冻结 holdout 均值 **71.51%** | 239 / 239 官方评分，0 errors | 当前主要公开任务质量分数 |
-| **GAIA Level 1 严格复现** | 第一轮 **41 / 53，77.36%** | 规定两轮中的第一轮 | 严格逐题记忆隔离的暂定结果；第二轮待完成 |
-| **GAIA Level 1 历史结果** | 两轮均值 **85.85%**；最佳单轮 **90.57%** | 53 道公开 validation 题 x 2 | 历史本地诊断；当时缺少逐题记忆隔离 |
-| **长期陪伴评测** | 加权均值 **78.46 / 100** | 30 天场景中的 171 个 Judge checkpoint | 内部产品质量评测 |
-| **OSWorld 小样本** | **2 / 4，50%** | 4 个历史桌面任务 | 早期外部信号，样本不足以做广泛结论 |
-| **人类化数据集校验** | **1000 / 1000** 有效 | 9 类任务、251 个负向探针 | 表示评测覆盖度，不表示模型能力 |
+| 输入 / 输出 Token | 31.04M / 330.7K | 68.56M / 497.0K | 同一任务集的逻辑 Token |
+| 缓存 / 未缓存输入 | 不可得 | 60.88M / 7.69M | AILIS transport 未上报缓存；记录中的 0 是遥测缺失，不是真正零缓存 |
+| 模型 / 工具事件 | 1,881 / 3,628 | 未披露 / 1,959 | 两边工具埋点定义不同，不能直接比较调用倍率 |
+| 平均任务时延 | **210.4s** | 255.9s | accepted task 端到端时延 |
+| P50 / P95 时延 | **140.1s / 575.0s** | 229.3s / 584.7s |  |
+| 能力超时 | accepted 集不可得 | 4 / 165 | infrastructure-invalid 不进入能力分数 |
 
-> **当前主分数：**Apple ToolSandbox 冻结 holdout 均值 **71.51%**。GAIA 严格协议已经完成第一轮，成绩为 **77.36%**，运行中禁用 benchmark memory，并且没有替换失败题；在第二轮 53 题完整结束前，它仍是暂定结果。历史 85.85% 均值继续公开用于透明对照，但不作为当前可复现主张。
+Terminal-Bench 使用相同 89 题和 `gpt-5.6-luna` max，但统计协议并不完全相同：AILIS 是一轮 89 题；[Codex 官方结果](https://hub.harborframework.com/datasets/terminal-bench/terminal-bench-2-1/6/leaderboards/main/rows/e5f3feda-4629-46ba-963f-300dcf7c2a4c)是五轮聚合，共 445 个 trial。
 
-[完整 Benchmark Scorecard](docs/ailis-demo-benchmark-scorecard.md) ·
+| Terminal-Bench 指标 | AILIS A7 | 官方 Codex-Luna Max | 差异 |
+| --- | ---: | ---: | ---: |
+| 成绩 | **60 / 89，67.42%** | **75.73% +/- 1.32%** | -8.31 pp |
+| 平均 trial 时长 | 1,088.0s | **457.3s** | AILIS 2.38x |
+| 逻辑输入/题 | 2.569M | 3.183M | AILIS 逻辑输入更少 |
+| 缓存输入/题 | 1.270M | **3.093M** |  |
+| 未缓存输入/题 | **1.299M** | **89.9K** | AILIS 14.44x |
+| 输出/题 | 23.95K | 23.89K | 基本一致 |
+| 输入缓存率 | 49.44% | **97.17%** | -47.73 pp |
+| 超时记录 | 21 / 89 个 `AgentTimeoutError` | 15 / 445 | AILIS 比率约 7.0x |
+| 已记录货币成本 | 冻结结果未记录 | **总计 $241.45，$0.543/trial** | 无法做美元成本直比 |
+
+A7 完整单轮共使用 4,273 次模型调用、4,306 次工具调用、228.63M 逻辑输入 Token、113.02M 缓存输入、115.61M 未缓存输入和 2.131M 输出 Token。单次请求峰值为 245,017 Token；Agent 时长 mean/P50/P95 为 934.1s / 662.6s / 2,617.9s。超时记录是执行状态遥测，不是另一套分数，最终仍以 verifier pass@1 为准。两边输出量几乎一致，但 AILIS 的前缀缓存复用明显更低，这是时延与计算开销差距的主要已测结构性来源。
+
+### 长期记忆与有状态任务性能
+
+这些评测没有同一冻结模型、同一协议下的 Codex 成绩，因此不制造不可比的对照。
+
+| 评测 | 质量 | 检索 / 执行性能 | 资源证据 |
+| --- | ---: | --- | --- |
+| **ToolSandbox frozen holdout** | **71.51%** 均值 | 约 **3.08 分钟/场景** | 2,602 次 LLM 调用；22.05M Token；约 92.3K Token/场景 |
+| **LongMemEval-S** | **71.60%** QA | Session R@8 93.53%；Turn R@8 83.31%；E2E P50/P95 **18.6/39.1s** | 500/500 完成，0 generation/Judge failures |
+| **PersonaMem Balanced-140** | **65.71%** | Retrieval mean/P95 **1.15/1.78s**；E2E P50/P95 **26.41/53.83s** | 确定性本地检索；检索时 0 模型调用 |
+| **LoCoMo** | **24.69 token-F1** | Session R@8 89.67%；Turn R@8 71.75%；E2E P50/P95 **12.72/30.44s** | 1,986/1,986 完成 |
+
+LoCoMo 的召回率较高，但最终答案 F1 明显偏低，这是重要的负面结果：剩余短板主要在多跳证据合并与答案构造，而不只是检索。OSWorld 当前开发批次为 9/15（60.00%，平均 264.47s），但计划的 36 题尚未跑完，因此不进入主表。历史 GAIA L1 两轮均值 85.85% 和严格记忆隔离第一轮 77.36% 继续在下文保留，但都不替代当前完整 165 题主结果。
+
+> **指标边界：**ToolSandbox 是连续场景质量分，GAIA 与 Terminal-Bench 是任务成功率，LoCoMo 是 token-F1，不能求一个虚假的综合平均分。Token 是逻辑资源量，不等于美元成本；缺失的缓存或计费遥测统一标为“不可得”，不会写成 0。
+
+[完整评测总表](docs/ailis-evaluation-master-scorecard-20260817.md) ·
+[机器可读总表](evals/benchmark-catalog/ailis-evaluation-master-scorecard-20260817.json) ·
 [GAIA 评测方法](docs/ailis-desktop-real-gaia-eval.md) ·
+[A7 上下文基线](docs/ailis-a7-taskagent-context-baseline.md) ·
+[长期记忆基线](docs/ailis-memory-bm25-mmr-baseline.md) ·
 [ToolSandbox 协议与门禁](docs/ailis-toolsandbox-v4-optimization-plan.md)
-
-<p align="center">
-  <img alt="AILIS 评测快照：ToolSandbox 71.51%，GAIA 严格第一轮 77.36%，长期陪伴 78.46 分，OSWorld 小样本 2/4" src="docs/assets/benchmarks/ailis-evaluation-snapshot-20260720.svg">
-</p>
 
 ## AILIS 是什么
 
@@ -77,7 +127,22 @@ AILIS Assistant 是一个桌面优先的具身 AI 助手项目。它把 3D VRM �
 
 ## GAIA：通用 Agent 能力
 
-### TaskAgent A7 上下文基线
+### 同模型完整 165 题对照
+
+当前对照在 GAIA public validation 的全部 165 题上运行 AILIS-Luna 与 native Codex-Luna。两边都使用 `gpt-5.6-luna` medium、相同 manifest 和完整用户可见回答，并由同一个语义评分器判断答案是否与参考答案等价。
+
+| 难度 | AILIS-Luna | Codex-Luna | AILIS 领先 |
+| --- | ---: | ---: | ---: |
+| L1 | **43 / 53，81.13%** | 41 / 53，77.36% | **+2 题，+3.77 pp** |
+| L2 | **64 / 86，74.42%** | 57 / 86，66.28% | **+7 题，+8.14 pp** |
+| L3 | **12 / 26，46.15%** | 9 / 26，34.62% | **+3 题，+11.54 pp** |
+| **全部** | **119 / 165，72.12%** | **107 / 165，64.85%** | **+12 题，+7.27 pp** |
+
+语义评分读取完整用户可见回答，不要求与金标准逐字一致，也不只依赖短答案抽取器。在该受控协议下，AILIS 在三个难度层级都领先 Codex；但 L3 绝对正确率仍只有 46.15%，是当前最明确的通用能力短板。
+
+这是一组 public validation 上的本地系统诊断，不是 GAIA 私有 test leaderboard 的官方提交。后续优化会优先处理通用 L3 失败机制，例如长链路上下文连续性、可重放原始资源、多来源关系合并和本地计算；不会增加 GAIA 题目提示、站点硬路由或预期答案逻辑。
+
+## TaskAgent A7 上下文基线
 
 TaskAgent A7 现已成为 `main` 上的上下文管理基线。其冻结的
 Terminal-Bench 2.1 来源运行取得 **60 / 89（67.42%）**，A6 对照为
@@ -89,6 +154,8 @@ Terminal-Bench 2.1 来源运行取得 **60 / 89（67.42%）**，A6 对照为
 同时回退了 11 道 A6 正确题，而且目前只有一轮完整结果。详见
 [A7 上下文基线](docs/ailis-a7-taskagent-context-baseline.md)和
 [机器可读来源](evals/terminal-bench-2.1/A7_BASELINE.json)。
+
+### 早期 GAIA Level 1 运行
 
 当前严格逐题记忆隔离协议冻结在提交 `6afc0ae`。第一轮完整成绩为 **41 / 53（77.36%）**；规定的第二轮尚未计入最终均值和稳定率。第一轮在完成 46 行后遇到 Windows 非正常重启，恢复过程沿用同一个 run ID，跳过全部已完成题目，只执行剩余 7 题；没有重试、替换或重新计分任何失败题。
 
