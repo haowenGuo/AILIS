@@ -2348,7 +2348,11 @@ test('AILIS Gateway imports RAGFlow-lite worker output into queryable artifacts'
                 context: { workspace: workspaceRoot, runId: 'artifact-import-run-1', sessionId: 'artifact-import-session-1' }
             })
         });
-        assert.equal(imported.body.ok, true, imported.body.error);
+        const importError = imported.body.error
+            || imported.body.result?.details?.message
+            || imported.body.result?.details?.stderr
+            || JSON.stringify(imported.body.result?.details || imported.body);
+        assert.equal(imported.body.ok, true, importError);
         assert.match(imported.body.result.content[0].text, /ARTIFACT_IMPORT_COMPLETE/);
         assert.ok(imported.body.result.details.artifactId);
         assert.ok(imported.body.result.details.chunkCount >= 2);

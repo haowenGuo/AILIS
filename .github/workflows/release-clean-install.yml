@@ -27,6 +27,16 @@ jobs:
           node-version: 22
           cache: pnpm
 
+      - name: Set up Python for source integration tests
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: .github/requirements/release-test.txt
+
+      - name: Install spreadsheet parser test dependencies
+        run: python -m pip install -r .github/requirements/release-test.txt
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
