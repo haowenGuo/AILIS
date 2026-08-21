@@ -5,12 +5,14 @@ import test from 'node:test';
 
 import { mapAudioEnvelopeToMouthValue } from '../src/tts-audio-player.js';
 
-test('audio envelope mapping keeps silence closed and makes speech visibly readable', () => {
+test('audio envelope mapping keeps speech visible without over-opening the mouth', () => {
     assert.equal(mapAudioEnvelopeToMouthValue(0), 0);
     assert.equal(mapAudioEnvelopeToMouthValue(0.03), 0);
-    assert.ok(mapAudioEnvelopeToMouthValue(0.08) >= 0.26);
-    assert.ok(mapAudioEnvelopeToMouthValue(0.25) >= 0.55);
-    assert.ok(mapAudioEnvelopeToMouthValue(1) <= 0.95);
+    assert.ok(mapAudioEnvelopeToMouthValue(0.08) >= 0.18);
+    assert.ok(mapAudioEnvelopeToMouthValue(0.08) <= 0.24);
+    assert.ok(mapAudioEnvelopeToMouthValue(0.25) >= 0.4);
+    assert.ok(mapAudioEnvelopeToMouthValue(0.25) <= 0.5);
+    assert.equal(mapAudioEnvelopeToMouthValue(1), 0.72);
 });
 
 function withTimeout(promise, timeoutMs = 250) {
