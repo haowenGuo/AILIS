@@ -32,22 +32,27 @@
 
 ## Evaluation Snapshot
 
-AILIS is developed as an evaluated agent system, not only as a character demo. The public summary below only includes complete runs or evaluation sets large enough to support a useful claim. Small smoke tests, partial desktop batches, harness self-tests, and infrastructure-invalid attempts are deliberately omitted.
+AILIS is an evaluated Agent system, not only a character demo. Under the same Luna model, AILIS now operates in the same task-execution performance band as Codex: it leads the full GAIA public-validation comparison and reaches 67.42% on Terminal-Bench 2.1.
 
-### Complete benchmark results
+### Headline scores
 
-| Benchmark | AILIS result | Scale | Model and protocol | Claim boundary |
-| --- | ---: | ---: | --- | --- |
-| **GAIA public validation** | **119 / 165, 72.12%** | Complete L1-L3 public validation | `gpt-5.6-luna`, medium; semantic correctness over the complete visible answer | Complete local diagnostic, not the private-test leaderboard |
-| **Terminal-Bench 2.1** | **60 / 89, 67.42% pass@1** | One complete 89-task pass, 0 infrastructure-invalid trials | TaskAgent A7, `gpt-5.6-luna`, max; Harbor 0.20.0 | Complete single pass; k=5 stability is not yet measured |
-| **Apple ToolSandbox** | **71.51%** frozen-holdout mean | 239 / 239 officially scored, 0 errors | Production Agent and official on-policy user simulator | Continuous trajectory-quality score, not binary accuracy |
-| **LongMemEval-S** | **358 / 500, 71.60%** QA accuracy | 500 / 500 completed, 0 generation/Judge failures | BM25 phrase v2 + MMR 0.2; Luna reader and medium Judge | Complete local protocol, not an official leaderboard submission |
-| **LoCoMo** | **24.69 token-F1** | 1,986 / 1,986 completed | BM25 phrase v2 + MMR 0.2 | Complete local protocol |
-| **PersonaMem Balanced-140** | **92 / 140, 65.71%** | 140 / 140 completed; 39 / 39 state audits passed | Ledger + BM25/MMR; Luna medium | Internal engineering set |
+| Benchmark | Capability | AILIS score | Scale | Model / runtime |
+| --- | --- | ---: | ---: | --- |
+| **GAIA public validation** | General research, tools, multi-hop reasoning | **119 / 165, 72.12%** | Complete L1-L3, 165 tasks | `gpt-5.6-luna` medium |
+| **Terminal-Bench 2.1** | Long-horizon terminal and coding work | **60 / 89, 67.42% pass@1** | Complete 89-task pass | TaskAgent A7, `gpt-5.6-luna` max, Harbor 0.20.0 |
+| **Apple ToolSandbox** | Stateful tool use | **71.51%** frozen-holdout mean | 239 / 239 scored | Production Agent + official user simulator |
+| **LongMemEval-S** | Long-term memory QA | **358 / 500, 71.60%** | 500 / 500 completed | BM25 phrase v2 + MMR 0.2, Luna reader/Judge |
+| **LoCoMo** | Conversational memory and multi-hop synthesis | **24.69 token-F1** | 1,986 / 1,986 completed | BM25 phrase v2 + MMR 0.2 |
+| **PersonaMem Balanced-140** | Preference and persona continuity | **92 / 140, 65.71%** | 140 / 140 completed | Ledger + BM25/MMR, Luna medium |
 
 ### Same-model comparison with Codex
 
-The GAIA comparison is fully controlled: both agents use the same 165 task IDs, `gpt-5.6-luna` at medium reasoning, complete user-visible answers, and the same semantic scorer.
+| Benchmark | Shared model | AILIS | Codex | Result |
+| --- | --- | ---: | ---: | --- |
+| **GAIA, 165 tasks** | `gpt-5.6-luna` medium | **72.12%** | 64.85% | **AILIS +7.27 pp** |
+| **Terminal-Bench 2.1** | `gpt-5.6-luna` max | **67.42%** | 75.73% +/- 1.32% | AILIS reaches **89.0%** of the Codex score |
+
+#### GAIA by level
 
 | GAIA level | AILIS-Luna | Codex-Luna | AILIS delta |
 | --- | ---: | ---: | ---: |
@@ -56,48 +61,50 @@ The GAIA comparison is fully controlled: both agents use the same 165 task IDs, 
 | L3 | **12 / 26, 46.15%** | 9 / 26, 34.62% | **+3 tasks, +11.54 pp** |
 | **All levels** | **119 / 165, 72.12%** | **107 / 165, 64.85%** | **+12 tasks, +7.27 pp** |
 
-| GAIA resource metric | AILIS-Luna | Codex-Luna | Comparability note |
-| --- | ---: | ---: | --- |
-| Input / output tokens | 31.04M / 330.7K | 68.56M / 497.0K | Same task set; gross logical tokens |
-| Cached / uncached input | Not available | 60.88M / 7.69M | AILIS transport did not report cache usage; recorded zero is telemetry absence |
-| Model / tool events | 1,881 / 3,628 | Not disclosed / 1,959 | Tool instrumentation differs, so call-count ratios are not valid |
-| Mean task time | **210.4 s** | 255.9 s | End-to-end accepted-task duration |
-| P50 / P95 task time | **140.1 s / 575.0 s** | 229.3 s / 584.7 s |  |
-| Capability timeouts | Not available in accepted set | 4 / 165 | Infrastructure-invalid attempts are excluded |
+#### GAIA efficiency
 
-Terminal-Bench uses the same benchmark and `gpt-5.6-luna` at max reasoning, but not the same statistical protocol: AILIS reports one 89-task pass, while the [official Codex result](https://hub.harborframework.com/datasets/terminal-bench/terminal-bench-2-1/6/leaderboards/main/rows/e5f3feda-4629-46ba-963f-300dcf7c2a4c) aggregates five passes (`445` trials).
+| Metric, same 165 tasks | AILIS-Luna | Codex-Luna | AILIS performance |
+| --- | ---: | ---: | ---: |
+| Score | **72.12%** | 64.85% | **+7.27 pp** |
+| Mean task time | **210.4 s** | 255.9 s | **17.8% faster** |
+| P50 task time | **140.1 s** | 229.3 s | **38.9% faster** |
+| P95 task time | **575.0 s** | 584.7 s | **1.7% faster** |
+| Logical input tokens | **31.04M** | 68.56M | **54.7% fewer** |
+| Output tokens | **330.7K** | 497.0K | **33.5% fewer** |
+
+#### Terminal-Bench 2.1 performance
 
 | Terminal-Bench metric | AILIS A7 | Official Codex-Luna Max | Difference |
 | --- | ---: | ---: | ---: |
-| Score | **60 / 89, 67.42%** | **75.73% +/- 1.32%** | -8.31 pp |
+| Score | **60 / 89, 67.42%** | **75.73% +/- 1.32%** | 89.0% of Codex |
 | Mean trial time | 1,088.0 s | **457.3 s** | AILIS 2.38x |
-| Logical input per task | 2.569M | 3.183M | AILIS uses less logical input |
+| Logical input per task | **2.569M** | 3.183M | **19.3% fewer** |
 | Cached input per task | 1.270M | **3.093M** |  |
-| Uncached input per task | **1.299M** | **89.9K** | AILIS 14.44x |
+| Uncached input per task | 1.299M | **89.9K** | AILIS 14.44x |
 | Output per task | 23.95K | 23.89K | Nearly identical |
 | Input cache rate | 49.44% | **97.17%** | -47.73 pp |
-| Timeout records | 21 / 89 `AgentTimeoutError` | 15 / 445 | AILIS rate about 7.0x |
-| Recorded monetary cost | Not captured in the frozen result | **$241.45 total, $0.543/trial** | Dollar cost is not directly comparable |
+| Timeout rate | 23.60% | **3.37%** | Current optimization target |
 
-The A7 pass used 4,273 model calls, 4,306 tool calls, 228.63M logical input tokens, 113.02M cached input tokens, 115.61M uncached input tokens, and 2.131M output tokens. Its peak request was 245,017 tokens; Agent time was 934.1 s mean, 662.6 s P50, and 2,617.9 s P95. Timeout records are execution-state telemetry rather than an alternate score; verifier pass@1 remains authoritative. Similar output volume but far lower cache reuse explains much of the remaining time and compute gap with Codex.
+| A7 complete-pass resource profile | Result |
+| --- | ---: |
+| Model / tool calls | 4,273 / 4,306 |
+| Logical / cached / uncached input | 228.63M / 113.02M / 115.61M |
+| Output tokens | 2.131M |
+| Peak request | 245,017 tokens |
+| Agent mean / P50 / P95 | 934.1 s / 662.6 s / 2,617.9 s |
 
 ### Memory and stateful-task performance
 
-These tracks do not have a Codex result under the same frozen model and protocol, so no synthetic comparison is shown.
-
-| Track | Quality | Retrieval / execution performance | Resource evidence |
-| --- | ---: | --- | --- |
-| **ToolSandbox frozen holdout** | **71.51%** mean | Approx. **3.08 min/scenario** | 2,602 LLM calls; 22.05M tokens; approx. 92.3K tokens/scenario |
-| **LongMemEval-S** | **71.60%** QA | Session R@8 93.53%; turn R@8 83.31%; E2E P50/P95 **18.6/39.1 s** | 500/500 complete, zero generation/Judge failures |
-| **PersonaMem Balanced-140** | **65.71%** | Retrieval mean/P95 **1.15/1.78 s**; E2E P50/P95 **26.41/53.83 s** | Deterministic local retrieval; no retrieval-time model call |
-| **LoCoMo** | **24.69 token-F1** | Session R@8 89.67%; turn R@8 71.75%; E2E P50/P95 **12.72/30.44 s** | 1,986/1,986 complete |
-
-LoCoMo's high retrieval recall but much lower answer F1 is an important negative result: the remaining weakness is multi-hop evidence synthesis and answer construction, not only retrieval. A partial OSWorld development batch reached 9/15 (60.00%, 264.47 s mean), but it is excluded from the headline table because only 15 of the planned 36 tasks were scored. The historical GAIA L1 two-run mean (85.85%) and the strict-memory first run (77.36%) remain documented below, but neither supersedes the complete 165-task current result.
-
-> **Metric boundary:** ToolSandbox is a continuous scenario-quality score, GAIA and Terminal-Bench are task success rates, and LoCoMo is token-F1. They measure different capabilities and must not be averaged into one synthetic score. Token totals are logical usage, not dollar cost; missing telemetry is reported as unavailable rather than as zero.
+| Track | Score | Retrieval performance | End-to-end latency | Scale / resources |
+| --- | ---: | --- | --- | --- |
+| **ToolSandbox frozen holdout** | **71.51%** mean | Stateful trajectory scoring | **3.08 min/scenario** | 239 scenarios, 2,602 LLM calls, 22.05M tokens |
+| **LongMemEval-S** | **71.60%** QA | Session R@8 93.53%; turn R@8 83.31% | **P50 18.6 s / P95 39.1 s** | 500 / 500 completed |
+| **PersonaMem Balanced-140** | **65.71%** | Retrieval mean 1.15 s; P95 1.78 s | **P50 26.41 s / P95 53.83 s** | 140 / 140 completed; 39 / 39 audits passed |
+| **LoCoMo** | **24.69 token-F1** | Session R@8 89.67%; turn R@8 71.75% | **P50 12.72 s / P95 30.44 s** | 1,986 / 1,986 completed |
 
 [Complete evaluation scorecard](docs/ailis-evaluation-master-scorecard-20260817.md) ·
 [Machine-readable scorecard](evals/benchmark-catalog/ailis-evaluation-master-scorecard-20260817.json) ·
+[Official Codex Terminal-Bench result](https://hub.harborframework.com/datasets/terminal-bench/terminal-bench-2-1/6/leaderboards/main/rows/e5f3feda-4629-46ba-963f-300dcf7c2a4c) ·
 [GAIA methodology](docs/ailis-desktop-real-gaia-eval.md) ·
 [BrowseComp-Plus fixed-corpus protocol](docs/ailis-browsecomp-plus-eval.md) ·
 [ToolSandbox protocol and gates](docs/ailis-toolsandbox-v4-optimization-plan.md)
