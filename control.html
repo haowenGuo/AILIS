@@ -2545,6 +2545,63 @@
                     </div>
                 </section>
 
+                <section class="panel-section section-model" id="section-vision-model">
+                    <div class="section-head">
+                        <div class="section-title">视觉模型</div>
+                        <div class="section-copy">主模型不支持图片时，由独立视觉模型读取桌面截图，再把文字观察交给 TaskAgent。不会持续录屏，只在任务需要时截图。</div>
+                    </div>
+                    <div class="section-body">
+                        <label class="field checkbox-field">
+                            <span class="checkbox-row">
+                                <input id="vision-llm-enabled" type="checkbox">
+                                <span>启用独立视觉模型</span>
+                            </span>
+                            <span class="field-help">当前 DeepSeek 主模型需要开启此项；如果主模型本身支持图片，可以保持关闭并直接使用主模型视觉。</span>
+                        </label>
+
+                        <div class="split-2">
+                            <label class="field">
+                                <span class="field-label">视觉 Provider</span>
+                                <select id="vision-llm-provider"></select>
+                            </label>
+                            <label class="field">
+                                <span class="field-label">视觉模型 ID</span>
+                                <input id="vision-llm-model" type="text" placeholder="填写明确支持图片输入的模型">
+                            </label>
+                        </div>
+
+                        <label class="field">
+                            <span class="field-label">视觉 API Base</span>
+                            <input id="vision-llm-base-url" type="text" placeholder="OpenAI-compatible、Gemini、Anthropic 或 Ollama 地址">
+                        </label>
+
+                        <label class="field">
+                            <div class="field-meta">
+                                <span class="field-label">视觉模型 API Key</span>
+                                <button id="clear-vision-llm-key-btn" class="ghost-btn" type="button">清除</button>
+                            </div>
+                            <input id="vision-llm-api-key" type="password" autocomplete="off" placeholder="留空则保留已保存 Key；本地 Ollama 通常不需要">
+                            <div class="field-help" id="vision-llm-key-state">Key 状态读取中...</div>
+                        </label>
+
+                        <div class="split-2">
+                            <label class="field">
+                                <span class="field-label">视觉请求超时（ms）</span>
+                                <input id="vision-llm-timeout" type="number" min="5000" max="120000" step="1000">
+                            </label>
+                            <div class="field">
+                                <div class="field-meta">
+                                    <span class="field-label">图片输入测试</span>
+                                    <button id="vision-llm-health-check-btn" class="ghost-btn" type="button">测试视觉</button>
+                                </div>
+                                <div class="field-help" id="vision-llm-health-state">尚未测试视觉模型。</div>
+                            </div>
+                        </div>
+
+                        <div class="field-help" id="vision-llm-capability-state">视觉能力状态读取中...</div>
+                    </div>
+                </section>
+
                 <section class="panel-section section-email" id="section-email">
                     <div class="section-head">
                         <div class="section-title">邮箱账号</div>

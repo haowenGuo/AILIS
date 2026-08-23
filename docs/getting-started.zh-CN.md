@@ -35,6 +35,23 @@ pnpm desktop:package
 
 当前发布版使用 AILIS Cloud 连接模型服务，用户无需填写 API Key 即可开始对话。Persona 编排、记忆存储、TaskAgent、审批以及电脑和文件工具仍在用户电脑上运行；完成当前请求所需的模型上下文通过 AILIS 托管服务发送。
 
+### 独立视觉模型
+
+如果主模型不支持图片输入，可在桌面控制面板的“模型账号 → 视觉模型”中单独启用一个多模态模型。AILIS 只在 TaskAgent 需要查看桌面时截图；视觉模型将截图转换为文字观察，再交给主模型规划后续操作。视觉模型 Key 与主模型 Key 分开保存。
+
+开发环境也可以使用独立环境变量覆盖本机配置，密钥不要写入仓库：
+
+```powershell
+$env:AILIS_VISION_ENABLED="true"
+$env:AILIS_VISION_PROVIDER="openai-compatible"
+$env:AILIS_VISION_BASE_URL="https://provider.example/v1"
+$env:AILIS_VISION_MODEL="your-vision-model"
+$env:AILIS_VISION_API_KEY="<local-secret>"
+$env:AILIS_VISION_REQUEST_TIMEOUT_MS="60000"
+```
+
+使用本地 Ollama 时，Provider 设为 `ollama`，Base URL 通常为 `http://127.0.0.1:11434`，模型必须明确支持图片输入。控制面板的“测试视觉”会发送一张最小测试图片验证真实能力，测试结果不会显示 API Key。
+
 ## 语音运行时
 
 准备可选桌面语音运行时：

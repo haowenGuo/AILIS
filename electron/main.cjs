@@ -95,6 +95,12 @@ const {
     DEFAULT_LLM_PROVIDER,
     DEFAULT_LLM_REQUEST_TIMEOUT_MS,
     DEFAULT_LLM_TEMPERATURE,
+    DEFAULT_VISION_LLM_ENABLED,
+    DEFAULT_VISION_LLM_PROVIDER,
+    DEFAULT_VISION_LLM_BASE_URL,
+    DEFAULT_VISION_LLM_MODEL,
+    DEFAULT_VISION_LLM_API_KEY,
+    DEFAULT_VISION_LLM_REQUEST_TIMEOUT_MS,
     LLM_PROVIDER_DEFAULT_BASE_URLS,
     LLM_PROVIDER_DEFAULT_MODELS,
     DEFAULT_ELEVENLABS_API_BASE,
@@ -2468,6 +2474,122 @@ function getResolvedLlmSettings() {
     };
 }
 
+function parseOptionalBoolean(value) {
+    const normalized = String(value ?? '').trim().toLowerCase();
+    if (['1', 'true', 'yes', 'on'].includes(normalized)) {
+        return true;
+    }
+    if (['0', 'false', 'no', 'off'].includes(normalized)) {
+        return false;
+    }
+    return null;
+}
+
+function getPersistedVisionLlmSettings() {
+    const preferences = desktopState?.preferences || {};
+    const provider = normalizeLlmProvider(
+        preferences.visionLlmProvider || DEFAULT_VISION_LLM_PROVIDER
+    );
+    return {
+        enabled: Boolean(preferences.visionLlmEnabled ?? DEFAULT_VISION_LLM_ENABLED),
+        provider,
+        baseUrl: normalizeLlmBaseUrl(
+            preferences.visionLlmBaseUrl ||
+            getDefaultProviderBaseUrl(provider) ||
+            DEFAULT_VISION_LLM_BASE_URL
+        ),
+        model: String(preferences.visionLlmModel || DEFAULT_VISION_LLM_MODEL).trim(),
+        apiKey: normalizeLlmApiKey(
+            preferences.visionLlmApiKey || DEFAULT_VISION_LLM_API_KEY
+        ),
+        temperature: 0.2,
+        timeoutMs: normalizeLlmRequestTimeoutMs(
+            preferences.visionLlmRequestTimeoutMs || DEFAULT_VISION_LLM_REQUEST_TIMEOUT_MS
+        )
+    };
+}
+
+function getResolvedVisionLlmSettings() {
+    const persisted = getPersistedVisionLlmSettings();
+    const envProvider = String(process.env.AILIS_VISION_PROVIDER || '').trim();
+    const envBaseUrl = String(process.env.AILIS_VISION_BASE_URL || '').trim();
+    const envModel = String(process.env.AILIS_VISION_MODEL || '').trim();
+    const envApiKey = normalizeLlmApiKey(process.env.AILIS_VISION_API_KEY || '');
+    const envTimeout = Number(process.env.AILIS_VISION_REQUEST_TIMEOUT_MS || 0);
+    const envEnabled = parseOptionalBoolean(process.env.AILIS_VISION_ENABLED);
+    const hasEnvironmentConfiguration = Boolean(
+        envProvider || envBaseUrl || envModel || envApiKey || envTimeout
+    );
+    const enabled = envEnabled ?? (hasEnvironmentConfiguration || persisted.enabled);
+    if (!enabled) {
+        return null;
+    }
+
+    const provider = normalizeLlmProvider(envProvider || persisted.provider);
+    const model = String(envModel || persisted.model).trim();
+    const apiKey = envApiKey || persisted.apiKey;
+    return {
+        enabled: true,
+        provider,
+        baseUrl: normalizeLlmBaseUrl(
+            envBaseUrl ||
+            (envProvider ? '' : persisted.baseUrl) ||
+            getDefaultProviderBaseUrl(provider) ||
+            DEFAULT_VISION_LLM_BASE_URL
+        ),
+        model,
+        apiKey,
+        apiKeySource: apiKey
+            ? (envApiKey ? 'environment' : 'saved')
+            : 'none',
+        temperature: 0.2,
+        timeoutMs: normalizeLlmRequestTimeoutMs(
+            envTimeout || persisted.timeoutMs || DEFAULT_VISION_LLM_REQUEST_TIMEOUT_MS
+        )
+    };
+}
+
+function buildTemporaryVisionLlmSettings(settings = {}) {
+    const persisted = getPersistedVisionLlmSettings();
+    const resolved = getResolvedVisionLlmSettings();
+    const provider = normalizeLlmProvider(
+        settings.provider || settings.visionLlmProvider || resolved?.provider || persisted.provider
+    );
+    return {
+        enabled: true,
+        provider,
+        baseUrl: normalizeLlmBaseUrl(
+            settings.baseUrl ||
+            settings.visionLlmBaseUrl ||
+            resolved?.baseUrl ||
+            persisted.baseUrl ||
+            getDefaultProviderBaseUrl(provider)
+        ),
+        model: String(
+            settings.model ||
+            settings.visionLlmModel ||
+            resolved?.model ||
+            persisted.model ||
+            ''
+        ).trim(),
+        apiKey: normalizeLlmApiKey(
+            settings.apiKey ||
+            settings.visionLlmApiKey ||
+            resolved?.apiKey ||
+            persisted.apiKey ||
+            ''
+        ),
+        temperature: 0.2,
+        timeoutMs: normalizeLlmRequestTimeoutMs(
+            settings.timeoutMs ||
+            settings.visionLlmRequestTimeoutMs ||
+            resolved?.timeoutMs ||
+            persisted.timeoutMs ||
+            DEFAULT_VISION_LLM_REQUEST_TIMEOUT_MS
+        )
+    };
+}
+
 function buildTemporaryLlmSettings(settings = {}) {
     const provider = normalizeLlmProvider(settings.provider || settings.llmProvider || DEFAULT_LLM_PROVIDER);
     return {
@@ -2569,6 +2691,24 @@ function getRendererLlmPreferences() {
         llmTemperature: settings.temperature,
         llmRequestTimeoutMs: settings.timeoutMs,
         llmCapabilities: getProviderCapabilities(settings)
+    };
+}
+
+function getRendererVisionLlmPreferences() {
+    const persisted = getPersistedVisionLlmSettings();
+    const resolved = getResolvedVisionLlmSettings();
+    const visible = resolved || persisted;
+    return {
+        visionLlmEnabled: Boolean(resolved),
+        visionLlmProvider: visible.provider,
+        visionLlmBaseUrl: visible.baseUrl,
+        visionLlmModel: visible.model,
+        visionLlmApiKeyConfigured: Boolean(visible.apiKey),
+        visionLlmApiKeySource: resolved?.apiKeySource || (persisted.apiKey ? 'saved' : 'none'),
+        visionLlmRequestTimeoutMs: visible.timeoutMs,
+        visionLlmCapabilities: visible.model
+            ? getProviderCapabilities(visible)
+            : { vision: false, source: 'vision_model_not_selected' }
     };
 }
 
@@ -3006,6 +3146,7 @@ function ensureAILISGateway() {
         visionServices: {
             permissionPolicy: 'manual',
             getLlmSettings: () => getResolvedLlmSettings(),
+            getVisionLlmSettings: () => getResolvedVisionLlmSettings(),
             capture: (payload) => captureVisionSnapshotForTool(payload)
         }
     });
@@ -3183,6 +3324,7 @@ function getRendererPreferences() {
         voiceRuntimeDefaultRoot: getDefaultVoiceRuntimeRoot(),
         characterAssets: getAssetPackRuntime().getSnapshot(),
         ...getRendererLlmPreferences(),
+        ...getRendererVisionLlmPreferences(),
         ...getRendererOllamaTargetPreferences(),
         ...getRendererElevenLabsPreferences(),
         computerControlEnabled: getPersistedComputerControlEnabled(),
@@ -3641,6 +3783,7 @@ function applyPreferencesPatch(partialPreferences = {}) {
 
     const rendererPreferences = getRendererPreferences();
     const currentLlmSettings = getPersistedLlmSettings();
+    const currentVisionLlmSettings = getPersistedVisionLlmSettings();
     const currentElevenLabsSettings = getPersistedElevenLabsSettings();
     const nextPreferences = {
         petSkipTaskbar: rendererPreferences.petSkipTaskbar,
@@ -3664,6 +3807,12 @@ function applyPreferencesPatch(partialPreferences = {}) {
         llmApiKeyProfiles: getPersistedLlmApiKeyProfiles(),
         llmTemperature: currentLlmSettings.temperature,
         llmRequestTimeoutMs: currentLlmSettings.timeoutMs,
+        visionLlmEnabled: currentVisionLlmSettings.enabled,
+        visionLlmProvider: currentVisionLlmSettings.provider,
+        visionLlmBaseUrl: currentVisionLlmSettings.baseUrl,
+        visionLlmModel: currentVisionLlmSettings.model,
+        visionLlmApiKey: currentVisionLlmSettings.apiKey,
+        visionLlmRequestTimeoutMs: currentVisionLlmSettings.timeoutMs,
         elevenLabsApiBase: currentElevenLabsSettings.apiBase,
         elevenLabsApiKey: currentElevenLabsSettings.apiKey,
         elevenLabsVoiceId: currentElevenLabsSettings.voiceId,
@@ -3840,6 +3989,32 @@ function applyPreferencesPatch(partialPreferences = {}) {
     if ('llmRequestTimeoutMs' in partialPreferences) {
         nextPreferences.llmRequestTimeoutMs = normalizeLlmRequestTimeoutMs(
             partialPreferences.llmRequestTimeoutMs
+        );
+    }
+    if ('visionLlmEnabled' in partialPreferences) {
+        nextPreferences.visionLlmEnabled = Boolean(partialPreferences.visionLlmEnabled);
+    }
+    if ('visionLlmProvider' in partialPreferences) {
+        nextPreferences.visionLlmProvider = normalizeLlmProvider(partialPreferences.visionLlmProvider);
+    }
+    if ('visionLlmBaseUrl' in partialPreferences) {
+        nextPreferences.visionLlmBaseUrl = normalizeLlmBaseUrl(partialPreferences.visionLlmBaseUrl);
+    }
+    if ('visionLlmModel' in partialPreferences) {
+        nextPreferences.visionLlmModel = String(partialPreferences.visionLlmModel || '').trim();
+    }
+    if ('visionLlmApiKey' in partialPreferences) {
+        const nextVisionApiKey = normalizeLlmApiKey(partialPreferences.visionLlmApiKey);
+        if (nextVisionApiKey) {
+            nextPreferences.visionLlmApiKey = nextVisionApiKey;
+        }
+    }
+    if (partialPreferences.visionLlmApiKeyAction === 'clear') {
+        nextPreferences.visionLlmApiKey = '';
+    }
+    if ('visionLlmRequestTimeoutMs' in partialPreferences) {
+        nextPreferences.visionLlmRequestTimeoutMs = normalizeLlmRequestTimeoutMs(
+            partialPreferences.visionLlmRequestTimeoutMs
         );
     }
     if ('elevenLabsApiBase' in partialPreferences) {
@@ -4192,6 +4367,9 @@ function applyPreferencesPatch(partialPreferences = {}) {
     }
     if (partialPreferences.elevenLabsApiKeyAction === 'clear') {
         allowBlankCredentials.push('elevenLabsApiKey');
+    }
+    if (partialPreferences.visionLlmApiKeyAction === 'clear') {
+        allowBlankCredentials.push('visionLlmApiKey');
     }
     for (const [providerId, profile] of Object.entries(partialPreferences.emailProfiles || {})) {
         if (profile?.secretAction === 'clear') {
@@ -4779,6 +4957,7 @@ function restoreDefaultPreferences() {
     return applyPreferencesPatch({
         ...getDefaultState().preferences,
         llmApiKeyAction: 'clear',
+        visionLlmApiKeyAction: 'clear',
         elevenLabsApiKeyAction: 'clear'
     });
 }
@@ -5175,6 +5354,33 @@ function registerIpc() {
             includeVision: payload?.includeVision !== false,
             timeoutMs: payload?.timeoutMs || settings.timeoutMs
         });
+    });
+    ipcMain.handle('ailis:vision-llm-health-check', async (_event, payload = {}) => {
+        const settings = buildTemporaryVisionLlmSettings(payload?.settings || {});
+        if (!settings.model) {
+            return {
+                ok: false,
+                summary: '请先填写支持图片输入的视觉模型 ID。',
+                checks: {},
+                capabilities: getProviderCapabilities(settings)
+            };
+        }
+        const result = await checkDesktopLlmProvider(settings, {
+            includeToolCall: false,
+            includeVision: true,
+            forceVision: true,
+            timeoutMs: Math.min(
+                Number(payload?.timeoutMs || settings.timeoutMs) || DEFAULT_VISION_LLM_REQUEST_TIMEOUT_MS,
+                30000
+            )
+        });
+        result.ok = Boolean(result.ok && result.checks?.vision?.ok);
+        if (!result.ok && result.checks?.vision?.skipped) {
+            result.summary = '当前 Provider/模型未声明视觉能力，请选择明确支持图片输入的模型。';
+        } else if (!result.ok) {
+            result.summary = `视觉模型未通过图片输入测试：${result.summary || '请检查模型、地址和 Key。'}`;
+        }
+        return result;
     });
     ipcMain.handle('ailis:vllm-model-catalog-search', async (_event, payload = {}) =>
         searchVllmModelCatalog(payload || {})

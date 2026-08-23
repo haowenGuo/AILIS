@@ -34,6 +34,7 @@ test('desktop state preserves saved credentials when a stale runtime saves empty
     existingState.preferences.elevenLabsApiKey = 'elevenlabs-existing-key';
     existingState.preferences.elevenLabsVoiceId = 'elevenlabs-existing-voice';
     existingState.preferences.llmApiKey = 'llm-existing-key';
+    existingState.preferences.visionLlmApiKey = 'vision-existing-key';
     existingState.preferences.emailProfiles.qq.secret = 'email-existing-secret';
 
     saveDesktopState(app, existingState, { preserveExistingCredentials: false });
@@ -42,6 +43,7 @@ test('desktop state preserves saved credentials when a stale runtime saves empty
     staleState.preferences.elevenLabsApiKey = '';
     staleState.preferences.elevenLabsVoiceId = '';
     staleState.preferences.llmApiKey = '';
+    staleState.preferences.visionLlmApiKey = '';
     staleState.preferences.emailProfiles.qq.secret = '';
 
     const savedState = saveDesktopState(app, staleState);
@@ -49,6 +51,7 @@ test('desktop state preserves saved credentials when a stale runtime saves empty
     assert.equal(savedState.preferences.elevenLabsApiKey, 'elevenlabs-existing-key');
     assert.equal(savedState.preferences.elevenLabsVoiceId, 'elevenlabs-existing-voice');
     assert.equal(savedState.preferences.llmApiKey, 'llm-existing-key');
+    assert.equal(savedState.preferences.visionLlmApiKey, 'vision-existing-key');
     assert.equal(savedState.preferences.emailProfiles.qq.secret, 'email-existing-secret');
 });
 
@@ -69,6 +72,30 @@ test('desktop state allows explicit credential clearing', () => {
 
     assert.equal(savedState.preferences.elevenLabsApiKey, '');
     assert.equal(savedState.preferences.elevenLabsVoiceId, 'elevenlabs-existing-voice');
+});
+
+test('desktop state persists independent vision model settings and supports explicit key clearing', () => {
+    const existingState = getDefaultState();
+    existingState.preferences.visionLlmEnabled = true;
+    existingState.preferences.visionLlmProvider = 'ollama';
+    existingState.preferences.visionLlmBaseUrl = 'http://127.0.0.1:11434/';
+    existingState.preferences.visionLlmModel = 'qwen2.5vl:7b';
+    existingState.preferences.visionLlmApiKey = 'vision-existing-key';
+    existingState.preferences.visionLlmRequestTimeoutMs = 70000;
+
+    const firstSaved = saveDesktopState(app, existingState, { preserveExistingCredentials: false });
+    assert.equal(firstSaved.preferences.visionLlmEnabled, true);
+    assert.equal(firstSaved.preferences.visionLlmProvider, 'ollama');
+    assert.equal(firstSaved.preferences.visionLlmBaseUrl, 'http://127.0.0.1:11434');
+    assert.equal(firstSaved.preferences.visionLlmModel, 'qwen2.5vl:7b');
+    assert.equal(firstSaved.preferences.visionLlmRequestTimeoutMs, 70000);
+
+    const nextState = structuredClone(firstSaved);
+    nextState.preferences.visionLlmApiKey = '';
+    const cleared = saveDesktopState(app, nextState, {
+        allowBlankCredentials: ['visionLlmApiKey']
+    });
+    assert.equal(cleared.preferences.visionLlmApiKey, '');
 });
 
 test('desktop state normalizes ElevenLabs voice tuning preferences', () => {

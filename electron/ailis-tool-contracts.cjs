@@ -2512,7 +2512,7 @@ const TOOL_CONTRACTS = Object.freeze({
         approval: 'vision-policy',
         experience: TOOL_EXPERIENCE.vision_capture_context,
         returns: defaultReturns(),
-        errors: defaultErrors(['vision_permission_required', 'capture_failed', 'vision_model_failed']),
+        errors: defaultErrors(['vision_permission_required', 'capture_failed', 'vision_not_configured', 'vision_model_failed']),
         schema: actionSchema(['schema', 'capture_context'], {
             target: stringSchema({ enum: ['screen', 'chat-window', 'active-window', 'region', 'pet-window', 'control-window'] }),
             source: stringSchema(),

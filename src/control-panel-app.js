@@ -46,6 +46,7 @@ const elements = {
     characterResetActiveBtn: document.getElementById('character-reset-active-btn'),
     clearElevenLabsKeyBtn: document.getElementById('clear-elevenlabs-key-btn'),
     clearLlmKeyBtn: document.getElementById('clear-llm-key-btn'),
+    clearVisionLlmKeyBtn: document.getElementById('clear-vision-llm-key-btn'),
     clearEmailQqSecretBtn: document.getElementById('clear-email-qq-secret-btn'),
     clearEmailGmailSecretBtn: document.getElementById('clear-email-gmail-secret-btn'),
     clearEmailOutlookSecretBtn: document.getElementById('clear-email-outlook-secret-btn'),
@@ -106,6 +107,16 @@ const elements = {
     llmTemperature: document.getElementById('llm-temperature'),
     llmTemperatureValue: document.getElementById('llm-temperature-value'),
     llmTimeout: document.getElementById('llm-timeout'),
+    visionLlmEnabled: document.getElementById('vision-llm-enabled'),
+    visionLlmProvider: document.getElementById('vision-llm-provider'),
+    visionLlmBaseUrl: document.getElementById('vision-llm-base-url'),
+    visionLlmModel: document.getElementById('vision-llm-model'),
+    visionLlmApiKey: document.getElementById('vision-llm-api-key'),
+    visionLlmKeyState: document.getElementById('vision-llm-key-state'),
+    visionLlmTimeout: document.getElementById('vision-llm-timeout'),
+    visionLlmHealthCheckBtn: document.getElementById('vision-llm-health-check-btn'),
+    visionLlmHealthState: document.getElementById('vision-llm-health-state'),
+    visionLlmCapabilityState: document.getElementById('vision-llm-capability-state'),
     localLlmRuntimeCopy: document.getElementById('local-llm-runtime-copy'),
     localLlmRuntimePanel: document.getElementById('local-llm-runtime-panel'),
     localLlmRuntimeTitle: document.getElementById('local-llm-runtime-title'),
@@ -691,12 +702,14 @@ let assistantStatusCache = null;
 let dialoguePreviewScale = 1;
 let dialoguePreviewDrag = null;
 let pendingClearLlmKey = false;
+let pendingClearVisionLlmKey = false;
 let pendingClearElevenLabsKey = false;
 let draftElevenLabsVoiceProfiles = {};
 let draftElevenLabsActiveLanguageCode = 'zh';
 let llmProviderDefaultBaseUrls = { ...fallbackLlmProviderDefaultBaseUrls };
 let llmProviderDefaultModels = { ...fallbackLlmProviderDefaultModels };
 let lastLlmProviderValue = 'openai-compatible';
+let lastVisionLlmProviderValue = 'openai-compatible';
 let vllmModelCatalogResults = [];
 let vllmModelCatalogLastResult = null;
 let vllmModelCatalogRequestId = 0;
@@ -1734,6 +1747,18 @@ function normalizePreferences(preferences = {}) {
         llmCapabilities: preferences.llmCapabilities && typeof preferences.llmCapabilities === 'object'
             ? preferences.llmCapabilities
             : {},
+        visionLlmEnabled: Boolean(preferences.visionLlmEnabled),
+        visionLlmProvider: String(preferences.visionLlmProvider || 'openai-compatible'),
+        visionLlmBaseUrl: String(preferences.visionLlmBaseUrl || ''),
+        visionLlmModel: String(preferences.visionLlmModel || ''),
+        visionLlmApiKeyConfigured: Boolean(preferences.visionLlmApiKeyConfigured),
+        visionLlmApiKeySource: String(preferences.visionLlmApiKeySource || 'none'),
+        visionLlmRequestTimeoutMs: Math.round(
+            Math.min(120000, Math.max(5000, Number(preferences.visionLlmRequestTimeoutMs ?? 60000)))
+        ),
+        visionLlmCapabilities: preferences.visionLlmCapabilities && typeof preferences.visionLlmCapabilities === 'object'
+            ? preferences.visionLlmCapabilities
+            : {},
         elevenLabsApiBase: String(preferences.elevenLabsApiBase || 'https://api.elevenlabs.io'),
         elevenLabsVoiceId: String(preferences.elevenLabsVoiceId || ''),
         elevenLabsModelId: String(preferences.elevenLabsModelId || 'eleven_multilingual_v2'),
@@ -2112,6 +2137,18 @@ function readFormPreferences({ includeSecret = false } = {}) {
             : String(currentPreferences?.llmApiKeySource || 'none'),
         llmTemperature: Number(elements.llmTemperature.value),
         llmRequestTimeoutMs: Number(elements.llmTimeout.value),
+        visionLlmEnabled: Boolean(elements.visionLlmEnabled?.checked),
+        visionLlmProvider: elements.visionLlmProvider?.value || currentPreferences?.visionLlmProvider || 'openai-compatible',
+        visionLlmBaseUrl: elements.visionLlmBaseUrl?.value || currentPreferences?.visionLlmBaseUrl || '',
+        visionLlmModel: elements.visionLlmModel?.value || currentPreferences?.visionLlmModel || '',
+        visionLlmApiKeyConfigured: pendingClearVisionLlmKey
+            ? false
+            : Boolean(currentPreferences?.visionLlmApiKeyConfigured),
+        visionLlmApiKeySource: pendingClearVisionLlmKey
+            ? 'none'
+            : String(currentPreferences?.visionLlmApiKeySource || 'none'),
+        visionLlmRequestTimeoutMs: Number(elements.visionLlmTimeout?.value || 60000),
+        visionLlmCapabilities: currentPreferences?.visionLlmCapabilities || {},
         elevenLabsApiBase: elements.elevenLabsApiBase.value,
         elevenLabsVoiceId: elements.elevenLabsVoiceId.value,
         elevenLabsModelId: elements.elevenLabsModelId.value,
@@ -2177,6 +2214,13 @@ function readFormPreferences({ includeSecret = false } = {}) {
         if (pendingClearLlmKey) {
             nextPreferences.llmApiKeyAction = 'clear';
         }
+        const nextVisionApiKey = elements.visionLlmApiKey?.value?.trim() || '';
+        if (nextVisionApiKey) {
+            nextPreferences.visionLlmApiKey = nextVisionApiKey;
+        }
+        if (pendingClearVisionLlmKey) {
+            nextPreferences.visionLlmApiKeyAction = 'clear';
+        }
         const nextElevenLabsApiKey = elements.elevenLabsApiKey.value.trim();
         if (nextElevenLabsApiKey) {
             nextPreferences.elevenLabsApiKey = nextElevenLabsApiKey;
@@ -2225,10 +2269,12 @@ function hasDirtyChanges() {
     const hasPendingEmailClear = Object.values(pendingClearEmailSecrets).some(Boolean);
 
     return Boolean(elements.llmApiKey.value.trim()) ||
+        Boolean(elements.visionLlmApiKey?.value?.trim()) ||
         Boolean(elements.elevenLabsApiKey.value.trim()) ||
         hasEmailSecretInput ||
         hasPendingEmailClear ||
         pendingClearLlmKey ||
+        pendingClearVisionLlmKey ||
         pendingClearElevenLabsKey ||
         JSON.stringify(readFormPreferences()) !== JSON.stringify(currentPreferences);
 }
@@ -2306,6 +2352,22 @@ function fillLlmProviderOptions(providerOptions = []) {
         option.value = provider;
         option.textContent = t(llmProviderLabels[provider] || provider);
         elements.llmProvider.appendChild(option);
+    });
+}
+
+function fillVisionLlmProviderOptions(providerOptions = []) {
+    if (!elements.visionLlmProvider) {
+        return;
+    }
+    elements.visionLlmProvider.innerHTML = '';
+    const visibleProviders = Array.from(new Set([...providerOptions, 'ollama']))
+        .filter((provider) => provider !== 'vllm')
+        .filter(Boolean);
+    visibleProviders.forEach((provider) => {
+        const option = document.createElement('option');
+        option.value = provider;
+        option.textContent = t(llmProviderLabels[provider] || provider);
+        elements.visionLlmProvider.appendChild(option);
     });
 }
 
@@ -5278,6 +5340,86 @@ async function runLlmHealthCheck() {
     }
 }
 
+function renderVisionLlmCapabilityState(capabilities = currentPreferences?.visionLlmCapabilities || {}) {
+    if (!elements.visionLlmCapabilityState) {
+        return;
+    }
+    if (!elements.visionLlmEnabled?.checked) {
+        elements.visionLlmCapabilityState.textContent =
+            '独立视觉模型未启用；仅当主模型自身支持图片时，AILIS 才能直接理解截图。';
+        return;
+    }
+    if (!elements.visionLlmModel?.value?.trim()) {
+        elements.visionLlmCapabilityState.textContent = '请填写支持图片输入的视觉模型 ID。';
+        return;
+    }
+    elements.visionLlmCapabilityState.textContent = capabilities?.vision === true
+        ? '模型名称能力表识别为支持图片输入；仍建议点击“测试视觉”做真实验证。'
+        : '模型名称尚未确认视觉能力；请点击“测试视觉”，以真实图片调用结果为准。';
+}
+
+function renderVisionLlmHealthState(result = null) {
+    if (!elements.visionLlmHealthState) {
+        return;
+    }
+    if (!result) {
+        elements.visionLlmHealthState.textContent = '尚未测试视觉模型。';
+        return;
+    }
+    elements.visionLlmHealthState.textContent = result.ok
+        ? '视觉输入测试通过，截图可以交给该模型理解。'
+        : `视觉输入测试失败：${result.summary || '请检查模型、地址和 Key。'}`;
+    renderVisionLlmCapabilityState(result.capabilities || currentPreferences?.visionLlmCapabilities || {});
+}
+
+function syncVisionLlmKeyState() {
+    if (!elements.visionLlmKeyState) {
+        return;
+    }
+    if (pendingClearVisionLlmKey) {
+        elements.visionLlmKeyState.textContent = '保存后会清除已保存的视觉模型 Key。';
+        return;
+    }
+    if (currentPreferences?.visionLlmApiKeyConfigured) {
+        elements.visionLlmKeyState.textContent = elements.visionLlmApiKey?.value?.trim()
+            ? '保存后会用新 Key 覆盖已保存的视觉模型 Key。'
+            : `Key 状态：已配置（${currentPreferences.visionLlmApiKeySource || 'saved'}）。留空会继续沿用。`;
+        return;
+    }
+    elements.visionLlmKeyState.textContent = elements.visionLlmApiKey?.value?.trim()
+        ? '保存后会写入视觉模型 Key。'
+        : 'Key 状态：未配置；本地 Ollama 通常不需要 Key。';
+}
+
+async function runVisionLlmHealthCheck() {
+    if (!window.ailisDesktop?.llm?.visionHealthCheck) {
+        renderVisionLlmHealthState({ ok: false, summary: '当前桌面宿主不支持视觉模型检测。' });
+        return;
+    }
+    elements.visionLlmHealthCheckBtn.disabled = true;
+    elements.visionLlmHealthState.textContent = '正在发送一张最小测试图片，验证真实视觉输入能力...';
+    try {
+        const result = await window.ailisDesktop.llm.visionHealthCheck({
+            settings: {
+                provider: elements.visionLlmProvider.value,
+                baseUrl: elements.visionLlmBaseUrl.value,
+                model: elements.visionLlmModel.value,
+                apiKey: elements.visionLlmApiKey.value.trim(),
+                timeoutMs: Number(elements.visionLlmTimeout.value)
+            },
+            timeoutMs: Math.min(Number(elements.visionLlmTimeout.value) || 60000, 30000)
+        });
+        renderVisionLlmHealthState(result);
+    } catch (error) {
+        renderVisionLlmHealthState({
+            ok: false,
+            summary: error.message || String(error)
+        });
+    } finally {
+        elements.visionLlmHealthCheckBtn.disabled = false;
+    }
+}
+
 async function runOllamaRuntimeCheck() {
     if (elements.ollamaRuntimeCheckBtn) {
         elements.ollamaRuntimeCheckBtn.disabled = true;
@@ -5336,6 +5478,7 @@ function fillForm(preferences) {
     currentPreferences = normalized;
     setUiLanguage(normalized.uiLanguage);
     pendingClearLlmKey = false;
+    pendingClearVisionLlmKey = false;
     pendingClearElevenLabsKey = false;
     Object.keys(pendingClearEmailSecrets).forEach((providerId) => {
         pendingClearEmailSecrets[providerId] = false;
@@ -5402,6 +5545,28 @@ function fillForm(preferences) {
     syncLlmPresetSelectionFromFields();
     renderLlmCapabilityState(normalized.llmCapabilities);
     renderLlmHealthState(null);
+    if (elements.visionLlmEnabled) {
+        elements.visionLlmEnabled.checked = normalized.visionLlmEnabled;
+    }
+    if (elements.visionLlmProvider) {
+        elements.visionLlmProvider.value = normalized.visionLlmProvider;
+        lastVisionLlmProviderValue = normalized.visionLlmProvider;
+    }
+    if (elements.visionLlmBaseUrl) {
+        elements.visionLlmBaseUrl.value = normalized.visionLlmBaseUrl;
+    }
+    if (elements.visionLlmModel) {
+        elements.visionLlmModel.value = normalized.visionLlmModel;
+    }
+    if (elements.visionLlmApiKey) {
+        elements.visionLlmApiKey.value = '';
+    }
+    if (elements.visionLlmTimeout) {
+        elements.visionLlmTimeout.value = String(normalized.visionLlmRequestTimeoutMs);
+    }
+    syncVisionLlmKeyState();
+    renderVisionLlmCapabilityState(normalized.visionLlmCapabilities);
+    renderVisionLlmHealthState(null);
     elements.elevenLabsApiBase.value = normalized.elevenLabsApiBase;
     elements.elevenLabsApiKey.value = '';
     elements.elevenLabsTimeout.value = String(normalized.elevenLabsTimeoutMs);
@@ -6795,6 +6960,7 @@ async function savePreferences() {
             nextPreferences
         );
         pendingClearLlmKey = false;
+        pendingClearVisionLlmKey = false;
         pendingClearElevenLabsKey = false;
         fillForm(savedPreferences);
         await refreshAgentRuntimeStatus();
@@ -6828,6 +6994,7 @@ async function restoreDefaults() {
     try {
         const restoredPreferences = await window.ailisDesktop.restoreDefaultPreferences();
         pendingClearLlmKey = false;
+        pendingClearVisionLlmKey = false;
         pendingClearElevenLabsKey = false;
         fillForm(restoredPreferences);
         await refreshAgentRuntimeStatus();
@@ -6865,6 +7032,7 @@ async function initialize() {
         fillRecognitionModeOptions(panelState.options?.recognitionModeOptions || ['fast-vad', 'auto-vad', 'continuous', 'manual']);
         fillConversationModeOptions(panelState.options?.conversationModeOptions || ['assistant', 'daily']);
         fillLlmProviderOptions(panelState.options?.llmProviderOptions || ['openai-compatible']);
+        fillVisionLlmProviderOptions(panelState.options?.llmProviderOptions || ['openai-compatible']);
         fillLlmPresetOptions();
         fillRenderProfileOptions(panelState.options?.renderProfileOptions || Object.keys(renderProfileLabels));
         fillForm(panelState.preferences || {});
@@ -6993,6 +7161,11 @@ function endDialoguePreviewDrag(event) {
     elements.llmProvider,
     elements.llmTemperature,
     elements.llmTimeout,
+    elements.visionLlmEnabled,
+    elements.visionLlmProvider,
+    elements.visionLlmBaseUrl,
+    elements.visionLlmModel,
+    elements.visionLlmTimeout,
     elements.ailisStateDir,
     elements.elevenLabsApiBase,
     elements.elevenLabsVoiceId,
@@ -7328,6 +7501,62 @@ elements.llmModel?.addEventListener('input', () => {
 
 elements.llmHealthCheckBtn?.addEventListener('click', () => {
     void runLlmHealthCheck();
+});
+
+elements.visionLlmEnabled?.addEventListener('change', () => {
+    renderVisionLlmCapabilityState();
+    renderVisionLlmHealthState(null);
+    syncSaveButton();
+});
+
+elements.visionLlmProvider?.addEventListener('change', () => {
+    const provider = elements.visionLlmProvider.value;
+    const previousDefaultBaseUrl = getProviderDefaultBaseUrl(lastVisionLlmProviderValue);
+    if (
+        !elements.visionLlmBaseUrl.value.trim() ||
+        elements.visionLlmBaseUrl.value.trim() === previousDefaultBaseUrl
+    ) {
+        elements.visionLlmBaseUrl.value = getProviderDefaultBaseUrl(provider);
+    }
+    lastVisionLlmProviderValue = provider;
+    pendingClearVisionLlmKey = Boolean(currentPreferences?.visionLlmApiKeyConfigured);
+    if (elements.visionLlmApiKey) {
+        elements.visionLlmApiKey.value = '';
+    }
+    syncVisionLlmKeyState();
+    renderVisionLlmCapabilityState({});
+    renderVisionLlmHealthState(null);
+    syncSaveButton();
+});
+
+elements.visionLlmBaseUrl?.addEventListener('input', () => {
+    renderVisionLlmHealthState(null);
+});
+
+elements.visionLlmModel?.addEventListener('input', () => {
+    renderVisionLlmCapabilityState({});
+    renderVisionLlmHealthState(null);
+});
+
+elements.visionLlmApiKey?.addEventListener('input', () => {
+    if (elements.visionLlmApiKey.value.trim()) {
+        pendingClearVisionLlmKey = false;
+    }
+    syncVisionLlmKeyState();
+    renderVisionLlmHealthState(null);
+    syncSaveButton();
+});
+
+elements.clearVisionLlmKeyBtn?.addEventListener('click', () => {
+    elements.visionLlmApiKey.value = '';
+    pendingClearVisionLlmKey = Boolean(currentPreferences?.visionLlmApiKeyConfigured);
+    syncVisionLlmKeyState();
+    renderVisionLlmHealthState(null);
+    syncSaveButton();
+});
+
+elements.visionLlmHealthCheckBtn?.addEventListener('click', () => {
+    void runVisionLlmHealthCheck();
 });
 
 elements.elevenLabsApiKey.addEventListener('input', () => {

@@ -874,6 +874,32 @@ describe('desktop LLM provider', () => {
         assert.equal(JSON.stringify(result).includes('secret-health-key'), false);
     });
 
+    it('can force a real image-input health check for an explicitly configured auxiliary model', async () => {
+        const requestStart = receivedRequests.length;
+        const result = await checkDesktopLlmProvider({
+            provider: 'openai-compatible',
+            baseUrl: `${serverUrl}/v1`,
+            apiKey: 'auxiliary-vision-key',
+            model: 'vendor-custom-multimodal-model',
+            timeoutMs: 5000
+        }, {
+            includeToolCall: false,
+            includeVision: true,
+            forceVision: true
+        });
+
+        assert.equal(result.checks.vision.ok, true);
+        assert.ok(
+            receivedRequests.slice(requestStart).some((entry) =>
+                entry.body.messages?.some((message) =>
+                    Array.isArray(message.content) &&
+                    message.content.some((part) => part?.type === 'image_url')
+                )
+            )
+        );
+        assert.equal(JSON.stringify(result).includes('auxiliary-vision-key'), false);
+    });
+
     it('runs Ollama health checks while skipping unsupported native tool calling', async () => {
         const result = await checkDesktopLlmProvider({
             provider: 'ollama',

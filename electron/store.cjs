@@ -4,7 +4,7 @@ const path = require('path');
 const { screen } = require('electron');
 
 const STATE_FILE_NAME = 'desktop-state.json';
-const STATE_VERSION = 31;
+const STATE_VERSION = 32;
 // Transparent Electron frame size. Avatar visual size is compensated in the pet renderer.
 const PET_BASE_WIDTH = 720;
 const PET_BASE_HEIGHT = 960;
@@ -72,6 +72,12 @@ const LLM_PROVIDER_DEFAULT_MODELS = Object.freeze({
 const DEFAULT_LLM_API_KEY = '';
 const DEFAULT_LLM_TEMPERATURE = 0.8;
 const DEFAULT_LLM_REQUEST_TIMEOUT_MS = 25000;
+const DEFAULT_VISION_LLM_ENABLED = false;
+const DEFAULT_VISION_LLM_PROVIDER = OPENAI_COMPATIBLE_PROVIDER;
+const DEFAULT_VISION_LLM_BASE_URL = DEFAULT_OPENAI_COMPATIBLE_BASE_URL;
+const DEFAULT_VISION_LLM_MODEL = '';
+const DEFAULT_VISION_LLM_API_KEY = '';
+const DEFAULT_VISION_LLM_REQUEST_TIMEOUT_MS = 60000;
 const DEFAULT_ELEVENLABS_API_BASE = 'https://api.elevenlabs.io';
 const DEFAULT_ELEVENLABS_API_KEY = '';
 const DEFAULT_ELEVENLABS_VOICE_ID = '';
@@ -999,6 +1005,12 @@ function getDefaultState() {
             llmApiKeyProfiles: normalizeLlmApiKeyProfiles(),
             llmTemperature: DEFAULT_LLM_TEMPERATURE,
             llmRequestTimeoutMs: DEFAULT_LLM_REQUEST_TIMEOUT_MS,
+            visionLlmEnabled: DEFAULT_VISION_LLM_ENABLED,
+            visionLlmProvider: DEFAULT_VISION_LLM_PROVIDER,
+            visionLlmBaseUrl: DEFAULT_VISION_LLM_BASE_URL,
+            visionLlmModel: DEFAULT_VISION_LLM_MODEL,
+            visionLlmApiKey: DEFAULT_VISION_LLM_API_KEY,
+            visionLlmRequestTimeoutMs: DEFAULT_VISION_LLM_REQUEST_TIMEOUT_MS,
             elevenLabsApiBase: DEFAULT_ELEVENLABS_API_BASE,
             elevenLabsApiKey: DEFAULT_ELEVENLABS_API_KEY,
             elevenLabsVoiceId: DEFAULT_ELEVENLABS_VOICE_ID,
@@ -1230,6 +1242,26 @@ function normalizeState(inputState) {
     );
     normalizedState.preferences.llmRequestTimeoutMs = normalizeLlmRequestTimeoutMs(
         normalizedState.preferences.llmRequestTimeoutMs
+    );
+    normalizedState.preferences.visionLlmEnabled = Boolean(
+        normalizedState.preferences.visionLlmEnabled
+    );
+    normalizedState.preferences.visionLlmProvider = normalizeLlmProvider(
+        normalizedState.preferences.visionLlmProvider || DEFAULT_VISION_LLM_PROVIDER
+    );
+    normalizedState.preferences.visionLlmBaseUrl = String(
+        normalizedState.preferences.visionLlmBaseUrl ||
+        LLM_PROVIDER_DEFAULT_BASE_URLS[normalizedState.preferences.visionLlmProvider] ||
+        DEFAULT_VISION_LLM_BASE_URL
+    ).trim().replace(/\/+$/, '');
+    normalizedState.preferences.visionLlmModel = String(
+        normalizedState.preferences.visionLlmModel || DEFAULT_VISION_LLM_MODEL
+    ).trim();
+    normalizedState.preferences.visionLlmApiKey = normalizeLlmApiKey(
+        normalizedState.preferences.visionLlmApiKey
+    );
+    normalizedState.preferences.visionLlmRequestTimeoutMs = normalizeLlmRequestTimeoutMs(
+        normalizedState.preferences.visionLlmRequestTimeoutMs || DEFAULT_VISION_LLM_REQUEST_TIMEOUT_MS
     );
     normalizedState.preferences.emberHarnessMode = normalizeEmberHarnessMode(
         normalizedState.preferences.emberHarnessMode
@@ -1481,6 +1513,7 @@ function preserveExistingCredentials(filePath, normalized, options = {}) {
             nextPreferences.llmApiKeyProfiles = existingPreferences.llmApiKeyProfiles;
         }
         preserveExistingValue(nextPreferences, existingPreferences, 'elevenLabsApiKey', allowBlankCredentials);
+        preserveExistingValue(nextPreferences, existingPreferences, 'visionLlmApiKey', allowBlankCredentials);
         preserveExistingValue(nextPreferences, existingPreferences, 'elevenLabsVoiceId', allowBlankCredentials);
         preserveExistingElevenLabsProfileVoiceIds(nextPreferences, existingPreferences, allowBlankCredentials);
         preserveExistingEmailSecrets(nextPreferences, existingPreferences, allowBlankCredentials);
@@ -1538,6 +1571,12 @@ module.exports = {
     DEFAULT_LLM_PROVIDER,
     DEFAULT_LLM_REQUEST_TIMEOUT_MS,
     DEFAULT_LLM_TEMPERATURE,
+    DEFAULT_VISION_LLM_ENABLED,
+    DEFAULT_VISION_LLM_PROVIDER,
+    DEFAULT_VISION_LLM_BASE_URL,
+    DEFAULT_VISION_LLM_MODEL,
+    DEFAULT_VISION_LLM_API_KEY,
+    DEFAULT_VISION_LLM_REQUEST_TIMEOUT_MS,
     LLM_PROVIDER_DEFAULT_BASE_URLS,
     LLM_PROVIDER_DEFAULT_MODELS,
     DEFAULT_ELEVENLABS_API_BASE,

@@ -1,4 +1,4 @@
-const { callDesktopLlmProvider } = require('./desktop-llm-provider.cjs');
+const { callVisionModel } = require('./ailis-vision-model-router.cjs');
 
 const VISION_TOOL_ID = 'vision.capture_context';
 const DEFAULT_VISION_TIMEOUT_MS = 90000;
@@ -285,18 +285,31 @@ async function executeVisionTool(args = {}, context = {}, services = {}) {
         };
     }
 
-    const settings = typeof services.getLlmSettings === 'function'
+    const mainSettings = typeof services.getLlmSettings === 'function'
         ? services.getLlmSettings()
         : context.llmSettings || {};
-    const response = await callDesktopLlmProvider(settings, {
-        messages: buildVisionUnderstandingMessages({
-            snapshot,
-            target,
-            reason,
-            question
-        }),
-        temperature: 0.35,
-        timeoutMs: normalizeTimeoutMs(args.timeoutMs || context.timeoutMs)
+    const auxiliarySettings = typeof services.getVisionLlmSettings === 'function'
+        ? services.getVisionLlmSettings()
+        : context.visionLlmSettings || null;
+    const response = await callVisionModel({
+        mainSettings,
+        auxiliarySettings,
+        callLlm: services.callLlm,
+        request: {
+            messages: buildVisionUnderstandingMessages({
+                snapshot,
+                target,
+                reason,
+                question
+            }),
+            temperature: 0.35,
+            timeoutMs: normalizeTimeoutMs(
+                args.timeoutMs ||
+                context.timeoutMs ||
+                auxiliarySettings?.timeoutMs ||
+                mainSettings.timeoutMs
+            )
+        }
     });
 
     if (!response.ok) {
@@ -313,7 +326,8 @@ async function executeVisionTool(args = {}, context = {}, services = {}) {
                 tool: VISION_TOOL_ID,
                 target,
                 snapshot: stripSnapshotData(snapshot),
-                error: response.error || ''
+                error: response.error || '',
+                routing: response.route || null
             }
         };
     }
@@ -339,7 +353,8 @@ async function executeVisionTool(args = {}, context = {}, services = {}) {
             snapshot: attachment,
             attachment,
             understanding: response.content,
-            model: response.model || settings.model || '',
+            model: response.model || response.route?.model || '',
+            routing: response.route || null,
             usage: response.usage || null
         }
     };

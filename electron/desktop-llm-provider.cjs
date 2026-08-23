@@ -2195,7 +2195,7 @@ async function checkDesktopLlmProvider(settings = {}, options = {}) {
         });
     }
 
-    if (options.includeVision !== false && capabilities.vision) {
+    if (options.includeVision !== false && (capabilities.vision || options.forceVision === true)) {
         result.checks.vision = await runHealthCheckStep(resolvedSettings, {
             timeoutMs,
             temperature: 0,

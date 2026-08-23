@@ -59,6 +59,7 @@ contextBridge.exposeInMainWorld('ailisDesktop', {
     llm: {
         chat: (payload) => ipcRenderer.invoke('ailis:llm-chat', payload || {}),
         healthCheck: (payload) => ipcRenderer.invoke('ailis:llm-health-check', payload || {}),
+        visionHealthCheck: (payload) => ipcRenderer.invoke('ailis:vision-llm-health-check', payload || {}),
         searchVllmModels: (payload) => ipcRenderer.invoke('ailis:vllm-model-catalog-search', payload || {}),
         searchOllamaModels: (payload) => ipcRenderer.invoke('ailis:ollama-model-catalog-search', payload || {})
     },
