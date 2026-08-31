@@ -2102,58 +2102,35 @@ function setPetDialogueWindowExpanded(
         };
     }
 
-    if (expanded) {
-        const referenceBounds = canonicalizePetBounds(
-            petDialogueCollapsedBounds || petWindow.getBounds()
-        );
-        const layout = getPetDialogueExpandedLayout(
-            referenceBounds,
-            requestedExtraTop,
-            requestedExtraWidth
-        );
-
-        petDialogueCollapsedBounds = layout.baseBounds;
-        petDialogueExpanded = layout.extraTop > 0 || layout.extraWidth > 0;
-        petDialogueExtraTop = layout.extraTop;
-        petDialogueExtraWidth = layout.extraWidth;
-        desktopState.petWindow.bounds = layout.baseBounds;
-        desktopState.petWindow.visible = petWindow.isVisible();
-        setPetWindowBoundsTransient(layout.expandedBounds);
-
-        return {
-            ok: true,
-            expanded: petDialogueExpanded,
-            extraTop: layout.extraTop,
-            extraWidth: layout.extraWidth,
-            reservedLeft: layout.reservedLeft,
-            reservedRight: layout.reservedRight,
-            bounds: layout.expandedBounds,
-            baseBounds: layout.baseBounds
-        };
-    }
-
-    const restoreBounds = canonicalizePetBounds(
-        petDialogueCollapsedBounds || petWindow.getBounds()
+    // The transparent WebGL window keeps one fixed dialogue envelope for its
+    // lifetime. Resizing it when speech starts or ends makes Windows recreate
+    // the surface and visibly flashes the avatar.
+    const referenceBounds = canonicalizePetBounds(
+        petDialogueCollapsedBounds || desktopState.petWindow.bounds
+    );
+    const layout = getPetDialogueExpandedLayout(
+        referenceBounds,
+        petDialogueExtraTop || requestedExtraTop,
+        petDialogueExtraWidth || requestedExtraWidth
     );
 
-    petDialogueCollapsedBounds = null;
-    petDialogueExpanded = false;
-    petDialogueExtraTop = 0;
-    petDialogueExtraWidth = 0;
-    desktopState.petWindow.bounds = restoreBounds;
+    petDialogueCollapsedBounds = layout.baseBounds;
+    petDialogueExpanded = layout.extraTop > 0 || layout.extraWidth > 0;
+    petDialogueExtraTop = layout.extraTop;
+    petDialogueExtraWidth = layout.extraWidth;
+    desktopState.petWindow.bounds = layout.baseBounds;
     desktopState.petWindow.visible = petWindow.isVisible();
-    setPetWindowBoundsTransient(restoreBounds);
-    persistDesktopState();
 
     return {
         ok: true,
-        expanded: false,
-        extraTop: 0,
-        extraWidth: 0,
-        reservedLeft: 0,
-        reservedRight: 0,
-        bounds: restoreBounds,
-        baseBounds: restoreBounds
+        expanded: Boolean(expanded),
+        fixedEnvelope: true,
+        extraTop: layout.extraTop,
+        extraWidth: layout.extraWidth,
+        reservedLeft: layout.reservedLeft,
+        reservedRight: layout.reservedRight,
+        bounds: layout.expandedBounds,
+        baseBounds: layout.baseBounds
     };
 }
 
@@ -2500,7 +2477,9 @@ function getPersistedVisionLlmSettings() {
         ),
         model: String(preferences.visionLlmModel || DEFAULT_VISION_LLM_MODEL).trim(),
         apiKey: normalizeLlmApiKey(
-            preferences.visionLlmApiKey || DEFAULT_VISION_LLM_API_KEY
+            preferences.visionLlmApiKey ||
+            getPersistedLlmApiKeyForProvider(provider, preferences) ||
+            DEFAULT_VISION_LLM_API_KEY
         ),
         temperature: 0.2,
         timeoutMs: normalizeLlmRequestTimeoutMs(
@@ -2640,7 +2619,7 @@ function getAILISDefaultContext() {
             permissionProfile: 'danger-full-access',
             approvalPolicy: 'auto',
             confirmationPolicy: 'auto',
-            visionPermissionPolicy: 'manual',
+            visionPermissionPolicy: 'auto',
             approved: true,
             autoConfirm: true,
             executeExternal: true,
@@ -2655,7 +2634,7 @@ function getAILISDefaultContext() {
         permissionProfile: 'workspace-write',
         approvalPolicy: 'on-request',
         confirmationPolicy: 'on-request',
-        visionPermissionPolicy: 'manual',
+        visionPermissionPolicy: 'auto',
         requireApprovalForMutations: true
     };
 }
@@ -4626,16 +4605,26 @@ function showTextEditMenu(targetWindow, context = {}) {
 function createPetWindow() {
     const petState = desktopState.petWindow;
     const petBounds = canonicalizePetBounds(petState.bounds);
+    const dialogueLayout = getPetDialogueExpandedLayout(
+        petBounds,
+        desktopState.preferences.avatarDialogueBubbleExtraTop,
+        desktopState.preferences.avatarDialogueBubbleExtraWidth
+    );
     desktopState.petWindow.bounds = petBounds;
+    petDialogueCollapsedBounds = dialogueLayout.baseBounds;
+    petDialogueExpanded = dialogueLayout.extraTop > 0 || dialogueLayout.extraWidth > 0;
+    petDialogueExtraTop = dialogueLayout.extraTop;
+    petDialogueExtraWidth = dialogueLayout.extraWidth;
     persistDesktopState();
 
     console.log('[window:pet] create', {
-        bounds: petBounds,
+        bounds: dialogueLayout.expandedBounds,
+        avatarBounds: dialogueLayout.baseBounds,
         visible: Boolean(petState.visible),
         skipTaskbar: desktopState.preferences.petSkipTaskbar
     });
     petWindow = desktopPlatformAdapter.createWindow({
-        bounds: petBounds,
+        bounds: dialogueLayout.expandedBounds,
         frame: false,
         transparent: true,
         backgroundColor: '#00000000',

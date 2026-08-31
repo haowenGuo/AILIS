@@ -710,10 +710,10 @@ test('hosted TaskAgent Turn receives the complete shared Session conversation', 
             (request.tools || []).some((tool) => (tool?.function?.name || tool?.name) === 'task_route')
         );
         assert.ok(resumedTaskRequest, JSON.stringify(requests.slice(requestCountBeforeResume)));
-        assert.match(JSON.stringify(resumedTaskRequest), /ailis\.task_route_context\.v1/);
-        assert.match(JSON.stringify(resumedTaskRequest), /visible_history/);
-        assert.match(JSON.stringify(resumedTaskRequest), /帮我查木偶攻略/);
-        assert.match(JSON.stringify(resumedTaskRequest), /继续/);
+        const resumedTaskInput = JSON.stringify(resumedTaskRequest);
+        assert.doesNotMatch(resumedTaskInput, /ailis\.task_route_context\.v1|visible_history|current_request/);
+        assert.match(resumedTaskInput, /帮我查木偶攻略/);
+        assert.match(resumedTaskInput, /继续/);
 
         const key = tenantKey('web:task-agent');
         const harnessRoot = path.join(

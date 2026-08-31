@@ -760,6 +760,10 @@ function looksLikeStructuredAnswerShape(value = '') {
 
 function extractStructuredAnswerCandidates(response = {}) {
     const direct = [
+        ['exact_answer_submission', response.exactAnswerSubmission?.answer || response.exact_answer_submission?.answer],
+        ['exact_answer', response.exactAnswer || response.exact_answer],
+        ['task_result_exact_answer', response.taskResult?.exact_answer || response.task_result?.exact_answer],
+        ['handoff_exact_answer', response.taskRunHandoff?.exactAnswer || response.task_run_handoff?.exact_answer],
         ['final_answer', response.final_answer],
         ['finalAnswer', response.finalAnswer],
         ['answer', response.answer]

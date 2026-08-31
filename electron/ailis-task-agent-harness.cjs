@@ -446,6 +446,9 @@ function buildTaskResultPacket(result = {}, state = {}) {
     const displayText = taskRoute === 'chat'
         ? ''
         : normalizeString(result.displayText || result.display_text || finalAnswer);
+    const runCost = result.cost && typeof result.cost === 'object'
+        ? cloneJson(result.cost)
+        : (handoff.cost && typeof handoff.cost === 'object' ? cloneJson(handoff.cost) : null);
     const unresolvedFields = FINAL_STATUSES.has(status)
         ? []
         : uniqueStrings([
@@ -478,6 +481,7 @@ function buildTaskResultPacket(result = {}, state = {}) {
         delivery: handoff.delivery && typeof handoff.delivery === 'object'
             ? cloneJson(handoff.delivery)
             : (result.delivery && typeof result.delivery === 'object' ? cloneJson(result.delivery) : null),
+        ...(runCost ? { cost: runCost } : {}),
         unresolved_fields: unresolvedFields,
         trace_ref: normalizeString(handoff.traceRef || result.runId || turn.runId || turn.latestRunId),
         checkpoint_available: Boolean(
@@ -976,7 +980,6 @@ class AILISSystemTaskAgentHarness {
                         shared_session_history: cloneJson(turn.envelope?.visibleHistory || []),
                         taskAgentRoutePending: context.taskAgentRoutingOwned === true,
                         taskAgentRoutingOwned: context.taskAgentRoutingOwned === true,
-                        sessionLedgerProjection: this.getSessionProjection(sessionId),
                         priorUnresolvedFields: [],
                         prior_unresolved_fields: [],
                         taskAgentInheritanceMode: inheritanceMode,
@@ -1023,6 +1026,7 @@ class AILISSystemTaskAgentHarness {
                     source_refs: packet.source_refs,
                     output_refs: packet.output_refs,
                     delivery: packet.delivery,
+                    cost: packet.cost,
                     unresolved_fields: packet.unresolved_fields
                 }, turn.turnId);
                 const handoff = result.taskRunHandoff || result.task_run_handoff || result.handoff || {};

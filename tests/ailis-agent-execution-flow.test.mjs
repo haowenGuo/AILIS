@@ -116,18 +116,18 @@ test('TaskAgent prompt leaves semantics and fallback strategy to the model', () 
         message: 'Look up today\'s weather for August 6, 2026.',
         contextMode: 'task_agent',
         tools: [{
-            name: 'exec',
+            name: 'exec_command',
             description: 'Run a shell command.',
             parameters: {
                 type: 'object',
-                properties: { command: { type: 'string' } },
-                required: ['command']
+                properties: { cmd: { type: 'string' } },
+                required: ['cmd']
             }
         }]
     });
 
-    assert.match(prompt.instructions, /read-only shell script or direct HTTP client is a valid fallback/i);
-    assert.match(prompt.instructions, /current request, runtime state, prior observations, and your own reasoning/i);
+    assert.match(prompt.instructions, /^You are Codex/);
+    assert.doesNotMatch(prompt.instructions, /read-only shell script or direct HTTP client is a valid fallback/i);
     assert.doesNotMatch(prompt.instructions, /execution-evidence contract|exact-answer mode|candidate-set boundary/i);
 });
 

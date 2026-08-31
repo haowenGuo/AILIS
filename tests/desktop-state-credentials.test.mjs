@@ -9,6 +9,7 @@ const require = createRequire(import.meta.url);
 const {
     getDefaultState,
     normalizeElevenLabsVoiceProfiles,
+    normalizeLlmProvider,
     saveDesktopState
 } = require('../electron/store.cjs');
 
@@ -96,6 +97,20 @@ test('desktop state persists independent vision model settings and supports expl
         allowBlankCredentials: ['visionLlmApiKey']
     });
     assert.equal(cleared.preferences.visionLlmApiKey, '');
+});
+
+test('desktop state accepts the existing Codex bridge as an optional visual provider', () => {
+    const state = getDefaultState();
+    state.preferences.visionLlmEnabled = true;
+    state.preferences.visionLlmProvider = 'codex-model-bridge';
+    state.preferences.visionLlmBaseUrl = 'codex://chatgpt-oauth';
+    state.preferences.visionLlmModel = 'gpt-5.6-luna';
+
+    const saved = saveDesktopState(app, state, { preserveExistingCredentials: false });
+    assert.equal(normalizeLlmProvider('codex-model-bridge'), 'codex-model-bridge');
+    assert.equal(saved.preferences.visionLlmProvider, 'codex-model-bridge');
+    assert.equal(saved.preferences.visionLlmBaseUrl, 'codex://chatgpt-oauth');
+    assert.equal(saved.preferences.visionLlmModel, 'gpt-5.6-luna');
 });
 
 test('desktop state normalizes ElevenLabs voice tuning preferences', () => {

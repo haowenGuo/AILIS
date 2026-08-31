@@ -49,6 +49,36 @@ test('toolOutputToModelInputItems emits Responses function call and output pair'
     assert.equal(items[1].output.body.kind, 'text');
 });
 
+test('toolOutputToModelInputItems preserves custom apply_patch call pairing', () => {
+    const patch = '*** Begin Patch\n*** Add File: note.txt\n+hello\n*** End Patch';
+    const items = toolOutputToModelInputItems({
+        id: 'patch-1',
+        tool: 'apply_patch',
+        nativeToolCall: {
+            id: 'patch-1',
+            type: 'custom',
+            name: 'apply_patch',
+            arguments: { input: patch }
+        },
+        args: { input: patch },
+        response: {
+            ok: true,
+            status: 'completed',
+            result: { content: [{ type: 'text', text: 'apply_patch completed: 1 file(s)' }] }
+        }
+    });
+
+    assert.equal(items.length, 2);
+    assert.equal(items[0].type, 'custom_tool_call');
+    assert.equal(items[0].input, patch);
+    assert.equal(items[1].type, 'custom_tool_call_output');
+    assert.equal(items[1].call_id, 'patch-1');
+    const wireItems = responseItemsToWireItems(items);
+    assert.equal(wireItems[1].type, 'custom_tool_call_output');
+    assert.equal(wireItems[1].call_id, 'patch-1');
+    assert.equal(Object.hasOwn(wireItems[1], 'name'), false);
+});
+
 test('native provider calls stay canonical and receive exactly one AILIS-owned output', () => {
     const history = new ContextManager();
     history.recordItems([

@@ -173,6 +173,9 @@ export class VRMModelSystem {
         this.sceneMoodCurrent = null;
         this.clock = new THREE.Clock();
         this.lastRenderTimestamp = 0;
+        this.resizeAnimationFrame = 0;
+        this.renderWidth = 0;
+        this.renderHeight = 0;
 
         this.vrm = null;
         this.mixer = null;
@@ -291,7 +294,9 @@ export class VRMModelSystem {
             antialias: CONFIG.RENDER_ANTIALIAS_ENABLED !== false,
             alpha: true
         });
-        this.renderer.setSize(container.clientWidth, container.clientHeight);
+        this.renderWidth = Math.max(1, Math.round(container.clientWidth));
+        this.renderHeight = Math.max(1, Math.round(container.clientHeight));
+        this.renderer.setSize(this.renderWidth, this.renderHeight);
         this.applyRendererQualitySettings();
         this.renderer.shadowMap.enabled = true;
         this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -311,7 +316,7 @@ export class VRMModelSystem {
 
         this.initLight();
         this.applyPreferences();
-        window.addEventListener('resize', () => this.onWindowResize(container));
+        window.addEventListener('resize', () => this.scheduleWindowResize(container));
         this.animate();
 
         console.log('✅ 3D场景初始化完成');
@@ -1305,13 +1310,30 @@ export class VRMModelSystem {
         return this.characterEmoteController?.forceBlink() ?? false;
     }
 
+    scheduleWindowResize(container) {
+        if (this.resizeAnimationFrame) {
+            return;
+        }
+        this.resizeAnimationFrame = window.requestAnimationFrame(() => {
+            this.resizeAnimationFrame = 0;
+            this.onWindowResize(container);
+        });
+    }
+
     onWindowResize(container) {
         if (!this.camera || !this.renderer) return;
 
-        this.camera.aspect = container.clientWidth / container.clientHeight;
+        const width = Math.max(1, Math.round(container.clientWidth));
+        const height = Math.max(1, Math.round(container.clientHeight));
+        if (width === this.renderWidth && height === this.renderHeight) {
+            return;
+        }
+
+        this.renderWidth = width;
+        this.renderHeight = height;
+        this.camera.aspect = width / height;
         this.camera.updateProjectionMatrix();
-        this.renderer.setSize(container.clientWidth, container.clientHeight);
-        this.applyRendererQualitySettings();
+        this.renderer.setSize(width, height);
     }
 
     animate(timestamp = 0) {

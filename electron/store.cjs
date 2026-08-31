@@ -24,6 +24,7 @@ const DEFAULT_OPENCLAW_GATEWAY_URL = DEFAULT_AGENT_RUNTIME_GATEWAY_URL;
 const DEFAULT_AILIS_STATE_DIR = '';
 const OPENAI_COMPATIBLE_PROVIDER = 'openai-compatible';
 const AILIS_CLOUD_PROVIDER = 'ailis-cloud';
+const CODEX_MODEL_BRIDGE_PROVIDER = 'codex-model-bridge';
 const OPENAI_COMPATIBLE_PRESET_PROVIDER_IDS = ['doubao', 'deepseek', 'qwen', 'kimi', 'zhipu', 'openrouter'];
 const LLM_PROVIDER_OPTIONS = [
     AILIS_CLOUD_PROVIDER,
@@ -32,6 +33,7 @@ const LLM_PROVIDER_OPTIONS = [
     'openai-responses',
     'anthropic',
     'gemini',
+    CODEX_MODEL_BRIDGE_PROVIDER,
     'ollama'
 ];
 const DEFAULT_LLM_PROVIDER = AILIS_CLOUD_PROVIDER;
@@ -51,6 +53,7 @@ const LLM_PROVIDER_DEFAULT_BASE_URLS = Object.freeze({
     'openai-responses': 'https://api.openai.com/v1',
     anthropic: 'https://api.anthropic.com',
     gemini: 'https://generativelanguage.googleapis.com/v1beta',
+    [CODEX_MODEL_BRIDGE_PROVIDER]: 'codex://chatgpt-oauth',
     vllm: 'http://127.0.0.1:8000/v1',
     ollama: 'http://127.0.0.1:11434'
 });
@@ -66,6 +69,7 @@ const LLM_PROVIDER_DEFAULT_MODELS = Object.freeze({
     'openai-responses': 'gpt-4.1-mini',
     anthropic: 'claude-3-5-haiku-latest',
     gemini: 'gemini-2.0-flash',
+    [CODEX_MODEL_BRIDGE_PROVIDER]: 'gpt-5.6-luna',
     vllm: 'Qwen/Qwen2.5-7B-Instruct',
     ollama: 'qwen2.5:1.5b'
 });

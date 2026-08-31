@@ -104,6 +104,16 @@ const PERSONA_DRAFT_DEVELOPER_PACKET = [
     'The latest user message and visible Session history are authoritative, including any correction or steer that replaced an earlier instruction in the same Turn.',
     'Do not describe the internal actors, routing, event channel, or orchestration.'
 ].join('\n');
+const PERSONA_ACTIVE_TASK_INTERACTION_DEVELOPER_PACKET = [
+    'Reply now to the latest user message while an earlier background task remains active.',
+    'The latest user message is also being delivered unchanged to the active task, so do not decide or explain how the task runtime will interpret it.',
+    'Respond naturally to the conversational meaning of the latest message. You may acknowledge a correction, added information, urgency cue, status question, or unrelated question.',
+    'The supplied active-task snapshot is the sole factual authority for the currently running task.',
+    'Conversation history is provided only to understand what the user means. It may contain results from older runs; never present those results as progress or evidence from the current run.',
+    'If finalResultAvailable is false, do not state or imply that the current task answer has been confirmed. Report only latestProgress, or simply acknowledge that the task is still running when latestProgress contains no concrete evidence.',
+    'This reply is a live interaction, not the background task FinalAnswer. The task may later publish separate progress and result messages.',
+    'Do not mention TaskAgent, routing, handoff, internal actors, or protocol details.'
+].join('\n');
 const TASK_AGENT_PUBLIC_EVENT_TYPES = new Set([
     'task_agent.route.decided',
     'agent.progress.note'
@@ -128,7 +138,14 @@ const EXTERNAL_SIDE_EFFECT_TOOL_IDS = new Set([
 ]);
 const PLUGIN_OR_TRIGGER_TOOL_IDS = new Set(['code_execution', 'x_search', 'heartbeat_respond']);
 const FILE_TOOL_IDS = new Set(['read', 'write', 'edit']);
-const LOCAL_CORE_TOOL_IDS = new Set(['read', 'write', 'exec', 'apply_patch']);
+const LOCAL_CORE_TOOL_IDS = new Set([
+    'read',
+    'write',
+    'exec',
+    'exec_command',
+    'write_stdin',
+    'apply_patch'
+]);
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 const LOSSLESS_EVENT_TYPES = new Set([
     'gateway.started',
@@ -157,13 +174,11 @@ const LOSSLESS_EVENT_TYPES = new Set([
 ]);
 const LOSSLESS_EVENT_PREFIXES = ['approval.', 'subagent.', 'mcp.', 'agent.', 'ember.'];
 const CODEX_STYLE_DIRECT_LOCAL_TOOL_IDS = new Set([
-    'write',
-    'exec',
+    'exec_command',
+    'write_stdin',
     'apply_patch',
-    WEB_RUN_TOOL_ID,
     HANDOFF_TASK_TOOL_ID,
-    TASK_ROUTE_TOOL_ID,
-    TASK_GOAL_TOOL_ID
+    TASK_ROUTE_TOOL_ID
 ]);
 // Extended tools stay out of the first-turn tool surface, but remain discoverable
 // through tool_search. The Registry is the source of truth for their full specs.
@@ -274,7 +289,7 @@ const AILIS_LOCAL_TOOL_DEFINITIONS = Object.freeze([
     Object.freeze({
         id: TASK_ROUTE_TOOL_ID,
         label: 'task_route',
-        description: 'Internal first-step control for the persistent TaskAgent. Choose chat when Persona can answer the current Turn without task execution; choose execute to continue immediately in the same TaskAgent run. Do not summarize or rewrite the user request.',
+        description: 'Internal first-step control for the persistent TaskAgent. Choose chat when Persona can answer the current Turn directly, including by making one read-only vision observation. A question that only asks what is visible, wrong, selected, disabled, or happening on the current screen is chat unless the user also requests sustained external work or changes. Choose execute only for sustained task execution. Do not summarize or rewrite the user request.',
         sectionId: 'task-agent-runtime',
         route: 'ailis-system-task-agent',
         materialized: true,
@@ -970,8 +985,13 @@ function normalizeUsageForAnalysis(usage = {}) {
     ]);
     const cachedTokens = usageMetric(usage, [
         'cachedTokens',
+        'prompt_cache_hit_tokens',
         'prompt_tokens_details.cached_tokens',
         'input_tokens_details.cached_tokens'
+    ]);
+    const uncachedPromptTokens = usageMetric(usage, [
+        'uncachedPromptTokens',
+        'prompt_cache_miss_tokens'
     ]);
     return {
         promptTokens,
@@ -982,7 +1002,8 @@ function normalizeUsageForAnalysis(usage = {}) {
                 : null
         ),
         reasoningTokens,
-        cachedTokens
+        cachedTokens,
+        uncachedPromptTokens
     };
 }
 
@@ -991,7 +1012,7 @@ function addUsageTotals(total, usage = {}) {
     if (!normalized) {
         return total;
     }
-    for (const key of ['promptTokens', 'completionTokens', 'totalTokens', 'reasoningTokens', 'cachedTokens']) {
+    for (const key of ['promptTokens', 'completionTokens', 'totalTokens', 'reasoningTokens', 'cachedTokens', 'uncachedPromptTokens']) {
         const numericValue = Number(normalized[key]);
         if (Number.isFinite(numericValue)) {
             total[key] += numericValue;
@@ -1279,6 +1300,7 @@ class AILISGateway extends EventEmitter {
             ? options.getDefaultContext
             : () => options.defaultContext || {};
         this.visionServices = options.visionServices || {};
+        this.visionTurnExecutions = new Map();
         this.memoryRuntime = options.memoryRuntime || new AILISMemoryRuntime({
             rootDir: path.join(this.auditDir, 'memory'),
             workspaceRoot: this.workspaceRoot
@@ -1407,17 +1429,26 @@ class AILISGateway extends EventEmitter {
                     ? TOOL_EXPOSURE.DIRECT
                     : EXTENDED_LOCAL_TOOL_EXPOSURE
             })),
-            ...['read', 'write', 'exec', 'apply_patch'].map((id) => {
+            ...['read', 'write', 'exec', 'exec_command', 'write_stdin', 'apply_patch'].map((id) => {
                 const toolSurfaceDefinition = OPENCLAW_CORE_TOOL_DEFINITIONS.find((tool) => tool.id === id) || {};
+                const codexDescription = id === 'exec_command'
+                    ? 'Run a shell command and yield promptly. If the process is still running, the result includes session_id; continue that exact process with write_stdin.'
+                    : id === 'write_stdin'
+                    ? 'Write characters to, or poll, a live exec_command session. Use chars="" to poll without sending input.'
+                    : '';
                 return {
                     id,
                     label: toolSurfaceDefinition.label || id,
-                    description: toolSurfaceDefinition.description || `Local core ${id} tool.`,
+                    description: codexDescription || toolSurfaceDefinition.description || `Local core ${id} tool.`,
                     sectionId: toolSurfaceDefinition.sectionId || 'local-core',
                     route: 'ailis-local-core',
                     materialized: true,
                     status: 'available',
-                    needsApprovalActions: id === 'exec' ? Object.freeze(['exec']) : id === 'apply_patch' ? Object.freeze(['apply_patch']) : Object.freeze([]),
+                    needsApprovalActions: ['exec', 'exec_command'].includes(id)
+                        ? Object.freeze([id])
+                        : id === 'apply_patch'
+                        ? Object.freeze(['apply_patch'])
+                        : Object.freeze([]),
                     exposure: directLocalToolIds.has(id)
                         ? TOOL_EXPOSURE.DIRECT
                         : EXTENDED_LOCAL_TOOL_EXPOSURE
@@ -2984,18 +3015,26 @@ class AILISGateway extends EventEmitter {
         sessionId = 'main',
         runId = '',
         purpose = 'draft',
+        personaRenderOnly = null,
+        memoryPolicy = 'read_only',
         developerPacket = '',
         onTextDelta = null,
         onTextStreamEvent = null
     } = {}) {
         const privateRunId = normalizeString(runId, `persona_${purpose}_${randomUUID()}`);
+        const renderOnly = typeof personaRenderOnly === 'boolean'
+            ? personaRenderOnly
+            : purpose !== 'draft';
+        const effectiveMemoryPolicy = normalizeString(memoryPolicy, 'read_only').toLowerCase() === 'disabled'
+            ? 'disabled'
+            : 'read_only';
         this.privateRunIds.add(privateRunId);
         try {
             return await this.ensureAgentRunner().runMessage({
                 ...input,
                 runId: privateRunId,
                 sessionId,
-                memoryPolicy: 'read_only',
+                memoryPolicy: effectiveMemoryPolicy,
                 messageHistory: Array.isArray(input.messageHistory)
                     ? input.messageHistory
                     : [],
@@ -3016,8 +3055,8 @@ class AILISGateway extends EventEmitter {
                     contextMode: 'persona',
                     taskAgentRoutingOwned: true,
                     personaDraft: purpose === 'draft',
-                    personaRenderOnly: purpose !== 'draft',
-                    memoryPolicy: 'read_only'
+                    personaRenderOnly: renderOnly,
+                    memoryPolicy: effectiveMemoryPolicy
                 }
             });
         } finally {
@@ -3038,6 +3077,8 @@ class AILISGateway extends EventEmitter {
         const authoritativeAnswer = normalizeString(
             packet.final_answer || packet.partial_answer || packet.summary || packet.message
         );
+        const modelVisiblePacket = cloneJson(packet) || {};
+        delete modelVisiblePacket.cost;
         const developerPacket = [
             'Render the following authoritative TaskEvent/TaskResult for the user.',
             `The TaskAgent packet status is ${packetStatus}. This packet reports work that has already reached that status; do not treat the current user request as a new task.`,
@@ -3047,7 +3088,7 @@ class AILISGateway extends EventEmitter {
             'Use only this packet and the current user request as factual input. Preserve status, failure, uncertainty, sources, artifacts, and unresolved fields. For a completed packet, deliver the substance of the authoritative answer now; never replace it with an acknowledgment, a promise to start, or a request to wait.',
             'You may improve tone and presentation, but do not discard the concrete answer, numbered items, source attribution, or failure details.',
             'Full structured packet:',
-            JSON.stringify(packet)
+            JSON.stringify(modelVisiblePacket)
         ].join('\n');
         const rendered = await this.runPrivatePersonaTurn({
             input: {
@@ -3142,6 +3183,7 @@ class AILISGateway extends EventEmitter {
             activePersonaTurn.latestContext = context;
             activePersonaTurn.latestMessage = message;
             activePersonaTurn.latestTurnEnvelope = steerTurnEnvelope;
+            let livePersonaPromise = null;
             if (activePersonaTurn.taskRoute !== 'execute') {
                 const draftRequest = {
                     input,
@@ -3155,8 +3197,60 @@ class AILISGateway extends EventEmitter {
                 activePersonaTurn.personaPromise = typeof activePersonaTurn.startPersonaDraft === 'function'
                     ? activePersonaTurn.startPersonaDraft(draftRequest)
                     : this.startPrivatePersonaDraft(draftRequest);
+            } else {
+                const visibleHistory = Array.from(steerTurnEnvelope.visibleHistory || []);
+                let activeHistoryStart = -1;
+                for (let index = visibleHistory.length - 1; index >= 0; index -= 1) {
+                    const entry = visibleHistory[index];
+                    if (
+                        entry?.role === 'user' &&
+                        normalizeString(entry.content) === normalizeString(activePersonaTurn.initialMessage)
+                    ) {
+                        activeHistoryStart = index;
+                        break;
+                    }
+                }
+                const activeTaskHistory = activeHistoryStart >= 0
+                    ? visibleHistory.slice(activeHistoryStart)
+                    : [
+                          { role: 'user', content: normalizeString(activePersonaTurn.initialMessage) },
+                          { role: 'user', content: message }
+                      ].filter((entry) => entry.content);
+                const activeTaskSnapshot = {
+                    status: 'running',
+                    startedAt: activePersonaTurn.startedAt,
+                    currentRequest: normalizeString(
+                        activeThread?.turns?.find?.((turn) => turn.turnId === activeTurnId)?.request,
+                        activePersonaTurn.initialMessage
+                    ),
+                    latestProgress: normalizeString(activePersonaTurn.latestProgressText),
+                    finalResultAvailable: false
+                };
+                livePersonaPromise = this.runPrivatePersonaTurn({
+                    input: {
+                        ...input,
+                        runId: `persona_interaction_${activePersonaTurn.runId}_${activePersonaTurn.revision}`,
+                        messageHistory: activeTaskHistory,
+                        ...(llmSettings ? { llmSettings } : {})
+                    },
+                    context: {
+                        ...context,
+                        turnEnvelope: steerTurnEnvelope,
+                        activeTaskSnapshot
+                    },
+                    sessionId,
+                    runId: `persona_interaction_${activePersonaTurn.runId}_${activePersonaTurn.revision}`,
+                    purpose: 'active_task_interaction',
+                    personaRenderOnly: false,
+                    memoryPolicy: 'disabled',
+                    developerPacket: [
+                        PERSONA_ACTIVE_TASK_INTERACTION_DEVELOPER_PACKET,
+                        'Active-task snapshot:',
+                        JSON.stringify(activeTaskSnapshot)
+                    ].join('\n')
+                }).catch(() => null);
             }
-            const steered = await this.taskAgentHarness.dispatchTurn({
+            const steerPromise = this.taskAgentHarness.dispatchTurn({
                 ...context,
                 runId: normalizeString(runId, `steer_${randomUUID()}`),
                 parentRunId: activePersonaTurn.runId,
@@ -3170,6 +3264,37 @@ class AILISGateway extends EventEmitter {
                 llmSettings: llmSettings || context.llmSettings || null,
                 returnAfterSteer: true
             });
+            const [steered, livePersona] = await Promise.all([
+                steerPromise,
+                livePersonaPromise || Promise.resolve(null)
+            ]);
+            const livePersonaText = normalizeString(
+                livePersona?.displayText || livePersona?.finalAnswer || livePersona?.speechText
+            );
+            if (livePersonaText) {
+                this.taskAgentHarness.recordPersonaOutput?.(
+                    sessionId,
+                    activeTurnId,
+                    livePersonaText,
+                    'interaction'
+                );
+                this.ensureAgentRunner().recordMemoryTurn?.({
+                    request: {
+                        ...input,
+                        context: { ...context, memoryPolicy: 'read_write' },
+                        memoryPolicy: 'read_write'
+                    },
+                    result: {
+                        ok: livePersona?.ok !== false,
+                        status: normalizeString(livePersona?.status, 'completed'),
+                        displayText: livePersonaText,
+                        speechText: livePersonaText
+                    },
+                    message,
+                    sessionId,
+                    source: 'persona_live_task_interaction'
+                });
+            }
             this.emitGatewayEvent('agent.turn.steered', {
                 runId: activePersonaTurn.runId,
                 sessionId,
@@ -3186,9 +3311,9 @@ class AILISGateway extends EventEmitter {
                 sessionId,
                 turnId: activeTurnId,
                 taskRoute: 'execute',
-                displayText: '',
-                speechText: '',
-                deferAssistantCommit: true,
+                displayText: livePersonaText,
+                speechText: livePersonaText,
+                deferAssistantCommit: !livePersonaText,
                 messagePhase: 'commentary',
                 steerAccepted: steered?.steer_accepted === true,
                 backgroundTask: {
@@ -3230,7 +3355,9 @@ class AILISGateway extends EventEmitter {
             latestInput: input,
             latestContext: context,
             latestMessage: message,
+            initialMessage: message,
             latestTurnEnvelope: turnEnvelope,
+            latestProgressText: '',
             personaPromise: null,
             personaStream: null,
             startPersonaDraft: null,
@@ -3438,8 +3565,7 @@ class AILISGateway extends EventEmitter {
         });
         this.activePersonaTurns.set(sessionId, activeState);
 
-        let lastProgressRenderAt = 0;
-        let progressRenderInFlight = null;
+        let lastProgressPublishAt = 0;
         const onTaskEvent = (event = {}) => {
             const type = normalizeString(event.type);
             const messageText = normalizeString(event.message || event.payload?.text || event.payload?.summary);
@@ -3464,38 +3590,28 @@ class AILISGateway extends EventEmitter {
                 }
             }
             const isProgress = type === 'agent.progress.note' && messageText;
+            if (isProgress) {
+                activeState.latestProgressText = messageText;
+            }
             const now = Date.now();
             if (
                 !isProgress ||
-                progressRenderInFlight ||
-                now - lastProgressRenderAt < PERSONA_TASK_PROGRESS_MIN_INTERVAL_MS
+                now - lastProgressPublishAt < PERSONA_TASK_PROGRESS_MIN_INTERVAL_MS
             ) {
                 return;
             }
-            lastProgressRenderAt = now;
-            const packet = {
-                type: 'task.progress',
+            lastProgressPublishAt = now;
+            this.emitGatewayEvent('persona.background.message', {
+                runId: outerRunId,
+                sessionId,
+                turnId: activeState.turnId,
                 status: normalizeString(event.status, 'running'),
-                summary: messageText
-            };
-            progressRenderInFlight = (async () => {
-                const text = messageText;
-                if (text) {
-                    this.emitGatewayEvent('persona.background.message', {
-                        runId: outerRunId,
-                        sessionId,
-                        turnId: activeState.turnId,
-                        status: packet.status,
-                        text,
-                        speechText: text,
-                        kind: 'commentary',
-                        phase: 'commentary',
-                        messagePhase: 'commentary',
-                        source: 'task_event_persona_actor'
-                    });
-                }
-            })().catch(() => {}).finally(() => {
-                progressRenderInFlight = null;
+                text: messageText,
+                speechText: messageText,
+                kind: 'progress',
+                phase: 'task_progress',
+                messagePhase: 'commentary',
+                source: 'task_event_persona_actor'
             });
         };
 
@@ -3585,9 +3701,6 @@ class AILISGateway extends EventEmitter {
             } catch (error) {
                 backgroundTaskStatus = 'failed';
                 activeState.discardPersonaStream?.('task_agent_failed');
-                if (progressRenderInFlight) {
-                    await progressRenderInFlight;
-                }
                 const failurePacket = {
                     type: 'task.failed',
                     status: 'failed',
@@ -3658,9 +3771,6 @@ class AILISGateway extends EventEmitter {
                 return taskResult;
             }
 
-            if (progressRenderInFlight) {
-                await progressRenderInFlight;
-            }
             const displayText = await this.renderTaskPacket({
                 input: activeState.latestInput || input,
                 context: activeState.latestContext || context,
@@ -3938,19 +4048,6 @@ class AILISGateway extends EventEmitter {
             }))
             .filter((entry) => entry.content)
             .slice(-240);
-        const sharedSessionDeveloperMessage = inheritanceMode === 'checkpoint' && sharedSessionHistory.length
-            ? [
-                  '<shared_session_context>',
-                  JSON.stringify({
-                      schema: 'ailis.shared_session_context.v1',
-                      session_id: normalizeString(agent?.sessionId || context.parentSessionId),
-                      visible_history: sharedSessionHistory,
-                      current_user_message: task,
-                      instruction: 'This is the canonical visible Session conversation shared with Persona. The current user message may be a continuation such as 继续 or 速度, so determine the requested task from the whole conversation. Handoff transferred execution control only and did not supply a rewritten task.'
-                  }),
-                  '</shared_session_context>'
-              ].join('\n')
-            : '';
         const attachments = Array.isArray(context.attachments)
             ? context.attachments
             : Array.isArray(context.fileAttachments)
@@ -4031,9 +4128,6 @@ class AILISGateway extends EventEmitter {
             planner: 'llm',
             agentRole: 'task_agent',
             ...(parentLlmSettings ? { llmSettings: parentLlmSettings } : {}),
-            ...(sharedSessionDeveloperMessage
-                ? { ephemeralDeveloperMessage: sharedSessionDeveloperMessage }
-                : {}),
             taskAgentInheritanceMode: inheritanceMode,
             initialContextManagerCheckpoint: inheritedCheckpoint,
             initialStepResults: Array.isArray(args.initialStepResults) ? args.initialStepResults : [],
@@ -4085,7 +4179,8 @@ class AILISGateway extends EventEmitter {
             payload: {
                 runId: result?.runId,
                 ok: result?.ok === true,
-                durationMs: result?.durationMs
+                durationMs: result?.durationMs,
+                cost: result?.cost || null
             }
         });
         const taskRunHandoff = result?.taskRunHandoff ||
@@ -4101,6 +4196,7 @@ class AILISGateway extends EventEmitter {
             displayText: taskRunHandoff?.userVisibleSummary || result?.displayText || result?.speechText || '',
             speechText: result?.speechText || taskRunHandoff?.userVisibleSummary || result?.displayText || '',
             durationMs: result?.durationMs,
+            cost: result?.cost || null,
             taskRunHandoff,
             steps: result?.steps || [],
             plan: result?.plan || []
@@ -5391,7 +5487,36 @@ class AILISGateway extends EventEmitter {
             });
         }
         if (toolId === VISION_TOOL_ID) {
-            return await executeVisionTool(args, context, this.visionServices);
+            const turnCreatedAt = normalizeString(context.turnEnvelope?.createdAt);
+            const turnSessionId = normalizeString(
+                context.turnEnvelope?.sessionId || context.parentSessionId || context.sessionId || context.sessionKey
+            );
+            const cacheKey = turnCreatedAt && turnSessionId
+                ? `${turnSessionId}:${turnCreatedAt}`
+                : '';
+            if (!cacheKey) {
+                return await executeVisionTool(args, context, this.visionServices);
+            }
+            const existing = this.visionTurnExecutions.get(cacheKey);
+            if (existing?.promise) {
+                return await existing.promise;
+            }
+            const promise = Promise.resolve(executeVisionTool(args, context, this.visionServices));
+            this.visionTurnExecutions.set(cacheKey, {
+                createdAt: Date.now(),
+                promise
+            });
+            for (const [key, entry] of this.visionTurnExecutions.entries()) {
+                if (key !== cacheKey && Date.now() - Number(entry?.createdAt || 0) > 5 * 60 * 1000) {
+                    this.visionTurnExecutions.delete(key);
+                }
+            }
+            try {
+                return await promise;
+            } catch (error) {
+                this.visionTurnExecutions.delete(cacheKey);
+                throw error;
+            }
         }
         if (LOCAL_CORE_TOOL_IDS.has(toolId)) {
             return await this.executeLocalCoreTool({ toolId, args, context, workspaceDir });
@@ -5648,6 +5773,56 @@ class AILISGateway extends EventEmitter {
             return await this.executeLocalApplyPatch(args.input || args.patch, workspaceDir, context);
         }
 
+        if (toolId === 'exec_command') {
+            const interceptedPatch = this.extractPatchFromCommand(args.cmd || args.command);
+            if (interceptedPatch) {
+                return await this.executeLocalApplyPatch(interceptedPatch, workspaceDir, context);
+            }
+            const workdir = this.resolveToolPath(args.workdir || workspaceDir, workspaceDir, 'workdir', context);
+            return await this.computerTool.execute(
+                {
+                    action: 'exec_command',
+                    cmd: args.cmd || args.command,
+                    workdir,
+                    yield_time_ms: args.yield_time_ms,
+                    max_output_tokens: args.max_output_tokens,
+                    tty: args.tty === true
+                },
+                context,
+                {
+                    workspaceDir,
+                    workspaceRoot: this.workspaceRoot,
+                    projectRoot: this.projectRoot,
+                    platformAdapter: this.platformAdapter,
+                    outputStore: this.runtime.outputStore,
+                    contextArtifactStore: this.runtime.contextArtifactStore,
+                    auditDir: this.auditDir
+                }
+            );
+        }
+
+        if (toolId === 'write_stdin') {
+            return await this.computerTool.execute(
+                {
+                    action: 'write_stdin',
+                    session_id: args.session_id || args.sessionId,
+                    chars: typeof args.chars === 'string' ? args.chars : '',
+                    yield_time_ms: args.yield_time_ms,
+                    max_output_tokens: args.max_output_tokens
+                },
+                context,
+                {
+                    workspaceDir,
+                    workspaceRoot: this.workspaceRoot,
+                    projectRoot: this.projectRoot,
+                    platformAdapter: this.platformAdapter,
+                    outputStore: this.runtime.outputStore,
+                    contextArtifactStore: this.runtime.contextArtifactStore,
+                    auditDir: this.auditDir
+                }
+            );
+        }
+
         if (toolId === 'exec') {
             const interceptedPatch = this.extractPatchFromCommand(args.command || args.cmd);
             if (interceptedPatch) {
@@ -5813,13 +5988,20 @@ class AILISGateway extends EventEmitter {
         let match = pattern.exec(patch);
         while (match) {
             const patchPath = match[1].trim();
-            if (path.isAbsolute(patchPath) || patchPath.split(/[\\/]+/).includes('..')) {
-                throwBlocked('apply_patch paths must be relative workspace paths', {
+            const target = path.isAbsolute(patchPath)
+                ? path.resolve(patchPath)
+                : path.resolve(workspaceDir, patchPath);
+            if (!isPathInside(workspaceDir, target)) {
+                throwBlocked('apply_patch path must stay inside workspace', {
                     patchPath,
+                    target,
                     workspaceDir
                 });
             }
-            this.resolveToolPath(patchPath, workspaceDir, 'patchPath', context);
+            this.resolveToolPath(target, workspaceDir, 'patchPath', {
+                ...context,
+                permissionProfile: 'workspace-write'
+            });
             match = pattern.exec(patch);
         }
     }
@@ -6323,19 +6505,26 @@ class AILISGateway extends EventEmitter {
                 iteration: round.iteration
             }))
         );
-        const usageTotals = {
+        const ownUsageTotals = {
             promptTokens: 0,
             completionTokens: 0,
             totalTokens: 0,
             reasoningTokens: 0,
-            cachedTokens: 0
+            cachedTokens: 0,
+            uncachedPromptTokens: 0
         };
         for (const call of llmCalls) {
-            addUsageTotals(usageTotals, call.usage || {});
+            addUsageTotals(ownUsageTotals, call.usage || {});
         }
         const finalItem = [...transcriptItems].reverse().find((item) =>
             ['turn.completed', 'agent.final', 'agent.blocked', 'approval.requested'].includes(item.type)
         );
+        const runCost = finalItem?.payload?.cost?.schema === 'ailis.run_cost.v1'
+            ? finalItem.payload.cost
+            : null;
+        const usageTotals = runCost
+            ? (normalizeUsageForAnalysis(runCost.total?.llm?.usage || {}) || ownUsageTotals)
+            : ownUsageTotals;
         const latestDebugPause = [...transcriptItems].reverse().find((item) => item.type === 'agent.debug.paused') || null;
         const latestDebugPauseActive = latestDebugPause &&
             (!finalItem || analysisTimestamp(latestDebugPause) >= analysisTimestamp(finalItem));
@@ -6380,6 +6569,11 @@ class AILISGateway extends EventEmitter {
                 outputArtifacts: outputArtifacts.length,
                 totalContextTokens,
                 usage: usageTotals,
+                ownUsage: ownUsageTotals,
+                cost: runCost,
+                aggregateRuns: Number(runCost?.total?.runs) || 1,
+                aggregateLlmCalls: Number(runCost?.total?.llm?.calls) || llmCalls.length,
+                aggregateToolCalls: Number(runCost?.total?.tools?.calls) || toolCalls.length,
                 primaryBottleneck: bottlenecks.primary,
                 debugPaused: status === 'debug_paused' || Boolean(latestDebugPauseActive),
                 debugSessionId: latestDebugPauseActive ? normalizeString(latestDebugPause?.payload?.debugSessionId) : '',

@@ -13,6 +13,7 @@ const {
     buildCodexBridgeTurnInput,
     buildCodexResponsesRequest,
     buildProcessTreeTerminationPlan,
+    codexNativeToolSpecs,
     codexResponsesInputItems,
     codexResponsesCanonicalItems,
     normalizeBridgeToolCalls,
@@ -23,6 +24,7 @@ const {
     parseWindowsProxyServer,
     runCodexResponsesInference,
     resolveCodexBridgeMaxAttempts,
+    resolveCodexBridgeRetryDelayMs,
     resolveCodexEntrypoint,
     shouldRetryCodexBridgeFailure
 } = require('../electron/codex-model-bridge.cjs');
@@ -142,8 +144,13 @@ describe('Codex model bridge process lifecycle', () => {
         assert.equal(shouldRetryCodexBridgeFailure({ code: 'cancelled' }), false);
         assert.equal(shouldRetryCodexBridgeFailure({ code: 'invalid_codex_bridge_output' }), false);
         assert.equal(resolveCodexBridgeMaxAttempts({}), 2);
-        assert.equal(resolveCodexBridgeMaxAttempts({ codexBridgeMaxAttempts: 9 }), 2);
+        assert.equal(resolveCodexBridgeMaxAttempts({ codexBridgeMaxAttempts: 9 }), 3);
+        assert.equal(resolveCodexBridgeMaxAttempts({ codexBridgeMaxAttempts: 3 }), 3);
         assert.equal(resolveCodexBridgeMaxAttempts({ codexBridgeMaxAttempts: 1 }), 1);
+        assert.equal(resolveCodexBridgeRetryDelayMs({}, 1), 2000);
+        assert.equal(resolveCodexBridgeRetryDelayMs({}, 2), 4000);
+        assert.equal(resolveCodexBridgeRetryDelayMs({ codexBridgeRetryBaseDelayMs: 0 }, 2), 0);
+        assert.equal(resolveCodexBridgeRetryDelayMs({ codexBridgeRetryBaseDelayMs: 99999 }, 9), 15000);
     });
 });
 
@@ -194,6 +201,43 @@ describe('Codex model bridge', () => {
         assert.match(request.prompt_cache_key, /^ailis-[a-f0-9]{48}$/);
         assert.equal(Object.hasOwn(request, 'text'), false);
         assert.equal(Object.hasOwn(request, 'output_schema'), false);
+    });
+
+    it('maps apply_patch to a freeform custom Responses tool', () => {
+        const [tool] = codexNativeToolSpecs([{
+            type: 'function',
+            name: 'apply_patch',
+            description: 'Apply a patch.',
+            strict: true,
+            parameters: {
+                type: 'object',
+                properties: { input: { type: 'string' } },
+                required: ['input'],
+                additionalProperties: false
+            }
+        }]);
+        assert.deepEqual(tool, {
+            type: 'custom',
+            name: 'apply_patch',
+            description: 'Apply a patch.'
+        });
+
+        const request = buildCodexResponsesRequest({ model: 'gpt-5.5' }, {
+            instructions: 'test',
+            input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'patch it' }] }],
+            tools: [{
+                name: 'apply_patch',
+                description: 'Apply a patch.',
+                parameters: {
+                    type: 'object',
+                    properties: { input: { type: 'string' } },
+                    required: ['input'],
+                    additionalProperties: false
+                }
+            }]
+        });
+        assert.equal(request.tools[0].type, 'custom');
+        assert.equal(Object.hasOwn(request.tools[0], 'parameters'), false);
     });
 
     it('drops response item ids at the native wire boundary like stateless Codex requests', () => {
@@ -349,6 +393,25 @@ describe('Codex model bridge', () => {
             output_tokens: 20,
             total_tokens: 120
         });
+    });
+
+    it('preserves custom apply_patch calls as freeform input', () => {
+        const raw = [
+            'data: {"type":"response.output_item.done","item":{"id":"ct_1","type":"custom_tool_call","call_id":"call_patch","name":"apply_patch","input":"*** Begin Patch\\n*** End Patch"}}',
+            'data: {"type":"response.completed","response":{"id":"resp_patch"}}',
+            'data: [DONE]'
+        ].join('\n\n');
+        const parsed = parseCodexResponsesSse(raw);
+        const [item] = codexResponsesCanonicalItems(parsed.outputItems);
+        const [call] = normalizeBridgeToolCalls([{
+            id: item.call_id,
+            type: 'custom',
+            name: item.name,
+            arguments: { input: item.input }
+        }]);
+        assert.equal(item.type, 'custom_tool_call');
+        assert.equal(call.type, 'custom');
+        assert.equal(call.arguments.input, '*** Begin Patch\n*** End Patch');
     });
 
     it('parses Windows HTTPS proxy forms without changing protocol semantics', () => {
@@ -655,6 +718,22 @@ describe('Codex model bridge', () => {
             total_tokens: 100,
             prompt_tokens_details: { cached_tokens: 20 },
             completion_tokens_details: { reasoning_tokens: 12 }
+        });
+    });
+
+    it('maps Responses API nested cache usage into the existing provider usage contract', () => {
+        assert.deepEqual(normalizeCodexUsage({
+            total_tokens: 100,
+            input_tokens: 70,
+            input_tokens_details: { cached_tokens: 24 },
+            output_tokens: 30,
+            output_tokens_details: { reasoning_tokens: 14 }
+        }), {
+            prompt_tokens: 70,
+            completion_tokens: 30,
+            total_tokens: 100,
+            prompt_tokens_details: { cached_tokens: 24 },
+            completion_tokens_details: { reasoning_tokens: 14 }
         });
     });
 

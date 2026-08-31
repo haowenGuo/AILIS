@@ -221,6 +221,7 @@ function normalizeToolOutput(input = {}, index = 0, options = {}) {
         callId: canonicalCallId(input, index),
         sourceId: input.id || null,
         toolName,
+        callType: normalizeText(input.callType || input.call_type || input.nativeToolCall?.type, 'function'),
         title: normalizeText(input.title || input.tool || input.name || 'tool'),
         args: cloneJson(input.modelArgs || input.args || input.nativeToolCall?.arguments || {}),
         status: normalizeText(response.status || input.status || (ok ? 'completed' : 'failed')),
@@ -837,6 +838,28 @@ function toolOutputToResponseItems(toolOutput = {}, options = {}) {
         return [];
     }
     const callId = canonicalCallId(toolOutput);
+    if (toolOutput.callType === 'custom') {
+        const output = [
+            toolOutput.ok ? 'Status: completed' : `Status: ${toolOutput.status || 'failed'}`,
+            toolOutput.errorSummary ? `Error: ${toolOutput.errorSummary}` : '',
+            toolOutput.durationMs != null ? `DurationMs: ${toolOutput.durationMs}` : '',
+            'Output:',
+            summarizeForModel(toolOutput.outputText || '', options.toolOutputChars || DEFAULT_TOOL_OUTPUT_CHARS)
+        ].filter(Boolean).join('\n');
+        return [
+            ResponseItem.customToolCall({
+                name: toolName,
+                input: String(toolOutput.args?.input || ''),
+                call_id: callId
+            }),
+            ResponseItem.customToolCallOutput({
+                call_id: callId,
+                name: toolName,
+                output,
+                success: toolOutput.ok === true ? true : toolOutput.ok === false ? false : null
+            })
+        ];
+    }
     if (toolName === 'tool_search') {
         const tools = Array.isArray(toolOutput.details?.tools)
             ? toolOutput.details.tools.map(compactToolSearchResultForHistory)

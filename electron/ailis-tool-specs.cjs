@@ -149,7 +149,7 @@ const AILIS_RUNTIME_TOOL_DEFINITIONS = Object.freeze([
         materialized: true,
         status: 'available',
         needsApprovalActions: Object.freeze(['grant']),
-        exposure: AILIS_TOOL_EXPOSURE.DIRECT
+        exposure: AILIS_TOOL_EXPOSURE.HIDDEN
     }),
     Object.freeze({
         id: 'spawn_agent',

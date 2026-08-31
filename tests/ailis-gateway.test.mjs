@@ -64,6 +64,66 @@ test('AILIS Gateway exposes actionable web_run contract errors to the model', as
     assert.match(result.error, /separate follow-up calls/);
 });
 
+test('AILIS Gateway exposes Codex-style exec continuation and workspace-safe absolute patches', async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-codex-core-tools-'));
+    const gateway = new AILISGateway({
+        port: 0,
+        workspaceRoot,
+        projectRoot: path.resolve('.'),
+        auditDir: path.join(workspaceRoot, '.audit')
+    });
+    try {
+        const execution = await gateway.callTool({
+            tool: 'exec_command',
+            args: {
+                cmd: 'node -e "setTimeout(function(){console.log(\'CONTINUED_OK\')}, 500)"',
+                yield_time_ms: 50,
+                max_output_tokens: 1000
+            },
+            context: { workspace: workspaceRoot, approved: true }
+        });
+        assert.equal(execution.ok, true, execution.error);
+        assert.ok(execution.result.details.session_id);
+
+        const continued = await gateway.callTool({
+            tool: 'write_stdin',
+            args: {
+                session_id: execution.result.details.session_id,
+                chars: '',
+                yield_time_ms: 1000,
+                max_output_tokens: 1000
+            },
+            context: { workspace: workspaceRoot }
+        });
+        assert.equal(continued.ok, true, continued.error);
+        assert.match(continued.result.details.output, /CONTINUED_OK/);
+
+        const target = path.join(workspaceRoot, 'absolute-patch.txt');
+        const applied = await gateway.callTool({
+            tool: 'apply_patch',
+            args: {
+                input: `*** Begin Patch\n*** Add File: ${target}\n+absolute path accepted\n*** End Patch`
+            },
+            context: { workspace: workspaceRoot, approved: true }
+        });
+        assert.equal(applied.ok, true, applied.error);
+        assert.equal(await fs.readFile(target, 'utf8'), 'absolute path accepted\n');
+
+        const outside = path.join(os.tmpdir(), `ailis-outside-${Date.now()}.txt`);
+        const rejected = await gateway.callTool({
+            tool: 'apply_patch',
+            args: {
+                input: `*** Begin Patch\n*** Add File: ${outside}\n+must fail\n*** End Patch`
+            },
+            context: { workspace: workspaceRoot, approved: true }
+        });
+        assert.equal(rejected.ok, false);
+        assert.match(rejected.error, /inside workspace/i);
+    } finally {
+        await fs.rm(workspaceRoot, { recursive: true, force: true });
+    }
+});
+
 test('AILIS materializes structured MCP follow-up actions for the next model turn', async () => {
     const result = {
         structuredContent: {
@@ -443,7 +503,8 @@ test('AILIS exposes Codex-style web_run and preserves refs across search and ope
 
     try {
         const firstTurnTools = gateway.gatewayToolRuntimeRegistry.modelVisibleSpecs();
-        const webRun = firstTurnTools.find((tool) => tool.name === 'web_run');
+        assert.equal(firstTurnTools.some((tool) => tool.name === 'web_run'), false);
+        const webRun = gateway.gatewayToolRuntimeRegistry.definition('web_run')?.spec;
         const webRunDescription = (await fs.readFile(
             path.resolve('electron', 'ailis-web-run-description.md'),
             'utf8'
@@ -1039,6 +1100,15 @@ test('AILIS Gateway TaskAgent thread reuses parent LLM settings', async () => {
                 intent: 'direct_tool_final',
                 displayText: 'child done',
                 durationMs: 1,
+                cost: {
+                    schema: 'ailis.run_cost.v1',
+                    run_id: 'child-run',
+                    total: {
+                        runs: 1,
+                        llm: { calls: 1, duration_ms: 1, usage: { totalTokens: 12 }, by_model: [] },
+                        tools: { calls: 0, duration_ms: 0 }
+                    }
+                },
                 steps: [],
                 plan: []
             };
@@ -1092,6 +1162,8 @@ test('AILIS Gateway TaskAgent thread reuses parent LLM settings', async () => {
     assert.equal(calls[0].context.autoConfirm, false);
     assert.equal(calls[0].context.requireApprovalForMutations, false);
     assert.equal(calls[0].context.allowSystemMutation, true);
+    assert.equal(result.cost.schema, 'ailis.run_cost.v1');
+    assert.equal(result.cost.total.llm.usage.totalTokens, 12);
 });
 
 test('AILIS Gateway opens one background Turn and publishes Persona only after TaskAgent routes chat', async () => {
@@ -1318,6 +1390,171 @@ test('AILIS Gateway keeps task execution private until one Persona FinalAnswer i
         assert.equal(memoryCalls.length, 1);
         assert.equal(gateway.eventLog.filter((event) => event.type === 'agent.message.completed').length, 1);
     } finally {
+        await fs.rm(workspaceRoot, { recursive: true, force: true });
+    }
+});
+
+test('AILIS Gateway keeps Persona responsive while the same running TaskAgent receives the user steer', async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-live-task-interaction-'));
+    const gateway = new AILISGateway({
+        port: 0,
+        workspaceRoot,
+        projectRoot: path.resolve('.'),
+        auditDir: path.join(workspaceRoot, '.audit'),
+        emberHarnessEnabled: false,
+        getDefaultContext: () => ({ taskAgentRoutingOwned: true })
+    });
+    const runnerCalls = [];
+    const personaOutputs = [];
+    const memoryCalls = [];
+    const steeredMessages = [];
+    let activeTurnId = '';
+    let activeTaskContext = null;
+    let releaseTask;
+    let markRouteReady;
+    const taskGate = new Promise((resolve) => {
+        releaseTask = resolve;
+    });
+    const routeReady = new Promise((resolve) => {
+        markRouteReady = resolve;
+    });
+
+    gateway.ensureAgentRunner = () => ({
+        runMessage: async (request) => {
+            runnerCalls.push(request);
+            const developerMessage = String(request.ephemeralDeveloperMessage || '');
+            if (developerMessage.includes('Reply now to the latest user message')) {
+                return {
+                    ok: true,
+                    status: 'completed',
+                    displayText: '我在，刚才的新要求已经收到。'
+                };
+            }
+            if (request.context?.personaRenderOnly === true) {
+                return {
+                    ok: true,
+                    status: 'completed',
+                    displayText: developerMessage.includes('已经确认对应版本')
+                        ? '已经确认对应版本，现在正在核对攻略细节。'
+                        : '木偶攻略已经整理完成。'
+                };
+            }
+            return {
+                ok: true,
+                status: 'completed',
+                displayText: '好，我先确认对应版本。'
+            };
+        },
+        recordMemoryTurn: (payload) => memoryCalls.push(payload)
+    });
+    gateway.taskAgentHarness = {
+        getThread: () => ({
+            activeTurnId,
+            turns: activeTurnId
+                ? [{ turnId: activeTurnId, request: '帮我查木偶攻略' }]
+                : []
+        }),
+        dispatchTurn: async (context) => {
+            if (activeTurnId) {
+                steeredMessages.push(context.currentUserMessage);
+                return {
+                    schema: 'ailis.task_result.v1',
+                    status: 'accepted',
+                    route: 'execute',
+                    turn_id: activeTurnId,
+                    steer_accepted: true
+                };
+            }
+            activeTurnId = 'turn-live-task';
+            activeTaskContext = context;
+            context.onTaskEvent({
+                type: 'task_agent.route.decided',
+                status: 'completed',
+                turnId: activeTurnId,
+                payload: { mode: 'execute' }
+            });
+            context.onTaskEvent({
+                type: 'agent.progress.note',
+                status: 'running',
+                turnId: activeTurnId,
+                message: '我开始查木偶攻略，先确认对应版本。',
+                payload: { text: '我开始查木偶攻略，先确认对应版本。' }
+            });
+            markRouteReady();
+            await taskGate;
+            activeTurnId = '';
+            return {
+                schema: 'ailis.task_result.v1',
+                status: 'completed',
+                route: 'execute',
+                turn_id: 'turn-live-task',
+                current_request: context.currentUserMessage,
+                final_answer: '木偶攻略正文',
+                source_refs: [],
+                unresolved_fields: []
+            };
+        },
+        recordPersonaOutput: (...args) => personaOutputs.push(args)
+    };
+
+    try {
+        const started = await gateway.runAgent({
+            message: '帮我查木偶攻略',
+            sessionId: 'session-live-task',
+            messageHistory: [
+                { role: 'user', content: '以前查过同名攻略' },
+                { role: 'assistant', content: '旧任务答案是错误版本。' },
+                { role: 'user', content: '帮我查木偶攻略' }
+            ]
+        });
+        assert.equal(started.deferAssistantCommit, true);
+        await routeReady;
+        const initialProgressMessage = gateway.eventLog.find((event) => (
+            event.type === 'persona.background.message' && event.payload?.kind === 'progress'
+        ));
+        assert.equal(initialProgressMessage?.payload?.text, '我开始查木偶攻略，先确认对应版本。');
+
+        const interaction = await gateway.runAgent({
+            message: '速度，先确认版本',
+            sessionId: 'session-live-task',
+            messageHistory: [
+                { role: 'user', content: '以前查过同名攻略' },
+                { role: 'assistant', content: '旧任务答案是错误版本。' },
+                { role: 'user', content: '帮我查木偶攻略' },
+                { role: 'assistant', content: '我开始查木偶攻略，先确认对应版本。' },
+                { role: 'user', content: '速度，先确认版本' }
+            ]
+        });
+
+        assert.equal(interaction.intent, 'turn_steered');
+        assert.equal(interaction.steerAccepted, true);
+        assert.equal(interaction.displayText, '我在，刚才的新要求已经收到。');
+        assert.equal(interaction.deferAssistantCommit, false);
+        assert.deepEqual(steeredMessages, ['速度，先确认版本']);
+        const livePersonaCall = runnerCalls.find((request) => (
+            String(request.ephemeralDeveloperMessage || '').includes('Reply now to the latest user message')
+        ));
+        assert.ok(livePersonaCall);
+        assert.equal(livePersonaCall.context.personaDraft, false);
+        assert.equal(livePersonaCall.context.personaRenderOnly, false);
+        assert.equal(livePersonaCall.memoryPolicy, 'disabled');
+        assert.equal(livePersonaCall.context.memoryPolicy, 'disabled');
+        assert.match(livePersonaCall.ephemeralDeveloperMessage, /帮我查木偶攻略/);
+        assert.deepEqual(livePersonaCall.messageHistory, [
+            { role: 'user', content: '帮我查木偶攻略' },
+            { role: 'assistant', content: '我开始查木偶攻略，先确认对应版本。' },
+            { role: 'user', content: '速度，先确认版本' }
+        ]);
+        assert.doesNotMatch(livePersonaCall.ephemeralDeveloperMessage, /旧任务答案/);
+        assert.ok(personaOutputs.some((entry) => entry[3] === 'interaction'));
+        assert.ok(memoryCalls.some((entry) => entry.source === 'persona_live_task_interaction'));
+        assert.equal(runnerCalls.some((request) => (
+            request.context?.personaRenderOnly === true &&
+            String(request.ephemeralDeveloperMessage || '').includes('我开始查木偶攻略')
+        )), false);
+    } finally {
+        releaseTask?.();
+        await gateway.waitForBackgroundTaskRuns();
         await fs.rm(workspaceRoot, { recursive: true, force: true });
     }
 });
@@ -2679,7 +2916,28 @@ test('AILIS Gateway builds agent analysis snapshots from transcript, audit, and 
             planner: 'llm-agentic-executor',
             intent: 'inspect_file',
             durationMs: 88,
-            displayText: 'done'
+            displayText: 'done',
+            cost: {
+                schema: 'ailis.run_cost.v1',
+                run_id: runId,
+                wall_clock_ms: 88,
+                total: {
+                    runs: 2,
+                    llm: {
+                        calls: 2,
+                        duration_ms: 70,
+                        usage: {
+                            promptTokens: 180,
+                            completionTokens: 40,
+                            totalTokens: 220,
+                            reasoningTokens: 0,
+                            cachedTokens: 60
+                        },
+                        by_model: []
+                    },
+                    tools: { calls: 2, duration_ms: 30 }
+                }
+            }
         });
         await gateway.appendAudit({
             runId,
@@ -2720,7 +2978,12 @@ test('AILIS Gateway builds agent analysis snapshots from transcript, audit, and 
         assert.equal(analysis.summary.rounds, 1);
         assert.equal(analysis.summary.llmCalls, 1);
         assert.equal(analysis.summary.toolCalls, 1);
-        assert.equal(analysis.summary.usage.totalTokens, 120);
+        assert.equal(analysis.summary.usage.totalTokens, 220);
+        assert.equal(analysis.summary.ownUsage.totalTokens, 120);
+        assert.equal(analysis.summary.cost.schema, 'ailis.run_cost.v1');
+        assert.equal(analysis.summary.aggregateRuns, 2);
+        assert.equal(analysis.summary.aggregateLlmCalls, 2);
+        assert.equal(analysis.summary.aggregateToolCalls, 2);
         assert.equal(analysis.rounds[0].messages[1].content, 'debug this agent loop');
         assert.equal(analysis.rounds[0].progressNotes[0].source, 'model_tool_progress_note');
         assert.match(analysis.rounds[0].progressNotes[0].text, /目标文件/);

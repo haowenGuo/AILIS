@@ -432,6 +432,7 @@ const llmProviderLabels = {
     'openai-responses': 'OpenAI Responses',
     anthropic: 'Anthropic Claude',
     gemini: 'Google Gemini',
+    'codex-model-bridge': 'Codex Luna（本机订阅桥）',
     ollama: 'Ollama 本地'
 };
 
@@ -447,6 +448,7 @@ const fallbackLlmProviderDefaultBaseUrls = {
     'openai-responses': 'https://api.openai.com/v1',
     anthropic: 'https://api.anthropic.com',
     gemini: 'https://generativelanguage.googleapis.com/v1beta',
+    'codex-model-bridge': 'codex://chatgpt-oauth',
     ollama: 'http://127.0.0.1:11434'
 };
 
@@ -462,6 +464,7 @@ const fallbackLlmProviderDefaultModels = {
     'openai-responses': 'gpt-4.1-mini',
     anthropic: 'claude-3-5-haiku-latest',
     gemini: 'gemini-2.0-flash',
+    'codex-model-bridge': 'gpt-5.6-luna',
     ollama: 'qwen2.5:1.5b'
 };
 
@@ -491,7 +494,8 @@ const llmPresetCatalog = [
             { id: 'doubao-seed-1-6-thinking-250715', label: 'Doubao Seed 1.6 Thinking（思考模型）' },
             { id: 'doubao-1-5-pro-32k-250115', label: 'Doubao 1.5 Pro 32K（长上下文）' },
             { id: 'doubao-1-5-lite-32k-250115', label: 'Doubao 1.5 Lite 32K（经济）' },
-            { id: 'doubao-vision-pro-32k-241028', label: 'Doubao Vision Pro 32K（视觉）' }
+            { id: 'doubao-seed-1-6-vision-250815', label: 'Doubao Seed 1.6 Vision（视觉）' },
+            { id: 'doubao-vision-pro-32k-241028', label: 'Doubao Vision Pro 32K（旧版视觉）' }
         ]
     },
     {
@@ -2362,6 +2366,7 @@ function fillVisionLlmProviderOptions(providerOptions = []) {
     elements.visionLlmProvider.innerHTML = '';
     const visibleProviders = Array.from(new Set([...providerOptions, 'ollama']))
         .filter((provider) => provider !== 'vllm')
+        .filter((provider) => provider !== 'codex-model-bridge')
         .filter(Boolean);
     visibleProviders.forEach((provider) => {
         const option = document.createElement('option');

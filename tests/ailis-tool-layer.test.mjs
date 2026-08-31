@@ -519,28 +519,26 @@ test('AILIS Gateway exposes a small Responses-compatible core surface by default
     const directNames = directSpecs.map((tool) => tool.name);
     assert.deepEqual(directNames.sort(), [
         'apply_patch',
-        'exec',
+        'exec_command',
         'handoff_task',
-        'request_permissions',
-        'task_goal',
+        'task_route',
         'tool_search',
         'update_plan',
-        'web_run',
-        'write'
+        'write_stdin'
     ].sort());
-    for (const expected of ['web_run', 'tool_search', 'update_plan', 'write', 'exec', 'apply_patch', 'request_permissions', 'handoff_task']) {
+    for (const expected of ['tool_search', 'exec_command', 'write_stdin', 'apply_patch', 'update_plan', 'handoff_task']) {
         assert.ok(directNames.includes(expected), `${expected} should be a core direct tool`);
     }
-    for (const deferred of ['read', 'artifact_tools', 'artifact_query', 'github_pages', 'mcp_bridge', 'computer']) {
+    for (const deferred of ['read', 'write', 'exec', 'task_goal', 'web_run', 'vision.capture_context', 'artifact_tools', 'artifact_query', 'github_pages', 'mcp_bridge', 'computer']) {
         assert.equal(directNames.includes(deferred), false, `${deferred} should be loaded through tool_search`);
     }
+    assert.equal(directNames.includes('request_permissions'), false, 'request_permissions is injected only after an actual permission boundary');
     assert.ok(
         directSpecs.filter((tool) => tool.name !== 'web_run').every((tool) => tool.strict === true),
         'local core direct tools should use strict schemas'
     );
-    assert.notEqual(directSpecs.find((tool) => tool.name === 'web_run').strict, true);
     assert.deepEqual(directSpecs.find((tool) => tool.name === 'tool_search').parameters.required, ['query']);
-    assert.deepEqual(directSpecs.find((tool) => tool.name === 'exec').parameters.required, ['command']);
+    assert.deepEqual(directSpecs.find((tool) => tool.name === 'exec_command').parameters.required, ['cmd']);
     const deferredRead = gateway.gatewayToolRuntimeRegistry.definition('read');
     assert.equal(deferredRead.exposure, 'deferred');
     assert.match(deferredRead.description, /local filesystem/i);
@@ -550,7 +548,13 @@ test('AILIS Gateway exposes a small Responses-compatible core surface by default
     const initialSpecs = buildAgentDirectToolSpecs(gateway, {
         requestContext: { nativeDirectTools: true }
     });
-    assert.equal(initialSpecs.some((tool) => tool.name === 'tool_search'), true);
+    assert.deepEqual(initialSpecs.map((tool) => tool.name).sort(), [
+        'apply_patch',
+        'exec_command',
+        'tool_search',
+        'update_plan',
+        'write_stdin'
+    ].sort());
     assert.equal(initialSpecs.some((tool) => tool.name === 'subagents'), false);
     assert.equal(initialSpecs.some((tool) => tool.name === 'read_xlsx_workbook'), false);
 
@@ -737,7 +741,7 @@ test('AILIS keeps raw tool_search specs hidden from model JSON but available for
     }
 });
 
-test('AILIS suppresses repeated update_plan direct-tool loops without hiding other core tools', async () => {
+test('AILIS exposes update_plan as UI-only bookkeeping and suppresses only repeated plan loops', async () => {
     const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-tool-plan-loop-'));
     const gateway = new AILISGateway({
         port: 0,
@@ -757,6 +761,7 @@ test('AILIS suppresses repeated update_plan direct-tool loops without hiding oth
         }]
     });
     assert.equal(singlePlanSpecs.some((tool) => tool.name === 'update_plan'), true);
+    assert.equal(singlePlanSpecs.some((tool) => tool.name === 'tool_search'), true);
 
     const repeatedPlanSteps = Array.from({ length: 2 }, (_, index) => ({
         tool: 'update_plan',
@@ -782,6 +787,71 @@ test('AILIS suppresses repeated update_plan direct-tool loops without hiding oth
         stepResults: repeatedPlanSteps
     });
     assert.equal(overrideSpecs.some((tool) => tool.name === 'update_plan'), true);
+});
+
+test('AILIS scopes web, vision, goals, and permission escalation to the active request', async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-scoped-tools-'));
+    const gateway = new AILISGateway({
+        port: 0,
+        workspaceRoot,
+        projectRoot: path.resolve('.'),
+        auditDir: path.join(workspaceRoot, '.audit')
+    });
+    try {
+        const coding = buildAgentDirectToolSpecs(gateway, {
+            requestContext: {
+                nativeDirectTools: true,
+                currentUserMessage: 'Fix the parser and run its unit tests.',
+                permissionProfile: 'workspace-write'
+            }
+        });
+        assert.equal(coding.some((tool) => tool.name === 'web_run'), false);
+        assert.equal(coding.some((tool) => tool.name === 'vision_capture_context'), false);
+        assert.equal(coding.some((tool) => tool.name === 'task_goal'), false);
+        assert.equal(coding.some((tool) => tool.name === 'request_permissions'), false);
+
+        const research = buildAgentDirectToolSpecs(gateway, {
+            requestContext: {
+                nativeDirectTools: true,
+                currentUserMessage: 'Search the latest official release notes on the web.'
+            }
+        });
+        assert.equal(research.some((tool) => tool.name === 'web_run'), true);
+
+        const visual = buildAgentDirectToolSpecs(gateway, {
+            requestContext: {
+                nativeDirectTools: true,
+                currentUserMessage: 'Look at my screen and tell me what application is open.'
+            }
+        });
+        assert.equal(visual.some((tool) => tool.name === 'vision_capture_context'), true);
+
+        const persistent = buildAgentDirectToolSpecs(gateway, {
+            requestContext: {
+                nativeDirectTools: true,
+                explicitPersistentGoal: true
+            }
+        });
+        assert.equal(persistent.some((tool) => tool.name === 'task_goal'), true);
+
+        const permissionFailure = [{
+            tool: 'exec_command',
+            response: { ok: false, status: 'needs_approval' }
+        }];
+        const restricted = buildAgentDirectToolSpecs(gateway, {
+            requestContext: { nativeDirectTools: true, permissionProfile: 'workspace-write' },
+            stepResults: permissionFailure
+        });
+        assert.equal(restricted.some((tool) => tool.name === 'request_permissions'), true);
+
+        const unrestricted = buildAgentDirectToolSpecs(gateway, {
+            requestContext: { nativeDirectTools: true, permissionProfile: 'danger-full-access' },
+            stepResults: permissionFailure
+        });
+        assert.equal(unrestricted.some((tool) => tool.name === 'request_permissions'), false);
+    } finally {
+        await fs.rm(workspaceRoot, { recursive: true, force: true });
+    }
 });
 
 test('AILIS loop guard does not use legacy evidence verdicts to block web_fetch', () => {

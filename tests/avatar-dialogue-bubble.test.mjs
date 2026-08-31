@@ -165,8 +165,9 @@ function installFakeDom({ onExpand = () => {} } = {}) {
             return {
                 ok: true,
                 expanded: Boolean(payload?.expanded),
-                extraTop: payload?.expanded ? 190 : 0,
-                extraWidth: payload?.expanded ? 220 : 0,
+                fixedEnvelope: true,
+                extraTop: 190,
+                extraWidth: 220,
                 reservedLeft: 0,
                 reservedRight: 0
             };
@@ -176,6 +177,12 @@ function installFakeDom({ onExpand = () => {} } = {}) {
 
     globalThis.window = windowTarget;
     return { root };
+}
+
+async function flushAsyncUi() {
+    for (let index = 0; index < 6; index += 1) {
+        await Promise.resolve();
+    }
 }
 
 test('pet dialogue bubble reserves and releases Electron overlay space', async () => {
@@ -188,6 +195,8 @@ test('pet dialogue bubble reserves and releases Electron overlay space', async (
         variant: 'pet'
     });
 
+    await flushAsyncUi();
+
     window.dispatchEvent(new CustomEvent(AVATAR_SPEECH_EVENT_NAME, {
         detail: {
             phase: 'start',
@@ -195,8 +204,7 @@ test('pet dialogue bubble reserves and releases Electron overlay space', async (
             text: '你好呀'
         }
     }));
-    await Promise.resolve();
-    await Promise.resolve();
+    await flushAsyncUi();
 
     window.dispatchEvent(new CustomEvent(AVATAR_SPEECH_EVENT_NAME, {
         detail: {
@@ -204,11 +212,43 @@ test('pet dialogue bubble reserves and releases Electron overlay space', async (
             id: 'message-1'
         }
     }));
-    await Promise.resolve();
-    await Promise.resolve();
+    await flushAsyncUi();
 
     cleanup();
-    assert.deepEqual(expandCalls.map((call) => call.expanded), [true, false]);
+    assert.deepEqual(expandCalls.map((call) => call.expanded), [false]);
+});
+
+test('pet dialogue bubble keeps one window reservation while speech text streams', async () => {
+    const expandCalls = [];
+    const { root } = installFakeDom({
+        onExpand: (payload) => expandCalls.push(payload)
+    });
+    const cleanup = installAvatarDialogueBubble({
+        rootElement: root,
+        variant: 'pet'
+    });
+
+    await flushAsyncUi();
+    expandCalls.length = 0;
+
+    window.dispatchEvent(new CustomEvent(AVATAR_SPEECH_EVENT_NAME, {
+        detail: { phase: 'start', id: 'stream-1', text: '正在回答' }
+    }));
+    await flushAsyncUi();
+
+    const bubble = root.children[0];
+    bubble.rect.height = 168;
+    window.dispatchEvent(new CustomEvent(AVATAR_SPEECH_EVENT_NAME, {
+        detail: {
+            phase: 'update',
+            id: 'stream-1',
+            text: '正在回答，这是一段持续增长且会改变对话框高度的流式文本。'
+        }
+    }));
+    await flushAsyncUi();
+
+    cleanup();
+    assert.equal(expandCalls.length, 0);
 });
 
 test('pet dialogue bubble anchors above the avatar bounds when available', async () => {
@@ -235,8 +275,7 @@ test('pet dialogue bubble anchors above the avatar bounds when available', async
             text: '我在这里。'
         }
     }));
-    await Promise.resolve();
-    await Promise.resolve();
+    await flushAsyncUi();
 
     const bubble = root.children[0];
     cleanup();
@@ -270,8 +309,7 @@ test('pet dialogue bubble keeps its head-top anchor when vertical space is tight
             text: '这是一段需要保持在人物头顶上方的较长对话。'
         }
     }));
-    await Promise.resolve();
-    await Promise.resolve();
+    await flushAsyncUi();
 
     const bubble = root.children[0];
     cleanup();

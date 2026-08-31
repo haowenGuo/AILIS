@@ -329,6 +329,9 @@ export function installAvatarDialogueBubble({
     let petReservedWidthRequest = 0;
     let petReservedLeft = 0;
     let petReservedRight = 0;
+    let petShellOperation = null;
+    let petShellRequestId = 0;
+    let petFixedEnvelope = false;
     let bubbleSettings = normalizePetBubbleSettings(window.ailisDesktop?.preferences || {});
 
     const usesDesktopBubbleSettings = () => variant === 'pet' && Boolean(window.ailisDesktop);
@@ -513,16 +516,19 @@ export function installAvatarDialogueBubble({
             ? Math.max(0, Math.round(Number(extraWidth)))
             : bubbleSettings.extraWidth;
         const hasReservedSpace = petReservedTop > 0 || petReservedLeft > 0 || petReservedRight > 0;
-        if (
-            expanded &&
-            hasReservedSpace &&
-            petReservedTopRequest === requestedExtraTop &&
-            petReservedWidthRequest === requestedExtraWidth &&
-            !force
-        ) {
+        if (petFixedEnvelope && hasReservedSpace && !force) {
             return petReservedTop;
         }
-        if (!expanded && !hasReservedSpace && !force) {
+        if (
+            expanded &&
+            petReservedTopRequest === requestedExtraTop &&
+            petReservedWidthRequest === requestedExtraWidth &&
+            (hasReservedSpace || petShellOperation) &&
+            !force
+        ) {
+            return petShellOperation || petReservedTop;
+        }
+        if (!expanded && !hasReservedSpace && !petShellOperation && !force) {
             return 0;
         }
 
@@ -532,27 +538,41 @@ export function installAvatarDialogueBubble({
             return 0;
         }
 
+        const requestId = ++petShellRequestId;
+        petReservedTopRequest = expanded ? requestedExtraTop : 0;
+        petReservedWidthRequest = expanded ? requestedExtraWidth : 0;
+        const operation = setExpanded({
+            expanded,
+            extraTop: expanded ? requestedExtraTop : 0,
+            extraWidth: expanded ? requestedExtraWidth : 0
+        })
+            .then((result) => {
+                if (requestId !== petShellRequestId) {
+                    return petReservedTop;
+                }
+                petFixedEnvelope = Boolean(result?.fixedEnvelope);
+                const nextReservedTop = Number(result?.extraTop || 0);
+                applyPetDialogueReservations({
+                    extraTop: nextReservedTop,
+                    reservedLeft: result?.reservedLeft,
+                    reservedRight: result?.reservedRight
+                });
+                return petReservedTop;
+            });
+        petShellOperation = operation;
+
         try {
-            const result = await setExpanded({
-                expanded,
-                extraTop: expanded ? requestedExtraTop : 0,
-                extraWidth: expanded ? requestedExtraWidth : 0
-            });
-            const nextReservedTop = expanded ? Number(result?.extraTop || 0) : 0;
-            petReservedTopRequest = expanded ? requestedExtraTop : 0;
-            petReservedWidthRequest = expanded ? requestedExtraWidth : 0;
-            applyPetDialogueReservations({
-                extraTop: nextReservedTop,
-                reservedLeft: expanded ? result?.reservedLeft : 0,
-                reservedRight: expanded ? result?.reservedRight : 0
-            });
-            return petReservedTop;
+            return await operation;
         } catch (error) {
             console.warn('调整人物对话框窗口高度失败：', error);
-            if (!expanded) {
+            if (!expanded && requestId === petShellRequestId) {
                 applyPetDialogueReservations();
             }
             return petReservedTop;
+        } finally {
+            if (requestId === petShellRequestId) {
+                petShellOperation = null;
+            }
         }
     };
 
@@ -596,7 +616,12 @@ export function installAvatarDialogueBubble({
         };
 
         if (variant === 'pet') {
-            const dynamicExtraTop = getDynamicPetExtraTop();
+            // Keep one reservation for the whole streamed utterance. Resizing the
+            // transparent Electron window for every text delta flashes the WebGL canvas.
+            const dynamicExtraTop = petReservedTopRequest || Math.max(
+                bubbleSettings.extraTop,
+                getDynamicPetExtraTop()
+            );
             void setPetDialogueShellExpanded(true, {
                 extraTop: dynamicExtraTop
             }).finally(() => {
@@ -713,6 +738,11 @@ export function installAvatarDialogueBubble({
     bubbleEl.addEventListener('pointermove', moveDrag);
     bubbleEl.addEventListener('pointerup', endDrag);
     bubbleEl.addEventListener('pointercancel', endDrag);
+
+    if (variant === 'pet' && window.ailisDesktop?.setPetDialogueExpanded) {
+        // Reserve the fixed Electron envelope before the model becomes visible.
+        void setPetDialogueShellExpanded(false, { force: true });
+    }
 
     return () => {
         clearHideTimer();

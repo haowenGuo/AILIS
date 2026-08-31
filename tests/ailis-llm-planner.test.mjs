@@ -18,6 +18,9 @@ const { ContextManager } = require('../electron/ailis-context-manager.cjs');
 const {
     normalizeTimeoutMs
 } = require('../electron/desktop-llm-provider.cjs');
+const {
+    resolveCodexNativeInstructions
+} = require('../electron/codex-native-instructions.cjs');
 
 test('desktop LLM provider preserves configured agent decision timeouts up to ten minutes', () => {
     assert.equal(normalizeTimeoutMs(360000), 360000);
@@ -102,25 +105,12 @@ function decisionObjectToChatMessage(decision, callId = 'mock-tool-call') {
 
 function parseModelContextPayload(call) {
     const messages = call?.payload?.messages || [];
-    for (const message of messages.filter((entry) => entry.role === 'user')) {
+    for (const message of messages.filter((entry) => ['system', 'developer', 'user'].includes(entry.role))) {
         try {
             const parsed = JSON.parse(message.content);
-            if (parsed?.type === 'context') {
-                return parsed;
-            }
+            if (parsed?.type === 'context') return parsed;
         } catch {
-            // Ignore non-JSON user goal messages.
-        }
-    }
-    for (const message of messages) {
-        const match = String(message.content || '').match(
-            /<task_agent_session_state>\s*([\s\S]*?)\s*<\/task_agent_session_state>/i
-        );
-        if (!match) continue;
-        try {
-            return JSON.parse(match[1]);
-        } catch {
-            // Ignore malformed state envelopes in this test helper.
+            // Ignore non-JSON instructions and user goal messages.
         }
     }
     return {};
@@ -345,9 +335,9 @@ async function createMockChatCompletionsServer() {
                       action: 'tool',
                       plan_update: ['先创建目标目录'],
                       tool_call: {
-                          tool: 'exec',
+                          tool: 'exec_command',
                           title: '创建目标目录',
-                          args: { command: 'New-Item -ItemType Directory -Path planner-output -Force' }
+                          args: { cmd: 'New-Item -ItemType Directory -Path planner-output -Force' }
                       }
                 },
                 {
@@ -357,11 +347,10 @@ async function createMockChatCompletionsServer() {
                     action: 'tool',
                     plan_update: ['目录已创建，写入说明文件'],
                     tool_call: {
-                        tool: 'write',
+                        tool: 'apply_patch',
                         title: '写入说明文件',
                         args: {
-                            path: 'planner-output/README.txt',
-                            content: 'Agentic Executor OK\n'
+                            input: '*** Begin Patch\n*** Add File: planner-output/README.txt\n+Agentic Executor OK\n*** End Patch'
                         }
                     }
                 },
@@ -561,8 +550,8 @@ async function createSteerAwareChatCompletionsServer(firstResponseDelayMs = 250)
                     intent: 'turn_steer_probe',
                     action: 'final',
                     final_answer: callNumber === 1
-                        ? '旧请求的答案'
-                        : '已按补充要求完成'
+                        ? '未看到补充要求时的旧答案'
+                        : '已按英文 Wikipedia 核实：2000—2009 年共 3 张。'
                 }, `steer-aware-${callNumber}`);
                 res.writeHead(200, { 'content-type': 'application/json' });
                 res.end(JSON.stringify({
@@ -658,7 +647,20 @@ test('Agent prompts inject runtime_environment from the active platform adapter'
             assert.match(userPayload.runtime_environment.utc_offset, /^[+-]\d{2}:\d{2}$/);
             assert.match(userPayload.runtime_environment.command_guidance, /Do not assume|not Linux by default|POSIX/);
             assert.match(JSON.stringify(llmServer.calls[0].payload.messages), /runtime_environment/);
-            assert.match(llmServer.calls[0].system, /Runtime environment/);
+            const contextMessages = llmServer.calls[0].payload.messages.filter((message) => {
+                if (!['system', 'developer'].includes(message.role)) return false;
+                try {
+                    return JSON.parse(message.content)?.type === 'context';
+                } catch {
+                    return false;
+                }
+            });
+            assert.equal(contextMessages.length, 1);
+            assert.equal(
+                llmServer.calls[0].payload.messages.filter((message) => message.role === 'user').length,
+                1
+            );
+            assert.equal(llmServer.calls[0].system, resolveCodexNativeInstructions(`mock-${item.expectedFamily}`));
             assert.doesNotMatch(llmServer.calls[0].system, /当前桌面端优先 Windows|Windows 桌面端命令必须/);
         } finally {
             await gateway.stop();
@@ -738,7 +740,7 @@ test('Desktop real eval can pin only the runtime clock while preserving platform
     }
 });
 
-test('Persona prompt stays in AILIS persona and exposes only system TaskAgent handoff', async () => {
+test('Persona prompt stays in AILIS persona and exposes handoff plus read-only screen context', async () => {
     const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-persona-orchestrator-'));
     const llmServer = await createScriptedChatCompletionsServer(() => ({
         action: 'final',
@@ -786,9 +788,12 @@ test('Persona prompt stays in AILIS persona and exposes only system TaskAgent ha
         assert.match(llmServer.calls[0].system, /TaskResult packet is the factual boundary/);
         assert.doesNotMatch(llmServer.calls[0].system, /continuation=/);
         const toolNames = (llmServer.calls[0].payload.tools || []).map((tool) => tool.function?.name || tool.name);
-        assert.deepEqual(toolNames, ['handoff_task']);
+        assert.deepEqual(toolNames, ['handoff_task', 'vision_capture_context']);
         const handoffTool = llmServer.calls[0].payload.tools[0]?.function || llmServer.calls[0].payload.tools[0];
         assert.deepEqual(handoffTool?.parameters?.properties, {});
+        const visionTool = llmServer.calls[0].payload.tools[1]?.function || llmServer.calls[0].payload.tools[1];
+        assert.equal(visionTool?.name, 'vision_capture_context');
+        assert.match(visionTool?.description || '', /user does not need to explicitly ask/i);
         const contextPayload = parseModelContextPayload(llmServer.calls[0]);
         const memoryMessage = llmServer.calls[0].payload.messages.find((message) =>
             (message.role === 'developer' || message.role === 'system') &&
@@ -844,6 +849,51 @@ test('Persona hands one exact request to the system TaskAgent and renders its co
             status: 'completed',
             runId: payload.agent.childRunId,
             displayText: 'BaseLabelPropagation',
+            cost: {
+                schema: 'ailis.run_cost.v1',
+                run_id: payload.agent.childRunId,
+                session_id: payload.agent.childSessionId,
+                wall_clock_ms: 100,
+                own: {
+                    llm: {
+                        calls: 1,
+                        duration_ms: 80,
+                        usage: {
+                            promptTokens: 70,
+                            completionTokens: 30,
+                            totalTokens: 100,
+                            reasoningTokens: 0,
+                            cachedTokens: 40,
+                            uncachedPromptTokens: 30
+                        },
+                        by_model: []
+                    },
+                    tools: { calls: 0, duration_ms: 0 }
+                },
+                nested: {
+                    runs: 0,
+                    child_wall_clock_ms: 0,
+                    llm: { calls: 0, duration_ms: 0, usage: {}, by_model: [] },
+                    tools: { calls: 0, duration_ms: 0 }
+                },
+                total: {
+                    runs: 1,
+                    llm: {
+                        calls: 1,
+                        duration_ms: 80,
+                        usage: {
+                            promptTokens: 70,
+                            completionTokens: 30,
+                            totalTokens: 100,
+                            reasoningTokens: 0,
+                            cachedTokens: 40,
+                            uncachedPromptTokens: 30
+                        },
+                        by_model: []
+                    },
+                    tools: { calls: 0, duration_ms: 0 }
+                }
+            },
             steps: [{ private: 'not model visible' }],
             taskRunHandoff: {
                 status: 'completed',
@@ -900,6 +950,11 @@ test('Persona hands one exact request to the system TaskAgent and renders its co
         assert.equal(result.body.finalAnswer, 'BaseLabelPropagation');
         assert.equal(result.body.intent, 'persona_task_handoff_result');
         assert.equal(result.body.taskResult?.schema, 'ailis.task_result.v1');
+        assert.equal(result.body.cost.schema, 'ailis.run_cost.v1');
+        assert.equal(result.body.cost.own.llm.usage.totalTokens, 20);
+        assert.equal(result.body.cost.nested.llm.usage.totalTokens, 100);
+        assert.equal(result.body.cost.total.llm.usage.totalTokens, 120);
+        assert.equal(result.body.cost.total.llm.usage.cachedTokens, 40);
         assert.equal(taskCalls.length, 1);
         assert.equal(taskCalls[0].agent.task, '核对官方资料并只给出类名。');
         assert.equal(taskCalls[0].context.originalUserGoal, undefined);
@@ -1380,7 +1435,7 @@ test('AILIS Agent run can be interrupted while preserving transcript data', asyn
     }
 });
 
-test('active Turn steer is appended before a TaskAgent final can commit', async () => {
+test('Mercedes Sosa TaskAgent run appends an active user steer before committing the final', async () => {
     const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-turn-steer-test-'));
     const llmServer = await createSteerAwareChatCompletionsServer(300);
     const gateway = new AILISGateway({
@@ -1397,7 +1452,7 @@ test('active Turn steer is appended before a TaskAgent final can commit', async 
         const runPromise = runAgent(status.url, {
             runId,
             sessionId,
-            message: '先回答旧请求',
+            message: '帮我查 Mercedes Sosa 在 2000—2009 年发行了多少张录音室专辑',
             agentLoop: 'llm',
             llmSettings: {
                 provider: 'openai-compatible',
@@ -1411,7 +1466,7 @@ test('active Turn steer is appended before a TaskAgent final can commit', async 
                 agentRole: 'task_agent',
                 taskAgentThreadId: 'thread-steer-test',
                 taskAgentTurnId: 'turn-steer-test',
-                currentTaskRequest: '先回答旧请求'
+                currentTaskRequest: '帮我查 Mercedes Sosa 在 2000—2009 年发行了多少张录音室专辑'
             }
         });
         const reachedFirstDecision = await waitFor(() => llmServer.calls.length === 1, {
@@ -1421,18 +1476,22 @@ test('active Turn steer is appended before a TaskAgent final can commit', async 
         assert.equal(gateway.ensureAgentRunner().enqueueRunInput({
             runId,
             sessionId,
-            message: '补充要求：按新条件回答'
+            message: '速度，先确认英文 Wikipedia'
         }), true);
 
         const result = await runPromise;
         assert.equal(result.body.status, 'completed');
-        assert.equal(result.body.message, '补充要求：按新条件回答');
-        assert.equal(result.body.displayText, '已按补充要求完成');
+        assert.equal(result.body.message, '速度，先确认英文 Wikipedia');
+        assert.equal(result.body.displayText, '已按英文 Wikipedia 核实：2000—2009 年共 3 张。');
         assert.equal(llmServer.calls.length, 2);
+        assert.deepEqual(
+            llmServer.calls[1].payload.messages.slice(0, llmServer.calls[0].payload.messages.length),
+            llmServer.calls[0].payload.messages
+        );
         const secondInput = JSON.stringify(llmServer.calls[1].payload.messages);
-        assert.match(secondInput, /先回答旧请求/);
-        assert.match(secondInput, /补充要求：按新条件回答/);
-        assert.match(secondInput, /task_agent_session_state/);
+        assert.equal(secondInput.match(/帮我查 Mercedes Sosa 在 2000—2009 年发行了多少张录音室专辑/g)?.length, 1);
+        assert.equal(secondInput.match(/速度，先确认英文 Wikipedia/g)?.length, 1);
+        assert.doesNotMatch(secondInput, /task_agent_session_state|shared_session_context|current_request/);
     } finally {
         await gateway.stop().catch(() => {});
         await llmServer.close().catch(() => {});
@@ -1485,7 +1544,8 @@ test('model-authored task_goal persists through the real Gateway into the next S
             currentUserMessage: '建立一个长期木偶攻略目标',
             sessionId: 'task-goal-integration-session',
             runId: 'task-goal-parent-1',
-            llmSettings
+            llmSettings,
+            explicitPersistentGoal: true
         });
         const second = await gateway.taskAgentHarness.handoff({}, {
             currentUserMessage: '继续',
@@ -1502,14 +1562,13 @@ test('model-authored task_goal persists through the real Gateway into the next S
         const firstToolNames = (llmServer.calls[0].payload.tools || [])
             .map((tool) => tool.function?.name || tool.name);
         assert.ok(firstToolNames.includes('task_goal'));
-        assert.equal(
-            parseModelContextPayload(llmServer.calls[1]).task_state.active_goal.objective,
-            '完成木偶攻略'
-        );
-        assert.equal(
-            parseModelContextPayload(llmServer.calls[2]).task_state.active_goal.objective,
-            '完成木偶攻略'
-        );
+        const afterGoalTool = JSON.stringify(llmServer.calls[1].payload.messages);
+        const nextTurn = JSON.stringify(llmServer.calls[2].payload.messages);
+        assert.match(afterGoalTool, /task_goal/);
+        assert.match(afterGoalTool, /完成木偶攻略/);
+        assert.match(nextTurn, /task_goal/);
+        assert.match(nextTurn, /完成木偶攻略/);
+        assert.doesNotMatch(nextTurn, /task_agent_session_state|session_ledger/);
     } finally {
         await gateway.stop().catch(() => {});
         await llmServer.close().catch(() => {});
@@ -1583,9 +1642,13 @@ test('dispatchTurn lets the same persistent TaskAgent route chat or continue exe
         assert.equal(llmServer.calls.length, 3);
         for (const call of llmServer.calls.slice(0, 2)) {
             const toolNames = (call.payload.tools || []).map((tool) => tool.function?.name || tool.name);
-            assert.deepEqual(toolNames, ['task_route']);
+            assert.ok(toolNames.includes('task_route'));
+            assert.ok(toolNames.length > 1);
             assert.match(JSON.stringify(call.payload.tool_choice), /task_route/);
-            const routeTool = call.payload.tools[0]?.function || call.payload.tools[0];
+            const routeToolEntry = call.payload.tools.find((tool) => (
+                (tool.function?.name || tool.name) === 'task_route'
+            ));
+            const routeTool = routeToolEntry?.function || routeToolEntry;
             assert.ok(routeTool.parameters.required.includes('progress_note'));
         }
         assert.ok(taskEvents.some((event) => (
@@ -1594,9 +1657,15 @@ test('dispatchTurn lets the same persistent TaskAgent route chat or continue exe
         )));
         const executionToolNames = (llmServer.calls[2].payload.tools || [])
             .map((tool) => tool.function?.name || tool.name);
-        assert.equal(executionToolNames.includes('task_route'), false);
-        const executionContext = parseModelContextPayload(llmServer.calls[2]);
-        assert.equal(executionContext.task_state.current_request, '执行一个具体任务');
+        assert.equal(executionToolNames.includes('task_route'), true);
+        assert.deepEqual(llmServer.calls[2].payload.tools, llmServer.calls[1].payload.tools);
+        assert.deepEqual(
+            llmServer.calls[2].payload.messages.slice(0, llmServer.calls[1].payload.messages.length),
+            llmServer.calls[1].payload.messages
+        );
+        const executionInput = JSON.stringify(llmServer.calls[2].payload.messages);
+        assert.match(executionInput, /执行一个具体任务/);
+        assert.doesNotMatch(executionInput, /task_agent_session_state|current_request|visible_history/);
         assert.equal(publicEvents.some((event) =>
             ['agent.message.completed', 'persona.surface', 'agent.progress.note'].includes(event.type) &&
             [chat.trace_ref, execute.trace_ref].includes(event.payload?.runId)
@@ -1638,10 +1707,10 @@ test('dispatchTurn retries TaskAgent routing with auto when thinking mode reject
         assert.equal(llmServer.calls.length, 2);
         assert.match(JSON.stringify(llmServer.calls[0].payload.tool_choice), /task_route/);
         assert.equal(llmServer.calls[1].payload.tool_choice, 'auto');
-        assert.deepEqual(
-            (llmServer.calls[1].payload.tools || []).map((tool) => tool.function?.name || tool.name),
-            ['task_route']
-        );
+        const fallbackToolNames = (llmServer.calls[1].payload.tools || [])
+            .map((tool) => tool.function?.name || tool.name);
+        assert.ok(fallbackToolNames.includes('task_route'));
+        assert.ok(fallbackToolNames.length > 1);
     } finally {
         await gateway.stop().catch(() => {});
         await llmServer.close().catch(() => {});
@@ -1709,10 +1778,9 @@ async function createDirectToolCallChatCompletionsServer() {
                                         id: 'direct-write-1',
                                         type: 'function',
                                         function: {
-                                            name: 'write',
+                                            name: 'apply_patch',
                                             arguments: JSON.stringify({
-                                                path: 'direct-native-output.txt',
-                                                content: 'direct native tool executor ok\n'
+                                                input: '*** Begin Patch\n*** Add File: direct-native-output.txt\n+direct native tool executor ok\n*** End Patch'
                                             })
                                         }
                                     }
@@ -2022,7 +2090,7 @@ test('Agentic Executor can execute real native direct tool calls before JSON pla
         assert.match(result.body.displayText, /Direct native executor 完成/);
         assert.equal(await fs.readFile(path.join(workspaceRoot, 'direct-native-output.txt'), 'utf8'), 'direct native tool executor ok\n');
         assert.equal(llmServer.calls.length, 2);
-        assert.ok(llmServer.calls[0].payload.tools.some((tool) => tool.function?.name === 'write'));
+        assert.ok(llmServer.calls[0].payload.tools.some((tool) => tool.function?.name === 'apply_patch'));
         assert.equal(
             llmServer.calls[0].payload.tools.some((tool) => tool.function?.name === 'ailis_agent_decision'),
             false
@@ -2030,8 +2098,11 @@ test('Agentic Executor can execute real native direct tool calls before JSON pla
         assert.equal(llmServer.calls[0].payload.tool_choice, 'auto');
         assert.equal(llmServer.calls[1].payload.tool_choice, 'auto');
         assert.ok((llmServer.calls[1].payload.tools || []).length > 0);
-        assert.match(llmServer.calls[0].payload.messages[0].content, /Responses-Compatible Tool Runtime/);
-        assert.equal(result.body.steps[0].tool, 'write');
+        const directInstructions = llmServer.calls[0].payload.messages.find((message) => message.role === 'system')?.content;
+        assert.equal(directInstructions, resolveCodexNativeInstructions('mock-direct-tools'));
+        assert.match(directInstructions, /^You are Codex/);
+        assert.doesNotMatch(directInstructions, /Responses-Compatible Tool Runtime|coding agent running in AILIS/);
+        assert.equal(result.body.steps[0].tool, 'apply_patch');
     } finally {
         await gateway.stop();
         await llmServer.close();
@@ -2351,22 +2422,21 @@ test('Agentic Executor consumes native provider tool-call decisions and keeps ru
         if (decisionCount === 1) {
             return {
                 mode: 'task',
-                intent: 'native_decision_write',
+                intent: 'native_decision_patch',
                 summary: '使用原生 tool-call 决策写入文件',
                 action: 'tool',
                 tool_call: {
-                    tool: 'write',
+                    tool: 'apply_patch',
                     title: '写入 native-output.txt',
                     args: {
-                        path: 'native-output.txt',
-                        content: 'native tool-call decision ok\n'
+                        input: '*** Begin Patch\n*** Add File: native-output.txt\n+native tool-call decision ok\n*** End Patch'
                     }
                 }
             };
         }
         return {
             mode: 'task',
-            intent: 'native_decision_write',
+            intent: 'native_decision_patch',
             summary: '文件已经写入',
             action: 'final',
             final_answer: '**Native decision 完成**'
@@ -2409,7 +2479,7 @@ test('Agentic Executor consumes native provider tool-call decisions and keeps ru
         const written = await fs.readFile(path.join(workspaceRoot, 'native-output.txt'), 'utf8');
         assert.match(written, /native tool-call decision ok/);
         const nativeDecisionCalls = llmServer.calls.filter((call) =>
-            call.payload.tools?.some((tool) => tool.name === 'write')
+            call.payload.tools?.some((tool) => tool.name === 'apply_patch')
         );
         assert.equal(nativeDecisionCalls.length, 2);
         assert.equal(nativeDecisionCalls[0].payload.tool_choice, 'auto');
@@ -2470,12 +2540,10 @@ test('TaskAgent unrestricted mode executes mutating tools without approval or co
 
         const text = await fs.readFile(path.join(workspaceRoot, 'planner-output', 'README.txt'), 'utf8');
         assert.match(text, /Agentic Executor OK/);
-        assert.equal(llmServer.calls.filter((call) => /Responses-Compatible Tool Runtime/.test(call.system)).length, 3);
-        assert.match(llmServer.calls[0].system, /unrestricted direct tool execution/);
-        assert.doesNotMatch(llmServer.calls[0].system, /escalated to the user for approval/);
-        assert.match(llmServer.calls[0].system, /You are a coding agent running in AILIS/);
-        assert.match(llmServer.calls[0].system, /same outer AILIS conversation/);
-        assert.match(llmServer.calls[0].system, /OpenAI Responses object model/);
+        assert.equal(llmServer.calls.length, 3);
+        assert.ok(llmServer.calls.every((call) => call.system === resolveCodexNativeInstructions('mock-planner')));
+        assert.match(llmServer.calls[0].system, /^You are Codex/);
+        assert.doesNotMatch(llmServer.calls[0].system, /Responses-Compatible Tool Runtime|coding agent running in AILIS/);
         assert.doesNotMatch(llmServer.calls[0].system, /名字固定为AILIS/);
         assert.doesNotMatch(llmServer.calls[0].system, /性格设定/);
         assert.doesNotMatch(llmServer.calls[0].system, /不具备任何人工智能/);
@@ -2561,7 +2629,7 @@ test('Agentic Executor restores pending approval from durable store after Gatewa
     }
 });
 
-test('Agentic Executor can request approved read-only vision context', async () => {
+test('AILIS Persona autonomously requests read-only vision context when an implicit screen reference is missing from text', async () => {
     const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-vision-agent-'));
     const captured = [];
     const llmServer = await createScriptedChatCompletionsServer(({ decisionCount, messages }) => {
@@ -2570,35 +2638,23 @@ test('Agentic Executor can request approved read-only vision context', async () 
             message.content.some((part) => part?.type === 'image_url')
         );
         if (hasImageInput) {
-            return '我看到截图里有一个桌面端聊天窗口，界面没有明显崩溃。';
+            return '我看到登录按钮呈灰色禁用状态，按钮上方还有一个必填输入框没有填写。';
         }
         if (decisionCount === 1) {
             return {
                 mode: 'task',
                 intent: 'vision_check',
-                summary: '发现只读视觉工具',
-                action: 'tool',
-                tool_call: {
-                    tool: 'tool_search',
-                    title: '查找只读视觉工具',
-                    args: { query: 'vision.capture_context screen capture' }
-                }
-            };
-        }
-        if (decisionCount === 2) {
-            return {
-                mode: 'task',
-                intent: 'vision_check',
                 summary: '请求只读视觉上下文',
                 action: 'tool',
+                requires_confirmation: false,
                 tool_call: {
                     tool: 'vision_capture_context',
                     title: '看一眼当前屏幕',
                     args: {
                         action: 'capture_context',
                         target: 'screen',
-                        reason: '用户要求判断桌面端视觉截图功能是否正常',
-                        question: '当前聊天窗口、桌宠窗口和控制台是否正常运行？'
+                        reason: '用户所说的“这个按钮”只能从当前屏幕确定',
+                        question: '用户指的是哪个按钮，界面上是否有可见的禁用或报错状态？'
                     }
                 }
             };
@@ -2608,7 +2664,7 @@ test('Agentic Executor can request approved read-only vision context', async () 
             intent: 'vision_check',
             summary: '已经获得视觉 observation',
             action: 'final',
-            final_answer: '我看到了当前界面：聊天窗口存在，未发现明显崩溃；如果要更精确，需要你框选异常区域。'
+            final_answer: '我看到登录按钮现在是灰色禁用状态，上方还有必填项没填；先补全那个输入框，按钮应该就能点了。'
         };
     });
     const llmSettings = {
@@ -2652,41 +2708,29 @@ test('Agentic Executor can request approved read-only vision context', async () 
         const baseUrl = status.url;
         const first = await runAgent(baseUrl, {
             sessionId: 'vision-agent-test',
-            message: '帮我观察当前屏幕，判断聊天窗口和桌宠是否正常。',
+            message: '这个按钮为什么点不了？',
             agentLoop: 'llm',
             llmSettings,
-            context: { workspace: workspaceRoot }
+            context: {
+                workspace: workspaceRoot,
+                agentRole: 'persona_orchestrator'
+            }
         });
 
-        assert.equal(first.body.ok, false, JSON.stringify({
+        assert.equal(first.body.ok, true, JSON.stringify({
             status: first.body.status,
             steps: first.body.steps,
             calls: llmServer.calls.map((call) => (call.payload.tools || []).map((tool) => tool.function?.name || tool.name))
         }));
-        assert.equal(first.body.status, 'needs_approval');
-        assert.equal(first.body.approvalType, 'vision_capture_context');
-        assert.equal(first.body.plan[0].tool, 'vision.capture_context');
-        assert.match(first.body.displayText, /先得到你的确认/);
-        assert.match(first.body.displayText, /看一眼当前画面|看一眼屏幕/);
-        assert.doesNotMatch(first.body.displayText, /确认编号|Agentic Executor/);
-        assert.equal(captured.length, 0);
-
-        const confirmed = await runAgent(baseUrl, {
-            sessionId: 'vision-agent-test',
-            message: '确认执行',
-            llmSettings,
-            context: { workspace: workspaceRoot }
-        });
-
-        assert.equal(confirmed.body.ok, true, confirmed.body.displayText);
-        assert.equal(confirmed.body.status, 'completed');
+        assert.equal(first.body.status, 'completed');
+        assert.equal(first.body.confirmationRequired, undefined);
         assert.equal(captured.length, 1, JSON.stringify({
-            status: confirmed.body.status,
-            steps: confirmed.body.steps,
+            status: first.body.status,
+            steps: first.body.steps,
             calls: llmServer.calls.map((call) => (call.payload.tools || []).map((tool) => tool.function?.name || tool.name))
         }));
         assert.equal(captured[0].target, 'screen');
-        assert.match(confirmed.body.displayText, /聊天窗口存在/);
+        assert.match(first.body.displayText, /登录按钮.*灰色/);
         assert.ok(
             llmServer.calls.some((call) =>
                 call.payload.messages?.some((message) =>
@@ -2699,6 +2743,89 @@ test('Agentic Executor can request approved read-only vision context', async () 
         await gateway.stop();
         await llmServer.close();
     }
+});
+
+test('Persona and TaskAgent share one visual observation for the same user Turn', async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-shared-vision-turn-'));
+    let captures = 0;
+    let modelCalls = 0;
+    const mainSettings = {
+        provider: 'deepseek',
+        baseUrl: 'https://api.deepseek.com',
+        apiKey: 'main-secret',
+        model: 'deepseek-v4-flash'
+    };
+    const auxiliarySettings = {
+        enabled: true,
+        provider: 'openai-compatible',
+        baseUrl: 'https://vision.example/v1',
+        apiKey: 'vision-secret',
+        model: 'qwen2.5-vl-7b'
+    };
+    const gateway = new AILISGateway({
+        port: 0,
+        workspaceRoot,
+        projectRoot: path.resolve('.'),
+        auditDir: path.join(workspaceRoot, '.audit'),
+        visionServices: {
+            getLlmSettings: () => mainSettings,
+            getVisionLlmSettings: () => auxiliarySettings,
+            capture: async () => {
+                captures += 1;
+                await delay(20);
+                return {
+                    id: 'shared-turn-snapshot',
+                    type: 'vision',
+                    source: 'screen',
+                    dataUrl: 'data:image/png;base64,AAAA',
+                    imagePath: path.join(workspaceRoot, 'snapshot.png'),
+                    mimeType: 'image/png',
+                    width: 1280,
+                    height: 720
+                };
+            },
+            callLlm: async () => {
+                modelCalls += 1;
+                await delay(20);
+                return {
+                    ok: true,
+                    content: '当前屏幕是同一个 AILIS 聊天界面。',
+                    model: auxiliarySettings.model
+                };
+            }
+        }
+    });
+    const turnEnvelope = {
+        sessionId: 'shared-vision-session',
+        userMessage: '这个界面有什么问题？',
+        createdAt: '2026-08-25T00:00:00.000Z'
+    };
+
+    const [personaResult, taskAgentResult] = await Promise.all([
+        gateway.executeGatewayLocalTool('vision.capture_context', {
+            action: 'capture_context',
+            target: 'screen',
+            question: '这个界面有什么问题？'
+        }, {
+            sessionId: turnEnvelope.sessionId,
+            turnEnvelope,
+            agentRole: 'persona_orchestrator'
+        }),
+        gateway.executeGatewayLocalTool('vision.capture_context', {
+            action: 'capture_context',
+            target: 'screen',
+            question: '描述当前屏幕。'
+        }, {
+            sessionId: turnEnvelope.sessionId,
+            turnEnvelope,
+            agentRole: 'task_agent'
+        })
+    ]);
+
+    assert.equal(captures, 1);
+    assert.equal(modelCalls, 1);
+    assert.equal(personaResult.details.understanding, '当前屏幕是同一个 AILIS 聊天界面。');
+    assert.equal(taskAgentResult.details.understanding, personaResult.details.understanding);
 });
 
 test('Agentic Executor skips vision confirmation when full computer control is enabled', async () => {
@@ -2837,10 +2964,10 @@ test('TaskAgent ignores the legacy round cap, compacts canonical history, and en
                 summary: `读取第 ${decisionCount} 份输出`,
                 action: 'tool',
                 tool_call: {
-                    tool: 'exec',
+                    tool: 'exec_command',
                     title: `读取输出 ${decisionCount}`,
                     args: {
-                        command: `powershell -NoProfile -Command "$value = 'output-${decisionCount} '; Write-Output ($value * 800)"`
+                        cmd: `powershell -NoProfile -Command "$value = 'output-${decisionCount} '; Write-Output ($value * 800)"`
                     }
                 }
             };
@@ -2889,8 +3016,12 @@ test('TaskAgent ignores the legacy round cap, compacts canonical history, and en
         assert.match(result.body.displayText, /Natural completion/);
         assert.equal(result.body.steps.length, 10);
         assert.equal(llmServer.calls.length, 11);
+        assert.equal(
+            llmServer.calls[0].system,
+            resolveCodexNativeInstructions('mock-natural-termination-task-agent')
+        );
         assert.doesNotMatch(llmServer.calls[0].system, /work-tool rounds|round total budget|finalization/i);
-        assert.match(llmServer.calls[0].system, /tool_search acquires a capability/);
+        assert.match(llmServer.calls[0].system, /^You are Codex/);
         assert.doesNotMatch(llmServer.calls[0].system, /web_run archive operation|exact-answer|evidence contract/i);
         assert.notEqual(llmServer.calls.at(-1).payload.tool_choice, 'none');
         assert.ok((llmServer.calls.at(-1).payload.tools || []).length > 0);
@@ -3107,7 +3238,8 @@ test('Agentic Executor keeps deprecated task layers out of the model prompt', as
         assert.equal(llmUserPayload.recent_turn_items, undefined);
         assert.equal(llmUserPayload.runtime_diagnostics, undefined);
         assert.doesNotMatch(llmServer.calls[0].system, /task_brief|TaskSpec|Evidence Ledger|Task Graph/);
-        assert.match(llmServer.calls[0].system, /ResponseItem objects/);
+        assert.match(llmServer.calls[0].system, /^You are Codex/);
+        assert.doesNotMatch(llmServer.calls[0].system, /Responses-Compatible Tool Runtime|ResponseItem objects/);
         assert.doesNotMatch(llmServer.calls[0].system, /runtime_diagnostics/);
     } finally {
         await gateway.stop();
@@ -3159,7 +3291,7 @@ test('Agentic Executor keeps generic official-doc tasks on the AILIS model-input
         const llmUserPayload = parseModelContextPayload(llmServer.calls[0]);
         assert.equal(llmUserPayload.task_brief, undefined);
         assert.equal(llmUserPayload.recent_turn_items, undefined);
-        assert.match(llmServer.calls[0].system, /Responses-Compatible Tool Runtime/);
+        assert.equal(llmServer.calls[0].system, resolveCodexNativeInstructions('mock-generic-doc-prompt-agent'));
         assert.equal(llmUserPayload.capability_catalog, undefined);
         const exposedToolNames = (llmServer.calls[0].payload.tools || []).map((tool) => tool.function?.name || tool.name);
         assert.ok(exposedToolNames.includes('tool_search'));

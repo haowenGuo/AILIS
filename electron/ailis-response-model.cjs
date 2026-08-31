@@ -388,6 +388,12 @@ function responseItemToWireItem(item = {}) {
         if (Object.prototype.hasOwnProperty.call(cloned, 'success')) {
             delete cloned.success;
         }
+        if (
+            cloned.type === 'custom_tool_call_output' &&
+            Object.prototype.hasOwnProperty.call(cloned, 'name')
+        ) {
+            delete cloned.name;
+        }
     }
     return cloned;
 }

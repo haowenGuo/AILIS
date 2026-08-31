@@ -35,7 +35,7 @@ const DEFAULT_SUBAGENT_RUN_TIMEOUT_MS = 15 * 60 * 1000;
 
 const FILE_MUTATING_TOOLS = new Set(['write', 'edit', 'apply_patch']);
 const FILE_READONLY_TOOLS = new Set(['read', 'web_fetch']);
-const EXEC_TOOLS = new Set(['exec']);
+const EXEC_TOOLS = new Set(['exec', 'exec_command']);
 const COMPUTER_READONLY_ACTIONS = new Set([
     'schema',
     'ls',
@@ -983,7 +983,10 @@ class AILISRuntime {
                 intent: result.intent,
                 planner: result.planner,
                 displayText: result.displayText,
-                durationMs: result.durationMs
+                durationMs: result.durationMs,
+                ...(result.cost && typeof result.cost === 'object'
+                    ? { cost: cloneJson(result.cost) }
+                    : {})
             }
         });
         await this.appendItem(id, {
@@ -992,7 +995,10 @@ class AILISRuntime {
             payload: {
                 ok: result.ok,
                 status: result.status,
-                durationMs: result.durationMs
+                durationMs: result.durationMs,
+                ...(result.cost && typeof result.cost === 'object'
+                    ? { cost: cloneJson(result.cost) }
+                    : {})
             }
         });
         const repair = await this.repairTranscript(id);
@@ -1385,6 +1391,16 @@ class AILISRuntime {
                 return { class: 'mutating', mutates: true, requiresApprovalCapable: false, action: 'apply_patch_intercept' };
             }
         }
+        if (toolId === 'write_stdin') {
+            const chars = typeof args.chars === 'string'
+                ? args.chars
+                : typeof args.input === 'string'
+                ? args.input
+                : '';
+            return chars
+                ? { class: 'exec_capable', mutates: true, requiresApprovalCapable: true, action }
+                : { class: 'readonly_scoped', mutates: false, requiresApprovalCapable: false, action };
+        }
         if (EXEC_TOOLS.has(toolId)) {
             return { class: 'exec_capable', mutates: true, requiresApprovalCapable: true, action };
         }
@@ -1431,7 +1447,7 @@ class AILISRuntime {
             }
         }
         if (VISION_TOOL_IDS.has(toolId)) {
-            return { class: 'vision_readonly', mutates: false, requiresApprovalCapable: true, action };
+            return { class: 'vision_readonly', mutates: false, requiresApprovalCapable: false, action };
         }
         return {
             class: 'unknown',
@@ -1662,23 +1678,9 @@ class AILISRuntime {
             explanation: state.explanation,
             plan: items
         });
-        const modelView = {
-            status: 'completed',
-            completion_scope: 'progress_recorded_only',
-            semantic_role: 'progress_ui_only',
-            task_advanced: false,
-            execution_effect: 'updated_user_visible_progress_checklist_only',
-            next_step_guidance: 'This did not inspect files, retrieve data, execute commands, or compute answers. Continue with the real task tool when work remains.',
-            explanation: state.explanation,
-            plan: items
-        };
+        const modelView = { status: 'completed' };
         return {
-            content: [
-                {
-                    type: 'text',
-                    text: JSON.stringify(modelView, null, 2)
-                }
-            ],
+            content: [{ type: 'text', text: 'Plan updated.' }],
             structuredContent: modelView,
             details: modelView
         };

@@ -59,6 +59,7 @@ function normalizeToolSpec(tool = {}) {
         ? source.parameters
         : { type: 'object', properties: {} };
     return {
+        type: normalizeText(tool?.type || source?.type, 'function'),
         name,
         description: normalizeText(source?.description || tool?.description),
         parameters,
@@ -207,22 +208,32 @@ function resolveToolChoice(payload = {}) {
 }
 
 function codexNativeToolSpecs(tools = []) {
-    return normalizeToolSpecs(tools).map((tool) => ({
-        type: 'function',
-        name: tool.name,
-        description: tool.description,
-        parameters: tool.strict
-            ? compileCodexOutputSchema(tool.parameters, { fallbackType: 'object' })
-            : tool.parameters,
-        ...(tool.strict ? { strict: true } : {})
-    }));
+    return normalizeToolSpecs(tools).map((tool) => {
+        if (tool.name === 'apply_patch' || tool.type === 'custom') {
+            return {
+                type: 'custom',
+                name: tool.name,
+                description: tool.description
+            };
+        }
+        return {
+            type: 'function',
+            name: tool.name,
+            description: tool.description,
+            parameters: tool.strict
+                ? compileCodexOutputSchema(tool.parameters, { fallbackType: 'object' })
+                : tool.parameters,
+            ...(tool.strict ? { strict: true } : {})
+        };
+    });
 }
 
 function codexNativeToolChoice(payload = {}) {
     const choice = resolveToolChoice(payload);
     if (choice.name) {
+        const selected = codexNativeToolSpecs(payload.tools).find((tool) => tool.name === choice.name);
         return {
-            type: 'function',
+            type: selected?.type === 'custom' ? 'custom' : 'function',
             name: choice.name
         };
     }
@@ -322,7 +333,7 @@ function chatMessagesToResponsesInput(messages = []) {
 function codexResponsesInputItems(items = [], nativeTools = []) {
     const nativeToolByName = new Map(
         (Array.isArray(nativeTools) ? nativeTools : [])
-            .filter((tool) => tool?.type === 'function' && normalizeText(tool.name))
+            .filter((tool) => normalizeText(tool?.name))
             .map((tool) => [tool.name, tool])
     );
     return responseItemsToWireItems(items).map((item) => {
@@ -544,7 +555,7 @@ function codexResponsesOutputText(items = []) {
 
 function codexResponsesCanonicalItems(items = []) {
     return (Array.isArray(items) ? items : [])
-        .filter((item) => ['reasoning', 'message', 'function_call'].includes(item?.type))
+        .filter((item) => ['reasoning', 'message', 'function_call', 'custom_tool_call'].includes(item?.type))
         .map((item) => JSON.parse(JSON.stringify(item)));
 }
 
@@ -1021,8 +1032,18 @@ function normalizeCodexUsage(usage = null) {
     const inputTokens = Number(usage.inputTokens ?? usage.input_tokens) || 0;
     const outputTokens = Number(usage.outputTokens ?? usage.output_tokens) || 0;
     const totalTokens = Number(usage.totalTokens ?? usage.total_tokens) || inputTokens + outputTokens;
-    const cachedTokens = Number(usage.cachedInputTokens ?? usage.cached_input_tokens) || 0;
-    const reasoningTokens = Number(usage.reasoningOutputTokens ?? usage.reasoning_output_tokens) || 0;
+    const cachedTokens = Number(
+        usage.cachedInputTokens ??
+        usage.cached_input_tokens ??
+        usage.input_tokens_details?.cached_tokens ??
+        usage.prompt_tokens_details?.cached_tokens
+    ) || 0;
+    const reasoningTokens = Number(
+        usage.reasoningOutputTokens ??
+        usage.reasoning_output_tokens ??
+        usage.output_tokens_details?.reasoning_tokens ??
+        usage.completion_tokens_details?.reasoning_tokens
+    ) || 0;
     return {
         prompt_tokens: inputTokens,
         completion_tokens: outputTokens,
@@ -1872,7 +1893,7 @@ function normalizeBridgeToolCalls(toolCalls = [], options = {}) {
         }
         return {
             id: normalizeText(call?.id, `codex_bridge_call_${index + 1}`),
-            type: 'function',
+            type: normalizeText(call?.type, 'function'),
             name: normalizeText(call?.name),
             arguments: args,
             rawArguments: JSON.stringify(args),
@@ -2031,19 +2052,22 @@ async function callCodexModelBridgeOnce(settings = {}, payload = {}, messages = 
         return processResult;
     }
     const outputItems = codexResponsesCanonicalItems(processResult.outputItems);
-    const toolCalls = normalizeBridgeToolCalls(
-        outputItems.filter((item) => item.type === 'function_call').map((item) => ({
+    const toolCalls = normalizeBridgeToolCalls(outputItems
+        .filter((item) => item.type === 'function_call' || item.type === 'custom_tool_call')
+        .map((item) => ({
             id: item.call_id || item.id,
+            type: item.type === 'custom_tool_call' ? 'custom' : 'function',
             name: item.name,
-            arguments: item.arguments
-        }))
-    );
+            arguments: item.type === 'custom_tool_call'
+                ? { input: String(item.input || '') }
+                : item.arguments
+        })));
     const content = codexResponsesOutputText(outputItems);
     if (!content && !toolCalls.length) {
         return {
             ok: false,
             code: 'empty_response',
-            error: 'Codex Responses returned no assistant message or function call.'
+            error: 'Codex Responses returned no assistant message or tool call.'
         };
     }
     return {
@@ -2094,7 +2118,43 @@ function resolveCodexBridgeMaxAttempts(settings = {}) {
         process.env.AILIS_CODEX_MODEL_BRIDGE_MAX_ATTEMPTS ??
         2
     );
-    return Math.max(1, Math.min(2, Number.isFinite(configured) ? Math.trunc(configured) : 2));
+    return Math.max(1, Math.min(3, Number.isFinite(configured) ? Math.trunc(configured) : 2));
+}
+
+function resolveCodexBridgeRetryDelayMs(settings = {}, failedAttempt = 1) {
+    const configured = Number(
+        settings.codexBridgeRetryBaseDelayMs ??
+        process.env.AILIS_CODEX_MODEL_BRIDGE_RETRY_BASE_DELAY_MS ??
+        2000
+    );
+    const baseDelayMs = Math.max(0, Math.min(10000, Number.isFinite(configured) ? Math.trunc(configured) : 2000));
+    const multiplier = Math.max(1, Math.min(3, Number.isFinite(Number(failedAttempt)) ? Math.trunc(Number(failedAttempt)) : 1));
+    return Math.min(15000, baseDelayMs * multiplier);
+}
+
+function waitForCodexBridgeRetry(settings = {}, payload = {}, failedAttempt = 1) {
+    const delayMs = resolveCodexBridgeRetryDelayMs(settings, failedAttempt);
+    if (delayMs <= 0) {
+        return Promise.resolve();
+    }
+    const signal = payload?.signal || payload?.abortSignal;
+    if (signal?.aborted) {
+        return Promise.resolve();
+    }
+    return new Promise((resolve) => {
+        let timer = null;
+        const finish = () => {
+            if (timer) {
+                clearTimeout(timer);
+                timer = null;
+            }
+            signal?.removeEventListener?.('abort', finish);
+            resolve();
+        };
+        timer = setTimeout(finish, delayMs);
+        timer.unref?.();
+        signal?.addEventListener?.('abort', finish, { once: true });
+    });
 }
 
 async function callCodexModelBridge(settings = {}, payload = {}, messages = []) {
@@ -2123,6 +2183,7 @@ async function callCodexModelBridge(settings = {}, payload = {}, messages = []) 
             break;
         }
         failureCodes.push(normalizeText(result?.code, 'unknown'));
+        await waitForCodexBridgeRetry(settings, payload, attempt);
     }
     return {
         ...(result || {
@@ -2162,6 +2223,7 @@ module.exports = {
     parseWindowsProxyServer,
     runCodexResponsesInference,
     resolveCodexBridgeMaxAttempts,
+    resolveCodexBridgeRetryDelayMs,
     resolveCodexEntrypoint,
     resolveCodexProxyUrl,
     shouldRetryCodexBridgeFailure

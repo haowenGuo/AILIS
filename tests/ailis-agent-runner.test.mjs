@@ -8,6 +8,7 @@ import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
 const { AILISGateway } = require('../electron/ailis-gateway.cjs');
+const { resolveCodexNativeInstructions } = require('../electron/codex-native-instructions.cjs');
 const {
     recordToolOutputToContextManager
 } = require('../electron/ailis-model-input-builder.cjs');
@@ -24,6 +25,8 @@ const {
         buildDirectModelImageAttachments,
         buildInvalidDecisionProgressRecord,
         buildLlmAgentDirectToolPrompt,
+        buildRunCostSummary,
+    appendUserInputToContextManager,
     buildTaskRouteDirectToolPrompt,
     buildToolExecutionGroups,
     buildResearchProgressState,
@@ -43,6 +46,93 @@ const {
     stripControlTags,
     validateNativeDirectToolCall
 } = require('../electron/ailis-agent-runner.cjs');
+
+const CODEX_NATIVE_INSTRUCTIONS = resolveCodexNativeInstructions('gpt-5.6-luna');
+
+test('run cost summary adds nested TaskAgent usage without folding child wall time into parent wall time', () => {
+    const childCost = buildRunCostSummary({
+        runId: 'child-run',
+        sessionId: 'child-session',
+        wallClockMs: 900,
+        llmCalls: [{
+            provider: 'deepseek',
+            model: 'deepseek-chat',
+            durationMs: 700,
+            usage: {
+                prompt_tokens: 100,
+                completion_tokens: 20,
+                total_tokens: 120,
+                prompt_tokens_details: { cached_tokens: 60 }
+            }
+        }],
+        stepResults: [{
+            id: 'child-tool',
+            tool: 'read',
+            response: { ok: true, status: 'completed', durationMs: 80 }
+        }]
+    });
+    const parentCost = buildRunCostSummary({
+        runId: 'parent-run',
+        sessionId: 'parent-session',
+        wallClockMs: 1100,
+        llmCalls: [{
+            provider: 'openai',
+            model: 'gpt-test',
+            durationMs: 100,
+            usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 }
+        }],
+        stepResults: [{
+            id: 'handoff',
+            tool: 'handoff_task',
+            response: {
+                ok: true,
+                status: 'completed',
+                durationMs: 950,
+                result: {
+                    structuredContent: {
+                        schema: 'ailis.task_result.v1',
+                        trace_ref: 'child-run',
+                        cost: childCost
+                    }
+                }
+            }
+        }]
+    });
+
+    assert.equal(parentCost.wall_clock_ms, 1100);
+    assert.equal(parentCost.nested.child_wall_clock_ms, 900);
+    assert.equal(parentCost.total.runs, 2);
+    assert.equal(parentCost.total.llm.calls, 2);
+    assert.equal(parentCost.total.llm.duration_ms, 800);
+    assert.equal(parentCost.total.llm.usage.promptTokens, 110);
+    assert.equal(parentCost.total.llm.usage.completionTokens, 25);
+    assert.equal(parentCost.total.llm.usage.totalTokens, 135);
+    assert.equal(parentCost.total.llm.usage.cachedTokens, 60);
+    assert.equal(parentCost.total.llm.usage.uncachedPromptTokens, 50);
+    assert.equal(parentCost.own.tools.duration_ms, 950);
+    assert.equal(parentCost.total.tools.duration_ms, 1030);
+});
+
+test('run cost summary reads DeepSeek top-level cache hit and miss telemetry', () => {
+    const cost = buildRunCostSummary({
+        runId: 'deepseek-cache-run',
+        sessionId: 'deepseek-cache-session',
+        llmCalls: [{
+            provider: 'deepseek',
+            model: 'deepseek-chat',
+            usage: {
+                prompt_tokens: 1000,
+                completion_tokens: 20,
+                total_tokens: 1020,
+                prompt_cache_hit_tokens: 800,
+                prompt_cache_miss_tokens: 200
+            }
+        }]
+    });
+
+    assert.equal(cost.total.llm.usage.cachedTokens, 800);
+    assert.equal(cost.total.llm.usage.uncachedPromptTokens, 200);
+});
 
 test('task verification transport timeout always covers the verification budget', () => {
     assert.equal(resolveDirectToolTransportTimeoutMs({ toolId: 'read' }), 0);
@@ -141,7 +231,7 @@ test('a smaller explicit Luna window keeps ratio thresholds instead of collapsin
     assert.equal(config.stopTokenLimit, 0);
 });
 
-test('TaskAgent first route uses a compact semantic context lane without the full coding prompt', () => {
+test('TaskAgent first route reuses the canonical raw conversation instead of a route-context duplicate', () => {
     const prompt = buildTaskRouteDirectToolPrompt({
         message: '不用列清单，直接告诉我：今晚该继续硬撑，还是早点休息？',
         taskState: {
@@ -166,13 +256,13 @@ test('TaskAgent first route uses a compact semantic context lane without the ful
         }]
     });
 
-    assert.equal(prompt.promptProfile.id, 'task_route_compact_v1');
     assert.deepEqual(prompt.tools.map((tool) => tool.name), ['task_route']);
-    assert.match(prompt.instructions, /emotional support, casual conversation, advice/);
-    assert.match(prompt.instructions, /not by itself task execution/);
-    assert.doesNotMatch(prompt.instructions, /## Task execution|Validating your work|coding guidelines/);
+    assert.equal(prompt.instructions, CODEX_NATIVE_INSTRUCTIONS);
+    assert.doesNotMatch(prompt.instructions, /AILIS Responses-Compatible Tool Runtime|coding agent running in AILIS/);
+    assert.doesNotMatch(JSON.stringify(prompt.input), /task_route_context|current_request|visible_history/);
     assert.match(JSON.stringify(prompt.input), /今晚该继续硬撑/);
     assert.match(JSON.stringify(prompt.input), /我今天有点累/);
+    assert.equal(JSON.stringify(prompt.input).match(/今晚该继续硬撑/g)?.length, 1);
 });
 
 test('DeepSeek first route disables thinking while preserving native model routing', () => {
@@ -318,7 +408,7 @@ test('direct model image attachments are scoped to Codex bridge image inputs', (
     }), []);
 });
 
-test('TaskAgent leaves verification strategy to the model instead of prescribing a domain verifier', () => {
+test('TaskAgent uses the native Codex prefix without AILIS strategy instructions', () => {
     const prompt = buildLlmAgentDirectToolPrompt({
         message: 'Choose the guaranteed winning move from the attached image.',
         contextMode: 'task_agent',
@@ -329,9 +419,8 @@ test('TaskAgent leaves verification strategy to the model instead of prescribing
         tools: []
     });
 
-    assert.match(prompt.instructions, /Use deterministic computation or a small script when it materially improves accuracy/i);
-    assert.match(prompt.instructions, /Choose the method yourself from the task constraints and observations/i);
-    assert.doesNotMatch(prompt.instructions, /domain rules engine, solver, simulator, or validator/i);
+    assert.equal(prompt.instructions, CODEX_NATIVE_INSTRUCTIONS);
+    assert.doesNotMatch(prompt.instructions, /AILIS Responses-Compatible Tool Runtime|domain rules engine, solver, simulator, or validator/i);
     assert.ok(prompt.messages.some((message) =>
         Array.isArray(message.content) &&
         message.content.some((part) => part.type === 'image_url')
@@ -371,6 +460,180 @@ test('full TaskAgent retains tool-layer bounded outputs in canonical context', (
     assert.doesNotMatch(JSON.stringify(next.input), /OLDER_TOOL_OBSERVATION_COMPACTED/);
 });
 
+test('persistent TaskAgent uses a Codex-style append-only Responses ledger for a concrete research task', () => {
+    const originalRequest = '帮我查 Mercedes Sosa 在 2000—2009 年发行了多少张录音室专辑';
+    const steerRequest = '速度，先确认英文 Wikipedia';
+    const runtimeEnvironment = {
+        current_date: '2026-08-26',
+        current_time: '10:00:00',
+        timezone: 'Asia/Shanghai'
+    };
+    const tools = [{
+        name: 'task_route',
+        description: 'Route the current user Turn.',
+        parameters: {
+            type: 'object',
+            required: ['mode', 'progress_note'],
+            properties: {
+                mode: { type: 'string', enum: ['chat', 'execute'] },
+                progress_note: { type: 'string' }
+            }
+        }
+    }, {
+        name: 'web_run',
+        description: 'Search or open a public web source.',
+        parameters: {
+            type: 'object',
+            properties: { query: { type: 'string' } }
+        }
+    }];
+    const first = buildLlmAgentDirectToolPrompt({
+        message: originalRequest,
+        messageHistory: [{ role: 'user', content: originalRequest }],
+        contextMode: 'task_agent',
+        runtimeEnvironment,
+        taskState: { thread_id: 'mercedes-sosa-thread' },
+        taskAgentRoutingOwned: true,
+        taskAgentRoutePending: true,
+        tools
+    });
+    const firstJson = JSON.stringify(first.input);
+    assert.equal(firstJson.match(/Mercedes Sosa/g)?.length, 1);
+    assert.match(firstJson, /runtime_environment/);
+    assert.equal(first.input.filter((item) => item?.type === 'message' && item?.role === 'user').length, 1);
+    assert.equal(
+        first.input.find((item) => JSON.stringify(item).includes('runtime_environment'))?.role,
+        'developer'
+    );
+    assert.doesNotMatch(firstJson, /task_agent_session_state|shared_session_context|current_request|visible_history/);
+    assert.doesNotMatch(first.instructions, /task_state\.current_request|session_ledger|shared_session_context/);
+
+    first.contextManager.recordItems([{
+        type: 'function_call',
+        name: 'task_route',
+        call_id: 'route-mercedes-1',
+        arguments: JSON.stringify({ mode: 'execute', progress_note: '先核对英文 Wikipedia 的录音室专辑列表。' })
+    }, {
+        type: 'function_call_output',
+        call_id: 'route-mercedes-1',
+        output: JSON.stringify({ ok: true, mode: 'execute' })
+    }]);
+    const second = buildLlmAgentDirectToolPrompt({
+        message: originalRequest,
+        contextMode: 'task_agent',
+        contextManager: first.contextManager,
+        taskState: {
+            thread_id: 'mercedes-sosa-thread',
+            current_request: 'THIS MUST STAY INTERNAL',
+            session_ledger: { visible_history: ['THIS MUST STAY INTERNAL'] }
+        },
+        taskAgentRoutingOwned: true,
+        tools
+    });
+    assert.deepEqual(second.input.slice(0, first.input.length), first.input);
+    assert.deepEqual(second.input.slice(first.input.length).map((item) => item.type), [
+        'function_call',
+        'function_call_output'
+    ]);
+    assert.doesNotMatch(JSON.stringify(second.input), /THIS MUST STAY INTERNAL/);
+
+    second.contextManager.recordItems([{
+        type: 'function_call',
+        name: 'web_run',
+        call_id: 'web-mercedes-1',
+        arguments: JSON.stringify({ query: 'site:en.wikipedia.org Mercedes Sosa discography studio albums' })
+    }, {
+        type: 'function_call_output',
+        call_id: 'web-mercedes-1',
+        output: JSON.stringify({
+            ok: true,
+            source: 'https://en.wikipedia.org/wiki/Mercedes_Sosa_discography',
+            observation: 'Studio albums include Corazón Libre (2005), Cantora 1 (2009), Cantora 2 (2009).'
+        })
+    }]);
+    const third = buildLlmAgentDirectToolPrompt({
+        message: originalRequest,
+        contextMode: 'task_agent',
+        contextManager: second.contextManager,
+        taskState: { thread_id: 'mercedes-sosa-thread' },
+        taskAgentRoutingOwned: true,
+        tools
+    });
+    assert.deepEqual(third.input.slice(0, second.input.length), second.input);
+    assert.deepEqual(third.input.slice(second.input.length).map((item) => item.type), [
+        'function_call',
+        'function_call_output'
+    ]);
+
+    assert.equal(appendUserInputToContextManager(third.contextManager, steerRequest), true);
+    const fourth = buildLlmAgentDirectToolPrompt({
+        message: steerRequest,
+        contextMode: 'task_agent',
+        contextManager: third.contextManager,
+        taskState: { thread_id: 'mercedes-sosa-thread' },
+        taskAgentRoutingOwned: true,
+        tools
+    });
+    assert.deepEqual(fourth.input.slice(0, third.input.length), third.input);
+    assert.equal(fourth.input.at(-1).role, 'user');
+    assert.match(JSON.stringify(fourth.input.at(-1)), /速度，先确认英文 Wikipedia/);
+    const fourthJson = JSON.stringify(fourth.input);
+    assert.equal(fourthJson.match(/Mercedes Sosa/g)?.length, 2);
+    assert.equal(fourthJson.match(/速度，先确认英文 Wikipedia/g)?.length, 1);
+    assert.doesNotMatch(fourthJson, /task_agent_session_state|shared_session_context|current_request|visible_history/);
+});
+
+test('a new persistent TaskAgent receives the complete visible conversation instead of the last six messages', () => {
+    const messageHistory = Array.from({ length: 12 }, (_, index) => ({
+        role: index % 2 ? 'assistant' : 'user',
+        content: `visible-session-message-${index}`
+    }));
+    const currentRequest = '现在继续执行最后这个请求';
+    messageHistory.push({ role: 'user', content: currentRequest });
+    const prompt = buildLlmAgentDirectToolPrompt({
+        message: currentRequest,
+        messageHistory,
+        contextMode: 'task_agent',
+        taskAgentInheritanceMode: 'clean',
+        taskState: { thread_id: 'full-visible-session-thread' },
+        tools: []
+    });
+    const serialized = JSON.stringify(prompt.input);
+
+    for (let index = 0; index < 12; index += 1) {
+        assert.match(serialized, new RegExp(`visible-session-message-${index}`));
+    }
+    assert.equal(serialized.match(/现在继续执行最后这个请求/g)?.length, 1);
+});
+
+test('persistent TaskAgent creates an explicit checkpoint boundary after semantic compaction', () => {
+    const initial = buildLlmAgentDirectToolPrompt({
+        message: 'Continue the long task.',
+        contextMode: 'task_agent',
+        taskState: {
+            thread_id: 'compacted-append-only-thread',
+            session_ledger: { unresolved_fields: ['final verification'] }
+        },
+        contextBudgetConfig: {
+            effectiveInputLimitTokens: 2000,
+            hardTokenLimit: 800,
+            stopTokenLimit: 1800
+        },
+        messageHistory: Array.from({ length: 12 }, (_, index) => ({
+            role: index % 2 ? 'assistant' : 'user',
+            content: `${index}:${'long context '.repeat(500)}`
+        })),
+        taskAgentInheritanceMode: 'checkpoint',
+        tools: []
+    });
+
+    assert.equal(initial.semanticCompaction?.compacted, true);
+    assert.equal(initial.taskSessionStateProjection, null);
+    assert.match(JSON.stringify(initial.input), /<ailis_session_checkpoint>/);
+    assert.doesNotMatch(JSON.stringify(initial.input), /<task_agent_session_state>/);
+    assert.equal(initial.contextManager.historyVersion(), 1);
+});
+
 test('TaskAgent preserves user-requested ordering and duplicates without a benchmark recipe', () => {
     const prompt = buildLlmAgentDirectToolPrompt({
         message: 'Extract every value from the image in source order.',
@@ -378,8 +641,8 @@ test('TaskAgent preserves user-requested ordering and duplicates without a bench
         tools: []
     });
 
-    assert.match(prompt.instructions, /Preserve user-requested labels, order, duplicates, units, formatting/i);
-    assert.doesNotMatch(prompt.instructions, /repeated items are evidence, not duplicates to remove/i);
+    assert.equal(prompt.instructions, CODEX_NATIVE_INSTRUCTIONS);
+    assert.match(JSON.stringify(prompt.input), /Extract every value from the image in source order/);
 });
 
 test('TaskAgent keeps multi-step research generic instead of prescribing selector recovery', () => {
@@ -389,10 +652,8 @@ test('TaskAgent keeps multi-step research generic instead of prescribing selecto
         tools: []
     });
 
-    assert.match(prompt.instructions, /preserve the task dependencies/i);
-    assert.match(prompt.instructions, /distinguish observed facts from intermediate assumptions/i);
-    assert.match(prompt.instructions, /concrete unresolved information rather than a benchmark-shaped task category/i);
-    assert.doesNotMatch(prompt.instructions, /complete candidate set|boundary contenders|terminal record/i);
+    assert.equal(prompt.instructions, CODEX_NATIVE_INSTRUCTIONS);
+    assert.match(JSON.stringify(prompt.input), /Which two historical birthplace cities are farthest apart/);
 });
 
 test('TaskAgent keeps tool-returned image artifacts enabled on the next model turn', () => {
@@ -577,18 +838,18 @@ test('TaskAgent schema recovery guidance and invalid-decision fuse reject identi
             }
         ]
     });
-    assert.match(prompt.instructions, /Never repeat the same rejected tool name and arguments/i);
-    assert.match(prompt.instructions, /current request, runtime state, prior observations, and your own reasoning/i);
-    assert.match(prompt.instructions, /omit irrelevant optional fields/i);
-    assert.doesNotMatch(prompt.instructions, /explicit execution-evidence contract/i);
-    assert.match(prompt.instructions, /use the supplied runtime clock and the exposed temporal capability as observations/i);
-    assert.match(prompt.instructions, /perform the required conversion or comparison/i);
+    assert.equal(prompt.instructions, CODEX_NATIVE_INSTRUCTIONS);
 });
 
-test('TaskAgent uses the runtime clock without inventing a missing current-time prerequisite', () => {
+test('TaskAgent supplies runtime clock as developer context instead of fixed instructions', () => {
     const prompt = buildLlmAgentDirectToolPrompt({
         message: 'Push my upcoming reminder to tomorrow at 5 PM.',
         contextMode: 'task_agent',
+        runtimeEnvironment: {
+            current_date: '2026-08-31',
+            current_time: '10:00:00',
+            timezone: 'Asia/Shanghai'
+        },
         tools: [
             {
                 name: 'shift_timestamp',
@@ -614,9 +875,9 @@ test('TaskAgent uses the runtime clock without inventing a missing current-time 
         ]
     });
 
-    assert.match(prompt.instructions, /use the supplied runtime clock as the time anchor/i);
-    assert.match(prompt.instructions, /use exposed temporal tools when they materially improve verification/i);
-    assert.doesNotMatch(prompt.instructions, /no current-time observation capability is available|Ask for an absolute time anchor/i);
+    assert.equal(prompt.instructions, CODEX_NATIVE_INSTRUCTIONS);
+    const runtimeItem = prompt.input.find((item) => JSON.stringify(item).includes('runtime_environment'));
+    assert.equal(runtimeItem?.role, 'developer');
 });
 
 test('native tool validation preserves type-scrambled scalar leaves', () => {
@@ -725,7 +986,7 @@ test('native tool validation leaves entity and relative-time semantics to the mo
     assert.equal(validateNativeDirectToolCall(reminderCall, reminderTools.slice(1), relativeContext).ok, true);
 });
 
-test('TaskAgent engineering delivery protocol is explicit and remains opt-in', () => {
+test('TaskAgent delivery options do not mutate the native Codex fixed prefix', () => {
     const ordinaryPrompt = buildLlmAgentDirectToolPrompt({
         message: 'Answer from the current context.',
         contextMode: 'task_agent',
@@ -749,10 +1010,8 @@ test('TaskAgent engineering delivery protocol is explicit and remains opt-in', (
         },
         tools: []
     });
-    assert.match(engineeringPrompt.instructions, /use task_verify/i);
-    assert.match(engineeringPrompt.instructions, /repair the implementation, and verify again/i);
-    assert.match(engineeringPrompt.instructions, /host-selected validation environment/i);
-    assert.match(engineeringPrompt.instructions, /\/bin\/bash/i);
+    assert.equal(ordinaryPrompt.instructions, CODEX_NATIVE_INSTRUCTIONS);
+    assert.equal(engineeringPrompt.instructions, CODEX_NATIVE_INSTRUCTIONS);
 });
 
 test('TaskAgent research progress preserves mechanical web state without deciding the answer', () => {
@@ -1062,7 +1321,8 @@ test('TaskAgent context makes the current Turn authoritative and exposes only an
     assert.match(serialized, /Finish the release audit/);
     assert.match(serialized, /Read every spreadsheet row and report the raw table/);
     assert.doesNotMatch(serialized, /original_user_goal/);
-    assert.match(serialized, /delegated_task/);
+    assert.doesNotMatch(serialized, /delegated_task/);
+    assert.doesNotMatch(serialized, /current_request/);
 
     const standaloneA6 = buildLlmAgentDirectToolPrompt({
         message: 'Read every spreadsheet row and report the raw table.',
@@ -1075,8 +1335,7 @@ test('TaskAgent context makes the current Turn authoritative and exposes only an
     const standaloneSerialized = JSON.stringify(standaloneA6.contextPackage);
     assert.match(standaloneSerialized, /Calculate total food sales excluding drinks/);
     assert.match(standaloneSerialized, /original_user_goal/);
-    assert.match(standaloneA6.instructions, /durable thread context for continuity/);
-    assert.doesNotMatch(standaloneA6.instructions, /Use task_goal/);
+    assert.equal(standaloneA6.instructions, CODEX_NATIVE_INSTRUCTIONS);
 });
 
 test('TaskAgent loads structured MCP follow-up action specs on the next turn', () => {
@@ -1204,6 +1463,9 @@ test('AILIS parent Persona prompt stays conversational while TaskAgent keeps exe
     assert.match(personaPrompt.instructions, /continues, corrects, or redirects previously executed work/);
     assert.match(personaPrompt.instructions, /TaskResult packet is the factual boundary/);
     assert.match(personaPrompt.instructions, /TaskAgent is running asynchronously/);
+    assert.match(personaPrompt.instructions, /autonomously call vision_capture_context/);
+    assert.match(personaPrompt.instructions, /does not need to explicitly ask you to look at the screen/);
+    assert.match(personaPrompt.instructions, /at most one visual observation/);
     assert.doesNotMatch(personaPrompt.instructions, /arithmetic, multi-step logic, optimization/);
     assert.doesNotMatch(personaPrompt.instructions, /spawn_agent creates|subagent_notification|task_name/);
     assert.doesNotMatch(personaPrompt.instructions, /mcp__ailis_research__web_research|For local file and data tasks|When exec output is truncated/);
@@ -1213,21 +1475,8 @@ test('AILIS parent Persona prompt stays conversational while TaskAgent keeps exe
         contextMode: 'task_agent',
         toolSummary: 'Direct tools are exposed.'
     });
-    assert.doesNotMatch(taskPrompt.instructions, /mcp__ailis_research__web_research/);
-    assert.match(taskPrompt.instructions, /current or public information/i);
-    assert.match(taskPrompt.instructions, /do not treat a particular tool name or backend as mandatory/i);
-    assert.match(taskPrompt.instructions, /switch to an independent viable method/i);
-    assert.match(taskPrompt.instructions, /read-only shell script or direct HTTP client is a valid fallback/i);
-    assert.match(taskPrompt.instructions, /acceptable to create and run a small helper script/i);
-    assert.doesNotMatch(taskPrompt.instructions, /open_page actions|most authoritative returned source URL/);
-    assert.match(taskPrompt.instructions, /mechanical transport metadata, not a decision/);
-    assert.match(taskPrompt.instructions, /missing portion could materially change the answer/i);
-    assert.doesNotMatch(taskPrompt.instructions, /complete=true|reasoning_ready=true/);
-    assert.match(taskPrompt.instructions, /deterministic computation or a small script/i);
-    assert.match(taskPrompt.instructions, /Verify claims about visual layout against a representation that actually contains layout information/i);
-    assert.doesNotMatch(taskPrompt.instructions, /candidate-set boundary|bounded numerical optimization|non-vacuous quantifier|terminal probability/i);
-    assert.doesNotMatch(taskPrompt.instructions, /stacked fraction|singular\/plural|parent candidate index/i);
-    assert.doesNotMatch(taskPrompt.instructions, /Keep ordinary conversation natural/);
+    assert.equal(taskPrompt.instructions, CODEX_NATIVE_INSTRUCTIONS);
+    assert.doesNotMatch(taskPrompt.instructions, /AILIS Responses-Compatible Tool Runtime|mcp__ailis_research__web_research/);
 
     const legacyExactFlagPrompt = buildLlmAgentDirectToolPrompt({
         message: 'What is the minimum guaranteed value?',
@@ -1410,7 +1659,7 @@ test('AILIS memory policy can isolate evaluation turns from persistent memory', 
     assert.equal(recordCalls, 0);
 });
 
-test('AILIS direct tool specs allow model-authored progress notes without passing them to tools', () => {
+test('AILIS direct tool specs do not inject Persona progress fields into ordinary tools', () => {
     const specs = buildAgentDirectToolSpecs({
         gatewayToolRuntimeRegistry: {
             modelVisibleSpecs: () => [{
@@ -1434,7 +1683,7 @@ test('AILIS direct tool specs allow model-authored progress notes without passin
     const readSpec = specs.find((spec) => spec.name === 'read');
 
     assert.ok(readSpec);
-    assert.equal(readSpec.parameters.properties.progress_note.type, 'string');
+    assert.equal(readSpec.parameters.properties.progress_note, undefined);
 
     const split = splitNativeProgressNoteArgs({
         path: 'note.txt',
@@ -1885,7 +2134,7 @@ test('AILIS Agent Runner passes parent LLM settings only to collaboration tool c
     assert.equal(calls[0].context.llmSettings, undefined);
 });
 
-test('AILIS persona exposes only system handoff while TaskAgent keeps execution tools', () => {
+test('AILIS Persona and TaskAgent share read-only vision without exposing execution tools to Persona', () => {
     const handoffSpec = {
         name: 'handoff_task',
         description: 'Hand the current request to the system TaskAgent.',
@@ -1903,6 +2152,20 @@ test('AILIS persona exposes only system handoff while TaskAgent keeps execution 
             type: 'object',
             required: ['mode'],
             properties: { mode: { type: 'string', enum: ['chat', 'execute'] } },
+            additionalProperties: false
+        }
+    };
+    const visionSpec = {
+        name: 'vision.capture_context',
+        description: 'Read one screen observation when visible context is required.',
+        parameters: {
+            type: 'object',
+            required: ['action'],
+            properties: {
+                action: { type: 'string', enum: ['capture_context'] },
+                target: { type: 'string' },
+                question: { type: 'string' }
+            },
             additionalProperties: false
         }
     };
@@ -1932,6 +2195,7 @@ test('AILIS persona exposes only system handoff while TaskAgent keeps execution 
             modelVisibleSpecs: () => [
                 handoffSpec,
                 taskRouteSpec,
+                visionSpec,
                 collaborationSpecs.spawn_agent,
                 {
                     name: 'read',
@@ -1947,6 +2211,7 @@ test('AILIS persona exposes only system handoff while TaskAgent keeps execution 
             definition: (toolId) => {
                 if (toolId === 'handoff_task') return { spec: handoffSpec };
                 if (toolId === 'task_route') return { spec: taskRouteSpec };
+                if (toolId === 'vision.capture_context') return { spec: visionSpec };
                 if (collaborationSpecs[toolId]) return { spec: collaborationSpecs[toolId] };
                 return null;
             }
@@ -1958,7 +2223,7 @@ test('AILIS persona exposes only system handoff while TaskAgent keeps execution 
             agentRole: 'persona_orchestrator'
         }
     });
-    assert.deepEqual(personaSpecs.map((spec) => spec.name), ['handoff_task']);
+    assert.deepEqual(personaSpecs.map((spec) => spec.name), ['handoff_task', 'vision_capture_context']);
     assert.deepEqual(personaSpecs[0].parameters.required, []);
     assert.equal(personaSpecs[0].parameters.additionalProperties, false);
     assert.equal(personaSpecs.some((spec) => spec.name === 'subagents'), false);
@@ -1969,15 +2234,41 @@ test('AILIS persona exposes only system handoff while TaskAgent keeps execution 
             taskAgentRoutingOwned: true
         }
     });
-    assert.deepEqual(ownedPersonaSpecs, []);
+    assert.deepEqual(ownedPersonaSpecs.map((spec) => spec.name), ['vision_capture_context']);
+
+    const personaAfterVision = buildAgentDirectToolSpecs(gateway, {
+        stepResults: [{ tool: 'vision.capture_context', response: { ok: true } }],
+        requestContext: {
+            agentRole: 'persona_orchestrator',
+            taskAgentRoutingOwned: true
+        }
+    });
+    assert.deepEqual(personaAfterVision, []);
+
+    const renderOnlyPersonaSpecs = buildAgentDirectToolSpecs(gateway, {
+        requestContext: {
+            agentRole: 'persona_orchestrator',
+            taskAgentRoutingOwned: true,
+            personaRenderOnly: true
+        }
+    });
+    assert.deepEqual(renderOnlyPersonaSpecs, []);
 
     const routeSpecs = buildAgentDirectToolSpecs(gateway, {
         requestContext: {
             agentRole: 'task_agent',
-            taskAgentRoutePending: true
+            taskAgentRoutingOwned: true,
+            taskAgentRoutePending: true,
+            taskAgentThreadId: 'task-thread-1',
+            currentUserMessage: '看看我屏幕上的按钮为什么是灰色的'
         }
     });
-    assert.deepEqual(routeSpecs.map((spec) => spec.name), ['task_route']);
+    assert.deepEqual(routeSpecs.map((spec) => spec.name), [
+        'task_route',
+        'vision_capture_context',
+        'read',
+        'exec'
+    ]);
     assert.deepEqual(resolveAgentDirectToolChoice({
         agentRuntimeRole: 'task_agent',
         requestContext: { taskAgentRoutePending: true },
@@ -1987,14 +2278,46 @@ test('AILIS persona exposes only system handoff while TaskAgent keeps execution 
 
     const taskSpecs = buildAgentDirectToolSpecs(gateway, {
         requestContext: {
-            agentRole: 'task_agent'
+            agentRole: 'task_agent',
+            currentUserMessage: '看看当前屏幕上选中了什么'
         }
     });
     assert.ok(taskSpecs.some((spec) => spec.name === 'read'));
     assert.ok(taskSpecs.some((spec) => spec.name === 'exec'));
+    assert.ok(taskSpecs.some((spec) => spec.name === 'vision_capture_context'));
     assert.equal(taskSpecs.some((spec) => spec.name === 'handoff_task'), false);
+
+    const codingTaskSpecs = buildAgentDirectToolSpecs(gateway, {
+        requestContext: {
+            agentRole: 'task_agent',
+            currentUserMessage: '修复仓库里的 Git 历史解析测试'
+        }
+    });
+    assert.equal(codingTaskSpecs.some((spec) => spec.name === 'vision_capture_context'), false);
+
+    const alreadyRoutedTaskSpecs = buildAgentDirectToolSpecs(gateway, {
+        requestContext: {
+            agentRole: 'task_agent',
+            taskAgentRoutingOwned: false,
+            taskAgentRoutePending: false,
+            taskAgentThreadId: 'already-routed-task-thread'
+        }
+    });
+    assert.equal(alreadyRoutedTaskSpecs.some((spec) => spec.name === 'task_route'), false);
     assert.equal(taskSpecs.some((spec) => spec.name === 'spawn_agent'), false);
     assert.equal(taskSpecs.some((spec) => spec.name === 'subagents'), false);
+
+    const taskAfterTerminalVisionFailure = buildAgentDirectToolSpecs(gateway, {
+        stepResults: [{
+            tool: 'vision.capture_context',
+            response: { ok: false, error: 'vision_not_configured' }
+        }],
+        requestContext: {
+            agentRole: 'task_agent',
+            currentUserMessage: '看看当前屏幕'
+        }
+    });
+    assert.equal(taskAfterTerminalVisionFailure.some((spec) => spec.name === 'vision_capture_context'), false);
 
 });
 

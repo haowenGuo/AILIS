@@ -93,6 +93,8 @@
     "eval:ailis-humanlike:validate": "node scripts/run-ailis-humanlike-eval.mjs --validate-only",
     "eval:ailis-humanlike:generate": "node scripts/generate-ailis-humanlike-scenarios.mjs",
     "eval:ailis-humanlike:report": "node scripts/analyze-ailis-humanlike-scenarios.mjs",
+    "eval:screen-understanding": "node scripts/run-ailis-screen-understanding-eval.mjs",
+    "eval:screen-understanding:smoke": "node scripts/run-ailis-screen-understanding-eval.mjs --limit 3 --concurrency 1",
     "eval:ailis-humanlike:real": "node scripts/run-ailis-humanlike-real-eval.mjs",
     "eval:ailis-humanlike:long-term:validate": "node scripts/run-ailis-humanlike-eval.mjs --scenarios evals/ailis-humanlike/long-term-companionship.scenarios.jsonl --validate-only",
     "eval:ailis-humanlike:long-term:real": "node scripts/run-ailis-humanlike-real-eval.mjs --scenarios evals/ailis-humanlike/long-term-companionship.scenarios.jsonl --output-dir eval-results/ailis-humanlike-long-term-real",

@@ -106,7 +106,8 @@ test('vision tool returns auxiliary textual observation to a DeepSeek TaskAgent'
             question: '登录按钮在哪里？'
         },
         {
-            visionPermissionPolicy: 'auto'
+            planner: 'llm-agentic-executor',
+            visionPermissionPolicy: 'manual'
         },
         {
             capture: async () => ({
@@ -145,17 +146,40 @@ test('vision tool returns auxiliary textual observation to a DeepSeek TaskAgent'
     );
 });
 
+test('vision tool respects the feature-level disabled policy without capturing', async () => {
+    let captures = 0;
+    const result = await executeVisionTool(
+        { action: 'capture_context', target: 'screen' },
+        { planner: 'llm-agentic-executor', visionPermissionPolicy: 'disabled' },
+        {
+            capture: async () => {
+                captures += 1;
+                return { dataUrl: 'data:image/png;base64,AAAA' };
+            }
+        }
+    );
+
+    assert.equal(captures, 0);
+    assert.equal(result.isError, true);
+    assert.equal(result.details.status, 'blocked');
+    assert.equal(result.details.reason, 'vision_disabled');
+});
+
 test('vision tool fails closed before a model call when DeepSeek has no auxiliary vision model', async () => {
     let calls = 0;
+    let captures = 0;
     const result = await executeVisionTool(
         { action: 'capture_context', target: 'screen' },
         { visionPermissionPolicy: 'auto' },
         {
-            capture: async () => ({
-                dataUrl: 'data:image/png;base64,AAAA',
-                width: 1,
-                height: 1
-            }),
+            capture: async () => {
+                captures += 1;
+                return {
+                    dataUrl: 'data:image/png;base64,AAAA',
+                    width: 1,
+                    height: 1
+                };
+            },
             getLlmSettings: () => deepSeekSettings,
             getVisionLlmSettings: () => null,
             callLlm: async () => {
@@ -166,6 +190,7 @@ test('vision tool fails closed before a model call when DeepSeek has no auxiliar
     );
 
     assert.equal(calls, 0);
+    assert.equal(captures, 0);
     assert.equal(result.isError, true);
     assert.equal(result.details.status, 'vision_not_configured');
     assert.match(result.content[0].text, /独立视觉模型/);

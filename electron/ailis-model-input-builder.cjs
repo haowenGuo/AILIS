@@ -185,7 +185,6 @@ function buildMemoryDeveloperMessage(memoryContext = '') {
 
 function buildContextMessage({
     fileAttachments = [],
-    modelImageAttachments = [],
     runtimeEnvironment = null,
     capabilityCatalog = null,
     externalToolExposure = null
@@ -210,23 +209,25 @@ function buildContextMessage({
         type: 'context',
         ...context
     }, '{}'));
-    for (const attachment of Array.isArray(modelImageAttachments) ? modelImageAttachments : []) {
-        const imageUrl = normalizeText(
-            attachment?.image_url ||
-            attachment?.imageUrl ||
-            attachment?.url ||
-            attachment?.path
-        );
-        if (!imageUrl) {
-            continue;
-        }
-        content.push({
-            type: 'input_image',
-            image_url: imageUrl,
-            detail: normalizeText(attachment?.detail) || 'original'
-        });
-    }
-    return ResponseItem.message({ role: 'user', content });
+    return ResponseItem.message({ role: 'developer', content });
+}
+
+function modelImageContent(modelImageAttachments = []) {
+    return (Array.isArray(modelImageAttachments) ? modelImageAttachments : [])
+        .map((attachment) => {
+            const imageUrl = normalizeText(
+                attachment?.image_url ||
+                attachment?.imageUrl ||
+                attachment?.url ||
+                attachment?.path
+            );
+            return imageUrl ? {
+                type: 'input_image',
+                image_url: imageUrl,
+                detail: normalizeText(attachment?.detail) || 'original'
+            } : null;
+        })
+        .filter(Boolean);
 }
 
 function buildModelInput({
@@ -241,6 +242,7 @@ function buildModelInput({
     capabilityCatalog = null,
     externalToolExposure = null,
     toolOutputChars = 24000,
+    messageHistoryMaxItems = 6,
     ephemeralDeveloperMessage = '',
     suppressCurrentUserMessage = false
 } = {}) {
@@ -255,6 +257,7 @@ function buildModelInput({
         capabilityCatalog,
         externalToolExposure,
         toolOutputChars,
+        messageHistoryMaxItems,
         ephemeralDeveloperMessage,
         suppressCurrentUserMessage
     });
@@ -272,6 +275,7 @@ function buildModelInputContextManager({
     capabilityCatalog = null,
     externalToolExposure = null,
     toolOutputChars = 24000,
+    messageHistoryMaxItems = 6,
     ephemeralDeveloperMessage = '',
     suppressCurrentUserMessage = false
 } = {}) {
@@ -281,10 +285,11 @@ function buildModelInputContextManager({
     if (memoryMessage) {
         history.recordItems([memoryMessage]);
     }
-    history.recordItems(conversationToResponseItems(priorMessageHistory));
+    history.recordItems(conversationToResponseItems(priorMessageHistory, {
+        maxItems: messageHistoryMaxItems
+    }));
     const contextMessage = buildContextMessage({
         fileAttachments,
-        modelImageAttachments,
         runtimeEnvironment,
         capabilityCatalog,
         externalToolExposure
@@ -293,9 +298,17 @@ function buildModelInputContextManager({
         history.recordItems([contextMessage]);
     }
     if (suppressCurrentUserMessage !== true) {
-        const userMessage = responseMessage('user', message);
-        if (userMessage) {
-            history.recordItems([userMessage]);
+        const userContent = [
+            ...textContent(message),
+            ...modelImageContent(modelImageAttachments)
+        ];
+        if (userContent.length) {
+            history.recordItems([ResponseItem.message({ role: 'user', content: userContent })]);
+        }
+    } else {
+        const imageContent = modelImageContent(modelImageAttachments);
+        if (imageContent.length) {
+            history.recordItems([ResponseItem.message({ role: 'user', content: imageContent })]);
         }
     }
     const developerMessage = responseMessage('developer', ephemeralDeveloperMessage);
@@ -312,16 +325,16 @@ function recordToolOutputToContextManager(contextManager, toolOutput = {}, index
     if (!contextManager || typeof contextManager.recordItems !== 'function') {
         return [];
     }
-    const existingFunctionCallIds = new Set(
+    const existingToolCallIds = new Set(
         (contextManager.rawItems?.() || [])
-            .filter((item) => item?.type === 'function_call')
+            .filter((item) => item?.type === 'function_call' || item?.type === 'custom_tool_call')
             .map(callIdOf)
             .filter(Boolean)
     );
     const items = toolOutputToModelInputItems(toolOutput, index, options)
         .filter((item) => (
-            item?.type !== 'function_call' ||
-            !existingFunctionCallIds.has(callIdOf(item))
+            !['function_call', 'custom_tool_call'].includes(item?.type) ||
+            !existingToolCallIds.has(callIdOf(item))
         ));
     contextManager.recordItems(items, options);
     return items;

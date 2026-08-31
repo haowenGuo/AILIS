@@ -1,4 +1,7 @@
-const { callVisionModel } = require('./ailis-vision-model-router.cjs');
+const {
+    callVisionModel,
+    resolveVisionModelRoute
+} = require('./ailis-vision-model-router.cjs');
 
 const VISION_TOOL_ID = 'vision.capture_context';
 const DEFAULT_VISION_TIMEOUT_MS = 90000;
@@ -7,12 +10,12 @@ const SUPPORTED_TARGETS = new Set(['screen', 'chat-window', 'active-window', 're
 const AILIS_VISION_TOOL_DEFINITION = Object.freeze({
     id: VISION_TOOL_ID,
     label: VISION_TOOL_ID,
-    description: 'Read-only visual perception tool. Captures a screen/window/region snapshot and returns a textual visual understanding observation.',
+    description: 'Read-only visual context tool. Call it autonomously when the current answer depends on visible screen facts missing from text; the user does not need to explicitly ask for a screenshot. Captures one screen/window/region snapshot and returns a textual visual observation.',
     sectionId: 'vision',
     route: 'ailis-local',
     materialized: true,
     status: 'available',
-    needsApprovalActions: Object.freeze(['capture_context'])
+    needsApprovalActions: Object.freeze([])
 });
 
 function normalizeString(value, fallback = '') {
@@ -47,33 +50,6 @@ function normalizeTimeoutMs(value) {
         return DEFAULT_VISION_TIMEOUT_MS;
     }
     return Math.round(Math.min(Math.max(numericValue, 10000), 120000));
-}
-
-function isFullControlContext(context = {}) {
-    const rawPermission = context.permissionProfile || context.permissions || context.policy || context.sandbox;
-    const permissionProfile = normalizeString(
-        typeof rawPermission === 'string' ? rawPermission : rawPermission?.id || rawPermission?.name
-    ).toLowerCase();
-    const approvalPolicy = normalizeString(context.approvalPolicy || context.confirmationPolicy).toLowerCase();
-    return (
-        context.computerControlEnabled === true &&
-        (
-            context.approved === true ||
-            context.autoConfirm === true ||
-            approvalPolicy === 'auto' ||
-            permissionProfile === 'danger-full-access' ||
-            permissionProfile === 'full-access'
-        )
-    );
-}
-
-function isVisionApprovedContext(context = {}, permissionPolicy = 'manual') {
-    const normalizedPolicy = normalizeString(permissionPolicy, 'manual').toLowerCase();
-    return (
-        context.visionApproved === true ||
-        normalizedPolicy === 'auto' ||
-        isFullControlContext(context)
-    );
 }
 
 function getTargetLabel(target) {
@@ -148,7 +124,7 @@ function buildVisionUnderstandingMessages({ snapshot, target, reason, question }
         {
             role: 'system',
             content: [
-                '你是 AILIS 的 VisionUnderstandingSkill，只负责根据截图做只读视觉理解。',
+                '你是 AILIS 的视觉理解模型，只负责根据截图做只读视觉理解。',
                 '你不能声称自己已经点击、输入、拖动或操作屏幕。',
                 '输出给上层 Agent 的 observation 要稳定、简洁、可复核。',
                 '必须区分：确定看到的内容、不确定或看不清的内容、给用户的下一步建议。',
@@ -178,35 +154,6 @@ function buildVisionUnderstandingMessages({ snapshot, target, reason, question }
     ];
 }
 
-function buildNeedsApprovalResult({ target, reason }) {
-    return {
-        content: [
-            {
-                type: 'text',
-                text: JSON.stringify(
-                    {
-                        status: 'needs_approval',
-                        tool: VISION_TOOL_ID,
-                        target,
-                        reason,
-                        message: '视觉截图需要用户确认。'
-                    },
-                    null,
-                    2
-                )
-            }
-        ],
-        isError: true,
-        details: {
-            status: 'needs_approval',
-            tool: VISION_TOOL_ID,
-            target,
-            reason,
-            approval: 'required'
-        }
-    };
-}
-
 async function executeVisionTool(args = {}, context = {}, services = {}) {
     const action = normalizeAction(args.action || args.operation || args.intent);
     if (action === 'schema') {
@@ -229,8 +176,22 @@ async function executeVisionTool(args = {}, context = {}, services = {}) {
     const question = normalizeString(args.question || args.prompt || args.query || reason);
     const permissionPolicy = normalizeString(
         context.visionPermissionPolicy || context.visionPolicy || services.permissionPolicy,
-        'manual'
+        'auto'
     );
+
+    if (['disabled', 'off', 'deny', 'denied'].includes(permissionPolicy.toLowerCase())) {
+        return {
+            content: [{ type: 'text', text: 'screen visual understanding is disabled.' }],
+            isError: true,
+            details: {
+                status: 'blocked',
+                tool: VISION_TOOL_ID,
+                target,
+                policy: permissionPolicy,
+                reason: 'vision_disabled'
+            }
+        };
+    }
 
     if (permissionPolicy === 'strict' && target !== 'chat-window') {
         return {
@@ -250,8 +211,33 @@ async function executeVisionTool(args = {}, context = {}, services = {}) {
         };
     }
 
-    if (context.planner === 'llm-agentic-executor' && !isVisionApprovedContext(context, permissionPolicy)) {
-        return buildNeedsApprovalResult({ target, reason });
+    const mainSettings = typeof services.getLlmSettings === 'function'
+        ? services.getLlmSettings()
+        : context.llmSettings || {};
+    const auxiliarySettings = typeof services.getVisionLlmSettings === 'function'
+        ? services.getVisionLlmSettings()
+        : context.visionLlmSettings || null;
+    const modelRoute = resolveVisionModelRoute({
+        mainSettings,
+        auxiliarySettings
+    });
+    if (!modelRoute.ok) {
+        return {
+            content: [
+                {
+                    type: 'text',
+                    text: `视觉理解失败：${modelRoute.error || modelRoute.code || 'unknown error'}`
+                }
+            ],
+            isError: true,
+            details: {
+                status: modelRoute.code || 'vision_not_configured',
+                tool: VISION_TOOL_ID,
+                target,
+                error: modelRoute.error || '',
+                routing: null
+            }
+        };
     }
 
     if (typeof services.capture !== 'function') {
@@ -285,12 +271,6 @@ async function executeVisionTool(args = {}, context = {}, services = {}) {
         };
     }
 
-    const mainSettings = typeof services.getLlmSettings === 'function'
-        ? services.getLlmSettings()
-        : context.llmSettings || {};
-    const auxiliarySettings = typeof services.getVisionLlmSettings === 'function'
-        ? services.getVisionLlmSettings()
-        : context.visionLlmSettings || null;
     const response = await callVisionModel({
         mainSettings,
         auxiliarySettings,
@@ -364,7 +344,6 @@ module.exports = {
     AILIS_VISION_TOOL_DEFINITION,
     VISION_TOOL_ID,
     executeVisionTool,
-    isVisionApprovedContext,
     normalizeTarget,
     stripSnapshotData
 };

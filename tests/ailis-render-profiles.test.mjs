@@ -333,3 +333,30 @@ test('VRM model system exposes a safe default scene mood before model load', asy
     assert.equal(mood.camera.distance, 1.1);
     assert.equal(mood.background, '#f0f8ff');
 });
+
+test('VRM model system ignores resize events when the drawable area is unchanged', async () => {
+    const { VRMModelSystem } = await import('../src/vrm-model-system.js');
+    const vrmSystem = new VRMModelSystem();
+    let projectionUpdates = 0;
+    const rendererSizes = [];
+    vrmSystem.camera = {
+        aspect: 1,
+        updateProjectionMatrix() {
+            projectionUpdates += 1;
+        }
+    };
+    vrmSystem.renderer = {
+        setSize(width, height) {
+            rendererSizes.push([width, height]);
+        }
+    };
+    vrmSystem.renderWidth = 420;
+    vrmSystem.renderHeight = 560;
+
+    vrmSystem.onWindowResize({ clientWidth: 420, clientHeight: 560 });
+    vrmSystem.onWindowResize({ clientWidth: 460, clientHeight: 560 });
+
+    assert.equal(projectionUpdates, 1);
+    assert.deepEqual(rendererSizes, [[460, 560]]);
+    assert.equal(vrmSystem.camera.aspect, 460 / 560);
+});

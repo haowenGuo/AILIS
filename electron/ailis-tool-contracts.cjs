@@ -780,6 +780,81 @@ const TOOL_CONTRACTS = Object.freeze({
             return [];
         }
     }),
+    exec_command: Object.freeze({
+        id: 'exec_command',
+        version: CONTRACT_VERSION,
+        mutates: true,
+        risk: 'high',
+        approval: 'policy',
+        experience: TOOL_EXPERIENCE.exec,
+        returns: defaultReturns(),
+        errors: defaultErrors(['exec_blocked', 'exec_failed', 'shell_access_disabled']),
+        schema: makeObjectSchema({
+            required: ['cmd'],
+            properties: {
+                cmd: stringSchema({
+                    minLength: 1,
+                    description: 'Shell command to run. The call yields promptly; when the process is still running the result includes session_id for write_stdin.'
+                }),
+                workdir: stringSchema({
+                    description: 'Working directory for the command. Defaults to the active workspace.'
+                }),
+                yield_time_ms: numberSchema({
+                    minimum: 0,
+                    maximum: 30000,
+                    description: 'Maximum time to wait for initial output before yielding a live session.'
+                }),
+                max_output_tokens: numberSchema({
+                    minimum: 1,
+                    maximum: 50000,
+                    description: 'Maximum output tokens returned by this call.'
+                }),
+                tty: booleanSchema({
+                    description: 'Allocate a PTY when the command needs terminal semantics.'
+                })
+            },
+            additionalProperties: false
+        }),
+        customValidate(args = {}) {
+            return normalizeString(args.cmd) ? [] : ['exec_command requires cmd'];
+        }
+    }),
+    write_stdin: Object.freeze({
+        id: 'write_stdin',
+        version: CONTRACT_VERSION,
+        mutates: true,
+        risk: 'high',
+        approval: 'policy',
+        experience: TOOL_EXPERIENCE.exec,
+        returns: defaultReturns(),
+        errors: defaultErrors(['session_not_found', 'process_write_failed']),
+        schema: makeObjectSchema({
+            required: ['session_id'],
+            properties: {
+                session_id: stringSchema({
+                    minLength: 1,
+                    description: 'Live session id returned by exec_command.'
+                }),
+                chars: stringSchema({
+                    description: 'Characters to write. Use an empty string to poll without sending input.'
+                }),
+                yield_time_ms: numberSchema({
+                    minimum: 0,
+                    maximum: 300000,
+                    description: 'Maximum time to wait for new output.'
+                }),
+                max_output_tokens: numberSchema({
+                    minimum: 1,
+                    maximum: 50000,
+                    description: 'Maximum output tokens returned by this call.'
+                })
+            },
+            additionalProperties: false
+        }),
+        customValidate(args = {}) {
+            return normalizeString(args.session_id) ? [] : ['write_stdin requires session_id'];
+        }
+    }),
     request_permissions: Object.freeze({
         id: 'request_permissions',
         version: CONTRACT_VERSION,
@@ -838,75 +913,31 @@ const TOOL_CONTRACTS = Object.freeze({
         risk: 'low',
         approval: 'never',
         experience: TOOL_EXPERIENCE.update_plan,
-        returns: (() => {
-            const schema = defaultReturns();
-            const progressOnlyPayload = makeObjectSchema({
-                required: ['status', 'completion_scope', 'semantic_role', 'task_advanced', 'plan'],
-                properties: {
-                    status: stringSchema({
-                        enum: ['completed'],
-                        description: 'The update_plan tool call completed. This is not task completion.'
-                    }),
-                    completion_scope: stringSchema({
-                        enum: ['progress_recorded_only'],
-                        description: 'Only the user-visible progress checklist was recorded.'
-                    }),
-                    semantic_role: stringSchema({
-                        enum: ['progress_ui_only'],
-                        description: 'This result is only for user-visible progress bookkeeping.'
-                    }),
-                    task_advanced: booleanSchema({
-                        enum: [false],
-                        description: 'update_plan does not inspect files, query data, execute commands, or otherwise advance the task.'
-                    }),
-                    execution_effect: stringSchema(),
-                    next_step_guidance: stringSchema(),
-                    explanation: stringSchema(),
-                    plan: arraySchema(makeObjectSchema({
-                        properties: {
-                            id: stringSchema(),
-                            step: stringSchema(),
-                            status: stringSchema({ enum: ['pending', 'in_progress', 'completed'] })
-                        },
-                        additionalProperties: true
-                    }))
-                },
-                additionalProperties: true
-            });
-            schema.properties.structuredContent = progressOnlyPayload;
-            schema.properties.details = progressOnlyPayload;
-            return schema;
-        })(),
+        returns: defaultReturns(),
         errors: defaultErrors(['invalid_plan']),
         schema: {
             ...makeObjectSchema({
                 required: ['plan'],
                 properties: {
-                    explanation: stringSchema({
-                        description: 'Optional user-visible progress note. This does not mean the task advanced.'
-                    }),
+                    explanation: stringSchema({ description: 'Optional concise explanation for this plan update.' }),
                     plan: arraySchema(makeObjectSchema({
                         required: ['step', 'status'],
                         properties: {
                             id: stringSchema(),
-                            step: stringSchema({
-                                minLength: 1,
-                                description: 'A user-visible checklist item. Writing it does not execute the step.'
-                            }),
+                            step: stringSchema({ minLength: 1, description: 'Checklist item.' }),
                             status: stringSchema({
-                                enum: ['pending', 'in_progress', 'completed'],
-                                description: 'Checklist display status only; it does not execute the step.'
+                                enum: ['pending', 'in_progress', 'completed']
                             })
                         },
                         additionalProperties: true
                     }), {
                         minItems: 1,
-                        description: 'Progress checklist for the user interface only. Do not call this instead of real tools.'
+                        description: 'Complete current checklist. At most one item may be in_progress.'
                     })
                 },
                 additionalProperties: true
             }),
-            description: 'Progress UI only. update_plan does not inspect files, retrieve data, execute actions, or compute answers. Use real tools for task progress.'
+            description: 'Update the user-visible task plan. This records plan state only; continue with execution tools after the call.'
         }
     }),
     tool_search: Object.freeze({
@@ -1180,7 +1211,10 @@ const TOOL_CONTRACTS = Object.freeze({
         schema: makeObjectSchema({
             required: ['mode'],
             properties: {
-                mode: stringSchema({ enum: ['chat', 'execute'] })
+                mode: stringSchema({
+                    enum: ['chat', 'execute'],
+                    description: 'Use chat when Persona can answer directly, including one read-only current-screen observation. Use execute only for sustained work beyond producing the answer.'
+                })
             },
             additionalProperties: false
         })
@@ -2509,10 +2543,10 @@ const TOOL_CONTRACTS = Object.freeze({
         version: CONTRACT_VERSION,
         mutates: false,
         risk: 'low',
-        approval: 'vision-policy',
+        approval: 'none',
         experience: TOOL_EXPERIENCE.vision_capture_context,
         returns: defaultReturns(),
-        errors: defaultErrors(['vision_permission_required', 'capture_failed', 'vision_not_configured', 'vision_model_failed']),
+        errors: defaultErrors(['vision_disabled', 'screen_permission_denied', 'capture_failed', 'vision_not_configured', 'vision_model_failed']),
         schema: actionSchema(['schema', 'capture_context'], {
             target: stringSchema({ enum: ['screen', 'chat-window', 'active-window', 'region', 'pet-window', 'control-window'] }),
             source: stringSchema(),

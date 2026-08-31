@@ -13,12 +13,13 @@ const {
 const { buildAgentDirectToolSpecs } = require('../electron/ailis-agent-runner.cjs');
 const { getToolContract, validateToolContract } = require('../electron/ailis-tool-contracts.cjs');
 
-function completedResult({ runId, answer, checkpoint, sourceUrl = '' }) {
+function completedResult({ runId, answer, checkpoint, sourceUrl = '', cost = null }) {
     return {
         ok: true,
         status: 'completed',
         runId,
         displayText: answer,
+        ...(cost ? { cost } : {}),
         steps: [{ private: 'must not enter Persona context' }],
         taskRunHandoff: {
             status: 'completed',
@@ -95,11 +96,14 @@ test('TaskAgent owns the first Turn route and both views share one immutable Tur
     assert.equal(calls.length, 1);
     assert.equal(calls[0].context.taskAgentRoutePending, true);
     assert.equal(calls[0].context.taskAgentRoutingOwned, true);
-    assert.equal(calls[0].context.sessionLedgerProjection.active_turn.request, '今天心情怎么样？');
     assert.deepEqual(
-        calls[0].context.sessionLedgerProjection.visible_history.map((entry) => entry.authority),
-        ['user_instruction', 'display_only']
+        calls[0].args.sharedSessionHistory.map(({ role, content }) => ({ role, content })),
+        [
+            { role: 'user', content: '你好' },
+            { role: 'assistant', content: '你好呀' }
+        ]
     );
+    assert.equal(calls[0].context.sessionLedgerProjection, undefined);
     const thread = harness.getThread('shared-session');
     assert.deepEqual(thread.ledger.map((entry) => entry.type), [
         'user.turn',
@@ -122,7 +126,21 @@ test('system TaskAgent handoff preserves the exact request and returns a compact
                 runId: payload.agent.childRunId,
                 answer: 'Verified answer',
                 checkpoint: { items: [{ type: 'message', role: 'assistant', content: 'private' }] },
-                sourceUrl: 'https://example.test/source'
+                sourceUrl: 'https://example.test/source',
+                cost: {
+                    schema: 'ailis.run_cost.v1',
+                    run_id: payload.agent.childRunId,
+                    total: {
+                        runs: 1,
+                        llm: {
+                            calls: 2,
+                            duration_ms: 50,
+                            usage: { totalTokens: 321 },
+                            by_model: []
+                        },
+                        tools: { calls: 1, duration_ms: 10 }
+                    }
+                }
             });
         }
     });
@@ -173,6 +191,8 @@ test('system TaskAgent handoff preserves the exact request and returns a compact
     assert.equal(Object.hasOwn(packet, 'exact_answer'), false);
     assert.equal(Object.hasOwn(packet, 'answer_candidates'), false);
     assert.equal(packet.checkpoint_available, true);
+    assert.equal(packet.cost.schema, 'ailis.run_cost.v1');
+    assert.equal(packet.cost.total.llm.usage.totalTokens, 321);
     assert.equal(Object.hasOwn(packet, 'steps'), false);
     assert.equal(Object.hasOwn(packet, 'checkpoint'), false);
     assert.equal(JSON.stringify(packet).includes('private'), false);
@@ -218,10 +238,7 @@ test('Persona handoff attaches the complete visible Session instead of only the 
         calls[0].context.sharedSessionHistory.map(({ role, content }) => ({ role, content })),
         visibleHistory
     );
-    assert.match(
-        JSON.stringify(calls[0].context.sessionLedgerProjection.visible_history),
-        /帮我查木偶攻略/
-    );
+    assert.equal(calls[0].context.sessionLedgerProjection, undefined);
 });
 
 test('TaskAgent keeps model-authored progress in the Turn ledger without hardcoded Persona messages', async () => {
@@ -910,6 +927,14 @@ test('Persona and TaskAgent receive disjoint orchestration tool surfaces', () =>
     const standaloneTaskAgent = buildAgentDirectToolSpecs(gateway, {
         requestContext: { agentRole: 'task_agent' }
     });
+    const persistentGoalTaskAgent = buildAgentDirectToolSpecs(gateway, {
+        requestContext: {
+            agentRole: 'task_agent',
+            taskAgentThreadId: 'thread-test',
+            taskAgentTurnId: 'turn-test',
+            enableTaskGoalTool: true
+        }
+    });
 
     assert.deepEqual(persona.map((spec) => spec.name), ['handoff_task']);
     const personaAfterHandoff = buildAgentDirectToolSpecs(gateway, {
@@ -917,6 +942,7 @@ test('Persona and TaskAgent receive disjoint orchestration tool surfaces', () =>
         requestContext: { agentRole: 'persona_orchestrator' }
     });
     assert.deepEqual(personaAfterHandoff, []);
-    assert.deepEqual(taskAgent.map((spec) => spec.name), ['read', 'task_goal']);
+    assert.deepEqual(taskAgent.map((spec) => spec.name), ['read']);
     assert.deepEqual(standaloneTaskAgent.map((spec) => spec.name), ['read']);
+    assert.deepEqual(persistentGoalTaskAgent.map((spec) => spec.name), ['task_goal', 'read']);
 });

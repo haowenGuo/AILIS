@@ -1,82 +1,51 @@
 # Codex Memory Checkpoint
 
-Date/time: 2026-07-29
-Workspace: `F:\AILIS_self_evolution_runtime-gaia-p1-baseline`
-Branch: `codex/p1-native-tool-transport`
-Base commit: `32de3f56e4380650e9ed107b4eadc353235f4562`
+Date/time: 2026-09-01 Asia/Shanghai
+Workspace: `F:\AILIS\main`
+Branch before submission: `codex/taskagent-cost-projection`
+Base HEAD: `08761b73c75e05f88f62be8a02569b42cb235355`
 
-## Objective
+## Current objective
 
-- Replace P1's JSON-emulated Codex tool calls with native Responses function calls.
-- Keep AILIS as the sole owner of tool execution, context, retry, evidence, approval, and finalization.
-- Preserve canonical ResponseItems and native roles.
-- Send real `parallel_tool_calls=true`.
-- Execute parallel-safe calls concurrently, unsafe calls serially, and persist every emitted call.
-- Keep finalization, audit, answer selection, and task routing unchanged.
+- Submit and deploy the latest AILIS mainline changes.
+- Re-run the same three official Terminal-Bench 2.1 tasks for a comparable regression result:
+  `cancel-async-tasks`, `fix-git`, and `write-compressor`.
+- Model and effort remain `gpt-5.6-luna` / `max`, serial execution, official verifiers.
 
-## Implemented
+## Included implementation
 
-- `electron/codex-model-bridge.cjs`
-  - Production bridge now calls the native ChatGPT Codex Responses endpoint.
-  - Sends canonical input, native function tools, tool choice, reasoning controls, encrypted reasoning inclusion, stable prompt cache key, and `parallel_tool_calls`.
-  - Parses all SSE response items and all function calls.
-  - Uses the current OAuth snapshot and Windows HTTPS proxy without writing secrets.
-  - Strips stateless ResponseItem IDs at the wire boundary, matching locked Codex source behavior.
-  - Compiles optional strict arguments as required nullable fields and removes returned null leaves before AILIS validation.
-  - Hydrates compact `tool_search_output.tools` history with current native tool specs.
-  - Projects AILIS web viewport extensions onto standard Responses web action fields.
-  - Legacy app-server/decision-schema code remains callable only by the isolated shadow A/B script; production no longer uses it.
-- `electron/desktop-llm-provider.cjs`
-  - Codex provider advertises `codex-responses-native`; JSON mode/schema are disabled.
-- `electron/ailis-agent-runner.cjs`
-  - Records provider reasoning/message/function-call ResponseItems before AILIS-owned outputs.
-  - Builds deterministic execution groups: contiguous safe calls run concurrently, unsafe calls run one at a time.
-  - Persists the complete multi-call roster and every preflight disposition before execution.
-  - Keeps all pending calls and execution groups across approval pause/resume.
-  - Uses a stable per-run prompt cache key.
-- `electron/ailis-model-input-builder.cjs`
-  - Avoids duplicating a native function call when recording its AILIS-owned output.
-- `electron/ailis-web-run-description.md`
-  - Only states that independent `search_query` variants may share a call; a single query remains valid.
-- Added deterministic shadow/reconciliation scripts and focused tests.
+- TaskAgent uses the native Codex instruction snapshot through
+  `electron/codex-native-instructions.cjs`.
+- Context history follows an append-only Codex-style model: one original user turn followed
+  by model decisions, tool calls, and tool outputs, without duplicated request wrappers.
+- Default TaskAgent tools are aligned to the real runtime surface:
+  `exec_command`, `write_stdin`, `apply_patch`, `update_plan`, and `tool_search`.
+- Optional web, vision, goal, and permission tools are exposed only when the request or
+  runtime state requires them. Legacy collaboration tools are hidden.
+- `apply_patch` uses a native free-form/custom tool call. `update_plan` is explicitly a
+  progress-board operation and returns a compact UI-only observation.
+- Screen capture can be invoked by Persona or TaskAgent and routes image pixels through a
+  configured multimodal model without automatic per-turn capture.
+- Avatar lip-sync amplitude and web presentation behavior include the current UX tuning.
 
-## Verification
+## Verification before submission
 
-- Syntax checks passed for all changed runtime and script files.
-- Integration suite passed: `214/214`, covering:
-  - native bridge request/SSE parsing
-  - provider adapters
-  - canonical ResponseItems
-  - ContextManager/ToolRouter
-  - Agent runner scheduling
-  - approval checkpoint no-tail-loss
-- Live diagnostic two-tool probe returned two standard function calls in one native response with `parallel_tool_calls=true`.
-- No AILIS tools were executed by Codex during the probe or shadow replay.
+- Focused system TaskAgent harness: 18/18 passed.
+- Full relevant regression selection: 305 tests, 300 passed, 4 skipped, 0 failed after
+  updating one stale assertion for the new on-demand `task_goal` surface.
+- Temporary `.tmp-codex-luna-desktop.*.log` files are local diagnostics and must not be
+  committed.
 
-## Transport-Only Shadow A/B
+## Latest comparable benchmark
 
-Source transcripts:
-`F:\AILIS_self_evolution_runtime\eval-results\engineering\gaia-desktop-real\p1-vs-codex-validation165-20260728`
+- Report: `longrun/jobs/ailis-codex-tools-p0p1-terminal3-luna-max-20260831-v4/final-analysis.md`
+- Result: 2/3.
+- `cancel-async-tasks`: passed.
+- `fix-git`: passed and terminated cleanly.
+- `write-compressor`: failed (2/3 verifier tests; decompressor segfault/timeout).
 
-Reconciled reports:
-- `F:\AILIS_self_evolution_runtime\eval-results\engineering\gaia-desktop-real\candidate-p1-native-transport-shadow-working-20260729\shadow-reconciled.md`
-- `F:\AILIS_self_evolution_runtime\eval-results\engineering\gaia-desktop-real\candidate-p1-native-transport-shadow-working-20260729\shadow-reconciled.json`
+## Next actions
 
-Results:
-- Diagnostic only; `excludedFromScore=true`; no tools executed.
-- Final native compatibility: `4/4`.
-- Three directly paired successful rows:
-  - legacy input tokens: `123,415`
-  - native input tokens: `49,490` (`-59.90%`)
-  - legacy latency: `109,420 ms`
-  - native latency: `53,016 ms` (`-51.55%`)
-- A fourth legacy row timed out at 120 seconds; native returned in `17,115 ms`.
-- Observed native cached tokens: `0`. The stable cache key is transported, but cache hits are not proven.
-- This replay validates transport compatibility and cost only, not task correctness.
-
-## Boundary
-
-- No full GAIA gate has been started.
-- Do not claim score improvement from shadow replay.
-- Do not merge into the accepted baseline before a fixed-commit focused correctness control and then the agreed paired regression gate.
-- Do not mix finalization, audit, answer selection, routing, or prompt-policy changes into this candidate.
+1. Build, commit, fast-forward `origin/main`, and deploy the web build.
+2. Launch a fresh three-task job from the committed source using the same immutable task set.
+3. Compare score, termination, model calls, prompt/cache telemetry, and failure cause with v4.
