@@ -2,7 +2,8 @@ const fs = require('fs');
 const path = require('path');
 const { createHash, randomUUID } = require('crypto');
 const {
-    callDesktopLlmProvider
+    callDesktopLlmProvider,
+    compactDesktopLlmProvider
 } = require('../desktop-llm-provider.cjs');
 const { VISION_TOOL_ID } = require('../ailis-vision-tool.cjs');
 const {
@@ -80,6 +81,10 @@ const {
 const {
     resolveCodexNativeInstructions
 } = require('../codex-native-instructions.cjs');
+const {
+    createExecToolSpec,
+    createExecWaitToolSpec
+} = require('../codex-code-mode-protocol.cjs');
 const {
     AILISContextCompiler
 } = require('../ailis-context-compiler.cjs');
@@ -5704,14 +5709,27 @@ function normalizeNativeToolSpec(spec = {}) {
         };
         ensureNativeSchemaRequired(repairedParameters, [DIRECT_TOOL_PROGRESS_NOTE_FIELD]);
     }
+    const customTool = spec.type === 'custom' || source.type === 'custom';
     return {
-        type: 'function',
+        type: customTool ? 'custom' : 'function',
         name,
-        description: truncateMiddleText(
-            normalizeText(source.description || spec.description || name),
-            codexWebRun ? 7000 : 900
-        ),
+        description: customTool
+            ? normalizeText(source.description || spec.description || name)
+            : truncateMiddleText(
+                  normalizeText(source.description || spec.description || name),
+                  codexWebRun ? 7000 : 900
+              ),
         parameters: repairedParameters,
+        ...(customTool && (source.format || spec.format) ? { format: cloneJson(source.format || spec.format) } : {}),
+        ...(normalizeText(source.x_ailis_code_mode_profile || spec.x_ailis_code_mode_profile)
+            ? { x_ailis_code_mode_profile: normalizeText(source.x_ailis_code_mode_profile || spec.x_ailis_code_mode_profile) }
+            : {}),
+        ...(normalizeText(source.x_ailis_dispatch_tool || spec.x_ailis_dispatch_tool)
+            ? { x_ailis_dispatch_tool: normalizeText(source.x_ailis_dispatch_tool || spec.x_ailis_dispatch_tool) }
+            : {}),
+        ...(source.output_schema || spec.output_schema
+            ? { output_schema: cloneJson(source.output_schema || spec.output_schema) }
+            : {}),
         ...(source.strict === true || spec.strict === true ? { strict: true } : {})
     };
 }
@@ -6241,22 +6259,9 @@ function collectTemporarilySuppressedCoreDirectTools(stepResults = [], requestCo
     if (terminalVisionFailure) {
         suppressed.add(VISION_TOOL_ID);
     }
-    if (requestContext.allowRepeatedUpdatePlanDirectTool === true) {
-        // Keep compatibility for debugging sessions that intentionally exercise planning.
-    } else if (countTrailingDirectToolCalls(steps, 'update_plan') >= 2) {
-        suppressed.add('update_plan');
-    }
-    if (requestContext.allowRepeatedToolSearchDirectTool !== true) {
-        const lastNonPlanStep = [...steps].reverse()
-            .find((stepResult) => canonicalDirectToolId(stepResult?.tool) !== 'update_plan');
-        if (
-            canonicalDirectToolId(lastNonPlanStep?.tool) === 'tool_search' &&
-            lastNonPlanStep?.response?.ok === true &&
-            extractSearchToolsFromStepResult(lastNonPlanStep).length > 0
-        ) {
-            suppressed.add('tool_search');
-        }
-    }
+    // Keep the Codex-style tool prefix stable across model turns. Repetition is
+    // constrained by the loop guard, not by deleting update_plan/tool_search from
+    // the next request and invalidating the prompt-cache prefix.
     return suppressed;
 }
 
@@ -6393,7 +6398,7 @@ function buildAgentDirectToolSpecs(
     const suppressedCoreTools = collectTemporarilySuppressedCoreDirectTools(stepResults, requestContext);
     const rawVisionSpec = gateway?.gatewayToolRuntimeRegistry?.definition?.(VISION_TOOL_ID)?.spec;
     const visionSpec = rawVisionSpec
-        ? { ...rawVisionSpec, name: VISION_NATIVE_TOOL_NAME }
+        ? { ...rawVisionSpec, name: VISION_NATIVE_TOOL_NAME, x_ailis_dispatch_tool: VISION_TOOL_ID }
         : null;
     if (taskAgentWantsVisionTool(requestContext) && !suppressedCoreTools.has(VISION_TOOL_ID)) {
         pushUniqueNativeToolSpec(specs, seen, visionSpec);
@@ -6450,8 +6455,28 @@ function buildAgentDirectToolSpecs(
     const limit = Number.isFinite(requestedLimit) && requestedLimit > 0
         ? Math.max(1, Math.min(Math.floor(requestedLimit), 40))
         : 16;
-    const toolRouter = buildToolRouterFromModelVisibleSpecs(specs, { limit });
-    return toolRouter.modelVisibleSpecs();
+    const directSpecialToolIds = new Set([
+        'tool_search',
+        TASK_ROUTE_TOOL_NAME,
+        TASK_VERIFY_TOOL_ID,
+        'request_permissions'
+    ]);
+    const directSpecialSpecs = specs.filter((spec) =>
+        directSpecialToolIds.has(canonicalDirectToolId(spec.name || spec.function?.name))
+    );
+    const nestedToolSpecs = specs.filter((spec) => {
+        const toolId = canonicalDirectToolId(spec.name || spec.function?.name);
+        return toolId &&
+            !directSpecialToolIds.has(toolId) &&
+            !['exec', 'exec_wait'].includes(toolId);
+    });
+    const nestedToolRouter = buildToolRouterFromModelVisibleSpecs(nestedToolSpecs, { limit });
+    const directSpecialRouter = buildToolRouterFromModelVisibleSpecs(directSpecialSpecs);
+    return [
+        createExecToolSpec(nestedToolRouter.modelVisibleSpecs()),
+        createExecWaitToolSpec(),
+        ...directSpecialRouter.modelVisibleSpecs()
+    ];
 }
 
 function firstPromptObject(...values) {
@@ -7183,10 +7208,14 @@ function buildLlmAgentDirectToolPrompt({
     deliveryPolicy = {},
     verificationEnvironment = null,
     ephemeralDeveloperMessage = '',
-    suppressCurrentUserMessage = false
+    suppressCurrentUserMessage = false,
+    deferSemanticCompaction = false
 }) {
     const activePromptProfile = promptProfile || resolveAgentPromptProfile();
     const taskAgentMode = normalizeText(contextMode).toLowerCase() === 'task_agent';
+    const persistentPersonaSession = !taskAgentMode && Boolean(
+        contextManager && typeof contextManager.forPrompt === 'function'
+    );
     const persistentTaskAgentSession = taskAgentMode && Boolean(
         normalizeText(taskState?.thread_id || taskState?.threadId)
     );
@@ -7260,11 +7289,11 @@ function buildLlmAgentDirectToolPrompt({
             capabilityCatalog,
             externalToolExposure: null,
             toolOutputChars,
-            messageHistoryMaxItems: persistentTaskAgentSession ? 240 : 6,
+            messageHistoryMaxItems: persistentTaskAgentSession || !taskAgentMode ? 240 : 6,
             ephemeralDeveloperMessage: '',
             suppressCurrentUserMessage
     });
-    const runtimeEnvironmentProjection = persistentTaskAgentSession
+    const runtimeEnvironmentProjection = persistentTaskAgentSession || persistentPersonaSession
         ? appendRuntimeEnvironmentUpdate(activeContextManager, runtimeEnvironment)
         : null;
     recordModelImageAttachmentsToContextManager(
@@ -7305,7 +7334,7 @@ function buildLlmAgentDirectToolPrompt({
     };
     let contextPackage = activeContextManager.forPromptPackage(contextPackageOptions);
     let semanticCompaction = null;
-    if (['hard', 'stop'].includes(contextPackage.budgetReport.level)) {
+    if (!deferSemanticCompaction && ['hard', 'stop'].includes(contextPackage.budgetReport.level)) {
         semanticCompaction = activeContextManager.semanticCompact(contextPackageOptions);
         contextPackage = semanticCompaction.packageAfter;
     }
@@ -7402,13 +7431,15 @@ function appendUserInputToContextManager(contextManager, text = '') {
     if (!contextManager || !normalized || typeof contextManager.recordItems !== 'function') {
         return false;
     }
-    const latestUserText = [...(contextManager.rawItems?.() || [])]
+    const latestConversationItem = [...(contextManager.rawItems?.() || [])]
         .reverse()
-        .find((item) => item?.type === 'message' && item?.role === 'user')
-        ?.content
+        .find((item) => item?.type === 'message' && ['user', 'assistant'].includes(item?.role));
+    const latestUserText = latestConversationItem?.role === 'user'
+        ? latestConversationItem.content
         ?.map((part) => normalizeText(part?.text || part?.content))
         .filter(Boolean)
-        .join('\n') || '';
+        .join('\n') || ''
+        : '';
     if (normalizeText(latestUserText) === normalized) {
         return false;
     }
@@ -7772,6 +7803,13 @@ async function callLlmAgentDirectToolDecision(settings, payload, {
         const toolCalls = [{
             ...toolCall,
             nativeToolCall: routedNativeToolCall,
+            ...(normalizeText(findNativeToolSpec(routedToolCall.toolName, payload.tools)?.x_ailis_code_mode_profile)
+                ? {
+                      codeModeProfileId: normalizeText(
+                          findNativeToolSpec(routedToolCall.toolName, payload.tools)?.x_ailis_code_mode_profile
+                      )
+                  }
+                : {}),
             ...(providerMetadata ? { providerMetadata } : {})
         }];
         for (let index = 1; index < directToolCalls.length; index += 1) {
@@ -7841,6 +7879,13 @@ async function callLlmAgentDirectToolDecision(settings, payload, {
             toolCalls.push({
                 ...nextToolCall,
                 nativeToolCall: nextRoutedNativeToolCall,
+                ...(normalizeText(findNativeToolSpec(nextRoutedToolCall.toolName, payload.tools)?.x_ailis_code_mode_profile)
+                    ? {
+                          codeModeProfileId: normalizeText(
+                              findNativeToolSpec(nextRoutedToolCall.toolName, payload.tools)?.x_ailis_code_mode_profile
+                          )
+                      }
+                    : {}),
                 ...(providerMetadata ? { providerMetadata } : {})
             });
         }
@@ -8900,12 +8945,15 @@ class AILISAgentRunner {
             }
             : request;
         const effectiveToolCallTimeoutMs = Number(effectiveRequest?.timeoutMs || 0);
+        const codeModeToolContext = normalizeText(step.codeModeProfileId)
+            ? { ...effectiveToolContext, codeModeProfileId: normalizeText(step.codeModeProfileId) }
+            : effectiveToolContext;
         const finalToolContext = isCollaborationTool(step) && effectiveToolCallTimeoutMs > 0
             ? {
-                ...effectiveToolContext,
-                timeoutMs: Math.max(Number(effectiveToolContext?.timeoutMs || 0), effectiveToolCallTimeoutMs)
+                ...codeModeToolContext,
+                timeoutMs: Math.max(Number(codeModeToolContext?.timeoutMs || 0), effectiveToolCallTimeoutMs)
             }
-            : effectiveToolContext;
+            : codeModeToolContext;
         return await executeToolStep({
             gateway: this.gateway,
             runId,
@@ -9387,6 +9435,7 @@ class AILISAgentRunner {
         let repeatedDeliveryGateFinals = 0;
         let previousModelInputFingerprint = null;
         let promptCacheEpoch = 0;
+        let initialModelInputCheckpointPublished = false;
         const completedSubagentNotifications = [];
         const invalidDecisionHistory = [];
         const legacyAgentMailboxEnabled = requestContext.enableLegacyAgentMailbox === true;
@@ -9649,14 +9698,130 @@ class AILISAgentRunner {
                 directToolSpecs,
                 stepResults
             });
-            const directModelInputPrompt = buildLlmAgentDirectToolPrompt({
+            const promptCacheKey = buildAgentPromptCacheKey(runId, sessionId);
+            let directModelInputPrompt = buildLlmAgentDirectToolPrompt({
                 ...commonPromptArgs,
                 unrestrictedToolExecution:
                     requestContext.taskAgentPermissionMode === 'unrestricted',
-                parallelToolCalls
+                parallelToolCalls,
+                deferSemanticCompaction: true
             });
+            const pendingCompactionLevel = normalizeText(
+                directModelInputPrompt.contextPackage?.budgetReport?.level
+            ).toLowerCase();
+            if (
+                ['task_agent', 'persona'].includes(agentContextMode) &&
+                ['hard', 'stop'].includes(pendingCompactionLevel)
+            ) {
+                const packageBefore = directModelInputPrompt.contextPackage;
+                const compactionStartedAt = Date.now();
+                const providerCompaction = await compactDesktopLlmProvider(decisionSettings, {
+                    instructions: directModelInputPrompt.instructions,
+                    input: directModelInputPrompt.input,
+                    tools: directModelInputPrompt.tools || directToolSpecs,
+                    parallel_tool_calls: parallelToolCalls,
+                    reasoning_effort: decisionSettings.reasoningEffort,
+                    prompt_cache_key: promptCacheKey,
+                    compaction_mode: normalizeText(
+                        request.contextCompactionMode ||
+                            request.context_compaction_mode ||
+                            requestContext.contextCompactionMode ||
+                            requestContext.context_compaction_mode,
+                        'portable'
+                    ),
+                    timeoutMs: decisionTimeoutMs,
+                    abortSignal
+                });
+                if (providerCompaction?.ok === true || providerCompaction?.usage) {
+                    ownLlmCostCalls.push({
+                        provider: providerCompaction.provider || decisionSettings.provider || '',
+                        model: providerCompaction.model || decisionSettings.model || '',
+                        durationMs: Date.now() - compactionStartedAt,
+                        usage: summarizeLlmUsage(providerCompaction.usage) || {},
+                        phase: 'context_compaction',
+                        status: providerCompaction?.ok === true
+                            ? 'completed'
+                            : (providerCompaction?.code || 'failed')
+                    });
+                }
+                if (
+                    providerCompaction?.ok === true &&
+                    Array.isArray(providerCompaction.outputItems) &&
+                    providerCompaction.outputItems.length
+                ) {
+                    const referenceContextItem = modelInputContextManager?.referenceContextItem?.() || null;
+                    modelInputContextManager.replaceCompactedHistory(
+                        { replacement_history: providerCompaction.outputItems },
+                        referenceContextItem
+                    );
+                    directModelInputPrompt = buildLlmAgentDirectToolPrompt({
+                        ...commonPromptArgs,
+                        contextManager: modelInputContextManager,
+                        modelImageAttachments: [],
+                        unrestrictedToolExecution:
+                            requestContext.taskAgentPermissionMode === 'unrestricted',
+                        parallelToolCalls,
+                        deferSemanticCompaction: true
+                    });
+                    const portableSemanticMemory =
+                        providerCompaction.providerMessage?.transport === 'portable_semantic_summary';
+                    directModelInputPrompt.semanticCompaction = {
+                        compacted: true,
+                        mode: portableSemanticMemory
+                            ? 'portable_semantic_summary'
+                            : 'provider_native_compaction',
+                        reason: pendingCompactionLevel,
+                        historyVersion: modelInputContextManager.historyVersion(),
+                        packageBefore,
+                        packageAfter: directModelInputPrompt.contextPackage,
+                        checkpoint: {
+                            schema: portableSemanticMemory
+                                ? 'ailis.semantic_task_memory.v1'
+                                : 'ailis.provider_compaction_checkpoint.v1',
+                            provider: providerCompaction.provider || decisionSettings.provider || '',
+                            model: providerCompaction.model || decisionSettings.model || '',
+                            responseId: providerCompaction.responseId || '',
+                            outputItemCount: providerCompaction.outputItems.length,
+                            sourceInputItemCount: Number(providerCompaction.sourceInputItemCount) || null,
+                            retainedInputItemCount: Number(providerCompaction.retainedInputItemCount) || null,
+                            summaryChars: normalizeText(providerCompaction.summary).length || null,
+                            opaque: !portableSemanticMemory
+                        }
+                    };
+                } else {
+                    directModelInputPrompt = buildLlmAgentDirectToolPrompt({
+                        ...commonPromptArgs,
+                        unrestrictedToolExecution:
+                            requestContext.taskAgentPermissionMode === 'unrestricted',
+                        parallelToolCalls
+                    });
+                    if (directModelInputPrompt.semanticCompaction?.compacted) {
+                        directModelInputPrompt.semanticCompaction = {
+                            ...directModelInputPrompt.semanticCompaction,
+                            mode: 'local_rule_fallback',
+                            providerFailure: {
+                                code: providerCompaction?.code || 'provider_compaction_failed',
+                                error: providerCompaction?.error || ''
+                            }
+                        };
+                    }
+                }
+            }
             runtimeEnvironmentNeedsRecording = false;
             modelInputContextManager = directModelInputPrompt.contextManager || modelInputContextManager;
+            if (
+                !initialModelInputCheckpointPublished &&
+                modelInputContextManager &&
+                typeof request.onModelInputContextCheckpoint === 'function'
+            ) {
+                initialModelInputCheckpointPublished = true;
+                try {
+                    await request.onModelInputContextCheckpoint(
+                        modelInputContextManager.toCheckpoint(),
+                        { runId, sessionId, iteration, phase: 'before_first_model_decision' }
+                    );
+                } catch {}
+            }
             const modelInputFingerprint = buildModelInputFingerprint({
                 instructions: directModelInputPrompt.instructions,
                 input: directModelInputPrompt.input,
@@ -9686,15 +9851,16 @@ class AILISAgentRunner {
                     payload: {
                         iteration,
                         reason: directModelInputPrompt.semanticCompaction.reason,
+                        mode: directModelInputPrompt.semanticCompaction.mode || 'local_rule',
                         historyVersion: directModelInputPrompt.semanticCompaction.historyVersion,
                         before: directModelInputPrompt.semanticCompaction.packageBefore?.budgetReport || null,
                         after: directModelInputPrompt.semanticCompaction.packageAfter?.budgetReport || null,
-                        checkpoint: directModelInputPrompt.semanticCompaction.checkpoint || null
+                        checkpoint: directModelInputPrompt.semanticCompaction.checkpoint || null,
+                        providerFailure: directModelInputPrompt.semanticCompaction.providerFailure || null
                     }
                 });
             }
             const decisionMessages = directModelInputPrompt.messages;
-            const promptCacheKey = buildAgentPromptCacheKey(runId, sessionId);
             const promptBudget = buildPromptBudgetReport({
                 instructions: directModelInputPrompt.instructions,
                 input: directModelInputPrompt.input,

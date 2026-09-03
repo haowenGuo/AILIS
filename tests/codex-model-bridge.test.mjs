@@ -11,11 +11,14 @@ const {
     buildCodexBridgeDecisionSchema,
     buildCodexBridgePrompt,
     buildCodexBridgeTurnInput,
+    buildCodexCompactionRequest,
+    buildCodexV2CompactionRequest,
     buildCodexResponsesRequest,
     buildProcessTreeTerminationPlan,
     codexNativeToolSpecs,
     codexResponsesInputItems,
     codexResponsesCanonicalItems,
+    clearCodexTurnState,
     normalizeBridgeToolCalls,
     normalizeCodexUsage,
     parseCodexAppServerNotifications,
@@ -23,11 +26,13 @@ const {
     parseCodexResponsesSse,
     parseWindowsProxyServer,
     runCodexResponsesInference,
+    retainedCodexV2CompactionMessages,
     resolveCodexBridgeMaxAttempts,
     resolveCodexBridgeRetryDelayMs,
     resolveCodexEntrypoint,
     shouldRetryCodexBridgeFailure
 } = require('../electron/codex-model-bridge.cjs');
+const { CODE_MODE_FREEFORM_GRAMMAR } = require('../electron/codex-code-mode-protocol.cjs');
 const {
     getDefaultProviderBaseUrl,
     getDefaultProviderModel,
@@ -199,6 +204,10 @@ describe('Codex model bridge', () => {
         assert.equal(request.store, false);
         assert.deepEqual(request.include, ['reasoning.encrypted_content']);
         assert.match(request.prompt_cache_key, /^ailis-[a-f0-9]{48}$/);
+        assert.match(request.client_metadata['x-codex-installation-id'], /^[a-f0-9-]{36}$/);
+        assert.match(request.client_metadata['x-codex-window-id'], /^[a-f0-9-]{36}$/);
+        assert.match(request.client_metadata.session_id, /^[a-f0-9-]{36}$/);
+        assert.equal(request.client_metadata.thread_id, request.client_metadata.session_id);
         assert.equal(Object.hasOwn(request, 'text'), false);
         assert.equal(Object.hasOwn(request, 'output_schema'), false);
     });
@@ -238,6 +247,245 @@ describe('Codex model bridge', () => {
         });
         assert.equal(request.tools[0].type, 'custom');
         assert.equal(Object.hasOwn(request.tools[0], 'parameters'), false);
+    });
+
+    it('builds a native Codex compaction request without inference-only fields', () => {
+        const request = buildCodexCompactionRequest({ model: 'gpt-5.6-luna' }, {
+            instructions: 'stable instructions',
+            prompt_cache_key: 'ailis-compact-chain',
+            input: [
+                {
+                    type: 'message',
+                    role: 'user',
+                    content: [{ type: 'input_text', text: 'Continue the task.' }]
+                },
+                {
+                    type: 'compaction',
+                    encrypted_content: 'opaque-prior-memory'
+                }
+            ]
+        });
+
+        assert.equal(request.model, 'gpt-5.6-luna');
+        assert.equal(request.instructions, 'stable instructions');
+        assert.equal(request.prompt_cache_key, 'ailis-compact-chain');
+        assert.equal(request.input[1].type, 'compaction');
+        assert.equal(request.input[1].encrypted_content, 'opaque-prior-memory');
+        assert.deepEqual(request.tools, []);
+        assert.equal(request.parallel_tool_calls, true);
+        assert.deepEqual(request.reasoning, { effort: 'medium', summary: 'auto' });
+        assert.equal(Object.hasOwn(request, 'stream'), false);
+        assert.equal(Object.hasOwn(request, 'store'), false);
+        assert.equal(Object.hasOwn(request, 'client_metadata'), false);
+    });
+
+    it('builds current Codex compaction as an ordinary Responses turn with one trigger', () => {
+        const request = buildCodexV2CompactionRequest({ model: 'gpt-5.6-luna' }, {
+            instructions: 'stable instructions',
+            prompt_cache_key: 'ailis-compact-v2-chain',
+            input: [{
+                type: 'message',
+                role: 'user',
+                content: [{ type: 'input_text', text: 'Continue.' }]
+            }],
+            tools: visibleTools
+        });
+
+        assert.equal(request.input.at(-1).type, 'compaction_trigger');
+        assert.equal(request.stream, true);
+        assert.equal(request.store, false);
+        assert.equal(request.tools.length, 2);
+    });
+
+    it('retains user/developer instructions and replaces execution history with opaque memory', () => {
+        const retained = retainedCodexV2CompactionMessages([
+            { type: 'message', role: 'developer', content: [{ type: 'input_text', text: 'constraint' }] },
+            { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'goal' }] },
+            { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'old reasoning' }] },
+            { type: 'function_call', call_id: 'call_1', name: 'exec', arguments: '{}' }
+        ]);
+
+        assert.deepEqual(retained.map((item) => item.role), ['developer', 'user']);
+        assert.doesNotMatch(JSON.stringify(retained), /old reasoning|call_1/);
+    });
+
+    it('keeps Codex client metadata stable for one cache chain and isolates another chain', () => {
+        const base = {
+            instructions: 'stable instructions',
+            input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'one' }] }],
+            tools: visibleTools,
+            prompt_cache_key: 'ailis-run-one'
+        };
+        const first = buildCodexResponsesRequest({ codexHome: 'D:/codex-home' }, base);
+        const second = buildCodexResponsesRequest({ codexHome: 'D:/codex-home' }, {
+            ...base,
+            input: [...base.input, { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'two' }] }]
+        });
+        const other = buildCodexResponsesRequest({ codexHome: 'D:/codex-home' }, {
+            ...base,
+            prompt_cache_key: 'ailis-run-two'
+        });
+        assert.deepEqual(first.client_metadata, second.client_metadata);
+        assert.equal(
+            first.client_metadata['x-codex-installation-id'],
+            other.client_metadata['x-codex-installation-id']
+        );
+        assert.notEqual(
+            first.client_metadata['x-codex-window-id'],
+            other.client_metadata['x-codex-window-id']
+        );
+        assert.equal(first.client_metadata.session_id, second.client_metadata.session_id);
+        assert.equal(first.client_metadata.thread_id, first.client_metadata.session_id);
+        assert.notEqual(first.client_metadata.session_id, other.client_metadata.session_id);
+    });
+
+    it('replays x-codex-turn-state on the next HTTP request in the same prompt cache chain', async () => {
+        const promptCacheKey = 'ailis-turn-state-test';
+        clearCodexTurnState(promptCacheKey);
+        const requestHeaders = [];
+        let responseIndex = 0;
+        const requestImpl = (options, callback) => {
+            requestHeaders.push(options.headers);
+            const request = new EventEmitter();
+            request.setTimeout = () => {};
+            request.destroy = (error) => request.emit('error', error);
+            request.end = () => {
+                responseIndex += 1;
+                const response = new EventEmitter();
+                response.statusCode = 200;
+                response.headers = { 'x-codex-turn-state': `sticky-${responseIndex}` };
+                response.setEncoding = () => {};
+                callback(response);
+                queueMicrotask(() => {
+                    response.emit('data', `data: ${JSON.stringify({
+                        type: 'response.completed',
+                        response: { id: `response-${responseIndex}`, output: [], usage: {} }
+                    })}\n\n`);
+                    response.emit('end');
+                });
+            };
+            return request;
+        };
+        const options = {
+            timeoutMs: 1000,
+            createAgent: async () => ({ agent: { destroy: () => {} }, proxy: '' }),
+            requestImpl
+        };
+        const body = buildCodexResponsesRequest({ model: 'gpt-5.6-luna' }, {
+            instructions: 'stable',
+            input: [],
+            tools: [],
+            prompt_cache_key: promptCacheKey
+        });
+        const first = await runCodexResponsesInference({}, { accessToken: 't', accountId: 'a' }, body, options);
+        const second = await runCodexResponsesInference({}, { accessToken: 't', accountId: 'a' }, body, options);
+        assert.equal(first.ok, true);
+        assert.equal(second.ok, true);
+        assert.equal(first.turnStateReused, false);
+        assert.equal(first.turnStateReceived, true);
+        assert.equal(second.turnStateReused, true);
+        assert.equal(requestHeaders[0]['session-id'], body.client_metadata.session_id);
+        assert.equal(requestHeaders[0]['thread-id'], body.client_metadata.thread_id);
+        assert.equal(requestHeaders[1]['session-id'], requestHeaders[0]['session-id']);
+        assert.equal(requestHeaders[1]['thread-id'], requestHeaders[0]['thread-id']);
+        assert.equal(requestHeaders[0]['x-codex-turn-state'], undefined);
+        assert.equal(requestHeaders[1]['x-codex-turn-state'], 'sticky-1');
+        clearCodexTurnState(promptCacheKey);
+    });
+
+    it('writes opt-in protocol diagnostics without changing the outbound request', async () => {
+        const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-codex-protocol-audit-'));
+        const auditPath = path.join(tempDir, 'audit.jsonl');
+        const sentBodies = [];
+        const requestImpl = (_options, callback) => {
+            const request = new EventEmitter();
+            request.setTimeout = () => {};
+            request.destroy = (error) => request.emit('error', error);
+            request.end = (body) => {
+                sentBodies.push(body);
+                const response = new EventEmitter();
+                response.statusCode = 200;
+                response.headers = {};
+                response.setEncoding = () => {};
+                callback(response);
+                queueMicrotask(() => {
+                    response.emit('data', `data: ${JSON.stringify({
+                        type: 'response.completed',
+                        response: {
+                            id: 'response-audit',
+                            output: [],
+                            usage: {
+                                input_tokens: 100,
+                                input_tokens_details: { cached_tokens: 64 },
+                                output_tokens: 2
+                            }
+                        }
+                    })}\n\n`);
+                    response.emit('end');
+                });
+            };
+            return request;
+        };
+        const body = {
+            model: 'gpt-5.6-luna',
+            instructions: 'stable',
+            input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'hello' }] }],
+            tools: [],
+            prompt_cache_key: 'audit-test'
+        };
+        try {
+            const result = await runCodexResponsesInference({}, { accessToken: 'secret', accountId: 'account' }, body, {
+                timeoutMs: 1000,
+                createAgent: async () => ({ agent: { destroy: () => {} }, proxy: '' }),
+                requestImpl,
+                protocolAuditPath: auditPath,
+                protocolAuditMode: 'full'
+            });
+            assert.equal(result.ok, true);
+            assert.deepEqual(JSON.parse(sentBodies[0]), body);
+            const records = (await fs.readFile(auditPath, 'utf8')).trim().split(/\r?\n/).map(JSON.parse);
+            assert.equal(records.length, 2);
+            assert.equal(records[0].event, 'request');
+            assert.deepEqual(records[0].requestBody, body);
+            assert.equal(JSON.stringify(records).includes('secret'), false);
+            assert.equal(records[1].event, 'response');
+            assert.equal(records[1].usage.input_tokens_details.cached_tokens, 64);
+        } finally {
+            await fs.rm(tempDir, { recursive: true, force: true });
+        }
+    });
+
+    it('preserves the Codex exec custom-tool grammar on the Responses wire', () => {
+        const request = buildCodexResponsesRequest({ model: 'gpt-5.6-luna' }, {
+            instructions: 'native Codex instructions',
+            input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'inspect it' }] }],
+            tools: [{
+                type: 'custom',
+                name: 'exec',
+                description: 'Run JavaScript code to orchestrate/compose tool calls',
+                format: {
+                    type: 'grammar',
+                    syntax: 'lark',
+                    definition: CODE_MODE_FREEFORM_GRAMMAR
+                },
+                parameters: {
+                    type: 'object',
+                    required: ['input'],
+                    properties: { input: { type: 'string' } },
+                    additionalProperties: false
+                }
+            }]
+        });
+        assert.deepEqual(request.tools[0], {
+            type: 'custom',
+            name: 'exec',
+            description: 'Run JavaScript code to orchestrate/compose tool calls',
+            format: {
+                type: 'grammar',
+                syntax: 'lark',
+                definition: CODE_MODE_FREEFORM_GRAMMAR
+            }
+        });
     });
 
     it('drops response item ids at the native wire boundary like stateless Codex requests', () => {
@@ -412,6 +660,20 @@ describe('Codex model bridge', () => {
         assert.equal(item.type, 'custom_tool_call');
         assert.equal(call.type, 'custom');
         assert.equal(call.arguments.input, '*** Begin Patch\n*** End Patch');
+    });
+
+    it('keeps opaque compaction items in canonical Responses history', () => {
+        const [item] = codexResponsesCanonicalItems([{
+            id: 'cmp_1',
+            type: 'compaction',
+            encrypted_content: 'opaque-continuation-memory'
+        }]);
+
+        assert.deepEqual(item, {
+            id: 'cmp_1',
+            type: 'compaction',
+            encrypted_content: 'opaque-continuation-memory'
+        });
     });
 
     it('parses Windows HTTPS proxy forms without changing protocol semantics', () => {

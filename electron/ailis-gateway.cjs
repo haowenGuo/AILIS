@@ -26,6 +26,8 @@ const {
 } = require('./openclaw-tool-surface.cjs');
 const { AILISAgentRuntimeSupervisor } = require('./openclaw-runtime.cjs');
 const { AILISRuntime } = require('./ailis-runtime.cjs');
+const { AILISCodeModeRuntime } = require('./ailis-code-mode-runtime.cjs');
+const { CODEX_EXEC_COMMAND_DESCRIPTION } = require('./codex-code-mode-protocol.cjs');
 const {
     TOOL_EXPOSURE,
     AILISRuntimeTool,
@@ -39,6 +41,7 @@ const { AILISUserProfileCurator } = require('./ailis-user-profile-curator.cjs');
 const { AILISPreferenceState } = require('./ailis-preference-state.cjs');
 const { AILISTaskResultCapsuleStore } = require('./ailis-task-result-capsules.cjs');
 const { AILISSystemTaskAgentHarness } = require('./ailis-task-agent-harness.cjs');
+const { AILISPersonaContextStore } = require('./ailis-persona-context-store.cjs');
 const { AilisSelfEvolutionRuntime } = require('./ailis-self-evolution-runtime.cjs');
 const { AILISEmberHarness } = require('./ailis-ember-harness.cjs');
 const { AILISSensitiveWordClassifier } = require('./ailis-sensitive-word-classifier.cjs');
@@ -97,6 +100,7 @@ const PERSONA_STREAM_FLUSH_INTERVAL_MS = Math.max(
     16,
     Number(process.env.AILIS_PERSONA_STREAM_FLUSH_INTERVAL_MS || 40) || 40
 );
+const PERSONA_CONTEXT_META = Symbol('ailis.persona_context_meta');
 const PERSONA_DRAFT_DEVELOPER_PACKET = [
     'Prepare one private candidate FinalAnswer for this user Turn while TaskAgent independently decides whether the Turn is conversation or execution.',
     'Your candidate is published only if TaskAgent chooses chat. Do not acknowledge, promise, or narrate task execution, because TaskAgent owns Commentary and task results.',
@@ -1263,6 +1267,9 @@ class AILISGateway extends EventEmitter {
         this.privateRunIds = new Set();
         this.backgroundTaskRuns = new Set();
         this.activePersonaTurns = new Map();
+        this.personaContextStore = options.personaContextStore || new AILISPersonaContextStore({
+            rootDir: path.join(this.auditDir, 'persona-context')
+        });
         this.eventLogLimit = Math.max(
             100,
             Math.min(Number(options.eventLogLimit || DEFAULT_EVENT_REPLAY_LIMIT), MAX_EVENT_REPLAY_LIMIT)
@@ -1371,6 +1378,9 @@ class AILISGateway extends EventEmitter {
             emitGatewayEvent: (type, payload) => this.emitGatewayEvent(type, payload)
         });
         this.runtime.setSelfEvolutionRuntime?.(this.selfEvolutionRuntime);
+        this.codeModeRuntime = options.codeModeRuntime || new AILISCodeModeRuntime({
+            dispatchTool: ({ tool, args, context }) => this.callTool({ tool, args, context })
+        });
         this.gatewayToolRuntimeRegistry = this.createGatewayToolRuntimeRegistry();
         this.agentRunner = null;
     }
@@ -1429,12 +1439,12 @@ class AILISGateway extends EventEmitter {
                     ? TOOL_EXPOSURE.DIRECT
                     : EXTENDED_LOCAL_TOOL_EXPOSURE
             })),
-            ...['read', 'write', 'exec', 'exec_command', 'write_stdin', 'apply_patch'].map((id) => {
+            ...['read', 'write', 'exec', 'exec_wait', 'exec_command', 'write_stdin', 'apply_patch'].map((id) => {
                 const toolSurfaceDefinition = OPENCLAW_CORE_TOOL_DEFINITIONS.find((tool) => tool.id === id) || {};
                 const codexDescription = id === 'exec_command'
-                    ? 'Run a shell command and yield promptly. If the process is still running, the result includes session_id; continue that exact process with write_stdin.'
+                    ? CODEX_EXEC_COMMAND_DESCRIPTION
                     : id === 'write_stdin'
-                    ? 'Write characters to, or poll, a live exec_command session. Use chars="" to poll without sending input.'
+                    ? 'Writes characters to an existing unified exec session and returns recent output.'
                     : '';
                 return {
                     id,
@@ -3009,6 +3019,32 @@ class AILISGateway extends EventEmitter {
         }
     }
 
+    getPersonaContextCheckpoint(sessionId = 'main') {
+        return this.personaContextStore?.getCheckpoint?.(sessionId) || null;
+    }
+
+    extractPersonaResultCheckpoint(result = null) {
+        return result?.taskRunHandoff?.resume?.contextManagerCheckpoint ||
+            result?.task_run_handoff?.resume?.context_manager_checkpoint ||
+            result?.contextManagerCheckpoint ||
+            null;
+    }
+
+    commitPrivatePersonaResult(sessionId = 'main', result = null, displayText = '') {
+        const metadata = result?.[PERSONA_CONTEXT_META] || {};
+        const checkpoint = this.extractPersonaResultCheckpoint(result);
+        if (!checkpoint) {
+            if (normalizeString(displayText)) {
+                return this.personaContextStore?.appendAssistantText?.(sessionId, displayText) || null;
+            }
+            return this.getPersonaContextCheckpoint(sessionId);
+        }
+        return this.personaContextStore?.commitCheckpoint?.(sessionId, checkpoint, {
+            baseCheckpoint: metadata.inputCheckpoint || metadata.initialCheckpoint || null,
+            displayText
+        }) || checkpoint;
+    }
+
     async runPrivatePersonaTurn({
         input = {},
         context = {},
@@ -3028,17 +3064,32 @@ class AILISGateway extends EventEmitter {
         const effectiveMemoryPolicy = normalizeString(memoryPolicy, 'read_only').toLowerCase() === 'disabled'
             ? 'disabled'
             : 'read_only';
+        const initialCheckpoint = this.getPersonaContextCheckpoint(sessionId);
+        let inputCheckpoint = initialCheckpoint;
+        const requestedCheckpointObserver = typeof input.onModelInputContextCheckpoint === 'function'
+            ? input.onModelInputContextCheckpoint
+            : null;
         this.privateRunIds.add(privateRunId);
         try {
-            return await this.ensureAgentRunner().runMessage({
+            const result = await this.ensureAgentRunner().runMessage({
                 ...input,
                 runId: privateRunId,
                 sessionId,
                 memoryPolicy: effectiveMemoryPolicy,
+                initialContextManagerCheckpoint: initialCheckpoint,
                 messageHistory: Array.isArray(input.messageHistory)
                     ? input.messageHistory
                     : [],
                 ephemeralDeveloperMessage: normalizeString(developerPacket),
+                onModelInputContextCheckpoint: async (checkpoint, metadata) => {
+                    inputCheckpoint = checkpoint || inputCheckpoint;
+                    if (checkpoint) {
+                        this.personaContextStore?.commitCheckpoint?.(sessionId, checkpoint, {
+                            baseCheckpoint: initialCheckpoint
+                        });
+                    }
+                    await requestedCheckpointObserver?.(checkpoint, metadata);
+                },
                 onTextDelta: typeof onTextDelta === 'function' ? onTextDelta : undefined,
                 onTextStreamEvent: typeof onTextStreamEvent === 'function'
                     ? onTextStreamEvent
@@ -3056,9 +3107,18 @@ class AILISGateway extends EventEmitter {
                     taskAgentRoutingOwned: true,
                     personaDraft: purpose === 'draft',
                     personaRenderOnly: renderOnly,
-                    memoryPolicy: effectiveMemoryPolicy
+                    memoryPolicy: effectiveMemoryPolicy,
+                    initialContextManagerCheckpoint: initialCheckpoint
                 }
             });
+            if (result && typeof result === 'object') {
+                Object.defineProperty(result, PERSONA_CONTEXT_META, {
+                    value: { initialCheckpoint, inputCheckpoint },
+                    enumerable: false,
+                    configurable: false
+                });
+            }
+            return result;
         } finally {
             this.privateRunIds.delete(privateRunId);
         }
@@ -3113,14 +3173,13 @@ class AILISGateway extends EventEmitter {
             240,
             Math.max(80, Math.floor(authoritativeAnswer.length * 0.15))
         );
-        if (
+        const finalRenderedText = (
             completedPacket &&
             authoritativeAnswer.length >= 160 &&
             renderedText.length < minimumFaithfulLength
-        ) {
-            return authoritativeAnswer;
-        }
-        return renderedText;
+        ) ? authoritativeAnswer : renderedText;
+        this.commitPrivatePersonaResult(sessionId, rendered, finalRenderedText);
+        return finalRenderedText;
     }
 
     startPrivatePersonaDraft({
@@ -3272,6 +3331,7 @@ class AILISGateway extends EventEmitter {
                 livePersona?.displayText || livePersona?.finalAnswer || livePersona?.speechText
             );
             if (livePersonaText) {
+                this.commitPrivatePersonaResult(sessionId, livePersona, livePersonaText);
                 this.taskAgentHarness.recordPersonaOutput?.(
                     sessionId,
                     activeTurnId,
@@ -3616,10 +3676,18 @@ class AILISGateway extends EventEmitter {
         };
 
         let backgroundTaskStatus = 'completed';
-        const commitFinalAnswer = (displayText, taskResult = null, source = 'task_result_persona_actor') => {
+        const commitFinalAnswer = (
+            displayText,
+            taskResult = null,
+            source = 'task_result_persona_actor',
+            personaResult = null
+        ) => {
             const finalText = normalizeString(displayText);
             if (!finalText) {
                 return;
+            }
+            if (personaResult) {
+                this.commitPrivatePersonaResult(sessionId, personaResult, finalText);
             }
             const turnId = normalizeString(taskResult?.turn_id || activeState.turnId);
             this.taskAgentHarness.recordPersonaOutput?.(
@@ -3749,7 +3817,7 @@ class AILISGateway extends EventEmitter {
                     persona?.displayText || persona?.finalAnswer || persona?.speechText
                 );
                 if (personaText) {
-                    commitFinalAnswer(personaText, taskResult, 'persona_actor');
+                    commitFinalAnswer(personaText, taskResult, 'persona_actor', persona);
                 } else {
                     backgroundTaskStatus = 'failed';
                     activeState.discardPersonaStream?.('persona_final_unavailable');
@@ -5223,6 +5291,20 @@ class AILISGateway extends EventEmitter {
 
     async executeGatewayLocalTool(toolId, args, context = {}) {
         const workspaceDir = context.workspaceDir || this.resolveWorkspace(context.workspace, context);
+        if (toolId === 'exec' && typeof args.input === 'string') {
+            return await this.codeModeRuntime.execute({
+                input: args.input,
+                profileId: normalizeString(context.codeModeProfileId),
+                context: {
+                    ...context,
+                    workspace: workspaceDir,
+                    workspaceDir
+                }
+            });
+        }
+        if (toolId === 'exec_wait') {
+            return await this.codeModeRuntime.wait(args);
+        }
         if (toolId === TASK_ROUTE_TOOL_ID) {
             const mode = normalizeString(args.mode).toLowerCase();
             const allowed = context.taskAgentRoutePending === true && ['chat', 'execute'].includes(mode);
@@ -5786,7 +5868,9 @@ class AILISGateway extends EventEmitter {
                     workdir,
                     yield_time_ms: args.yield_time_ms,
                     max_output_tokens: args.max_output_tokens,
-                    tty: args.tty === true
+                    tty: args.tty === true,
+                    shell: args.shell,
+                    login: args.login
                 },
                 context,
                 {
@@ -5881,6 +5965,9 @@ class AILISGateway extends EventEmitter {
             this.assertPatchInsideWorkspace(finalArgs.input, workspaceDir, context);
         }
         if (toolId === 'exec') {
+            if (typeof finalArgs.input === 'string') {
+                return finalArgs;
+            }
             if (context.approved !== true && finalArgs.approved !== true) {
                 throwApprovalRequired('exec requires context.approved=true in AILIS Gateway v0', {
                     tool: toolId,

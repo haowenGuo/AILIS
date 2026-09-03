@@ -346,6 +346,9 @@ class ContextManager {
             ? replacementHistory
             : [fallbackMessage].filter(Boolean);
         this.replace(nextHistory, referenceContextItem);
+        // The provider token count belongs to the pre-compaction request. Keeping
+        // it would immediately classify the compacted ledger as over budget again.
+        this.setTokenInfo(null);
         return this.toCheckpoint();
     }
 

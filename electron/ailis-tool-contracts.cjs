@@ -742,8 +742,11 @@ const TOOL_CONTRACTS = Object.freeze({
         returns: defaultReturns(),
         errors: defaultErrors(['exec_blocked', 'exec_failed', 'shell_access_disabled']),
         schema: makeObjectSchema({
-            required: ['command'],
             properties: {
+                input: stringSchema({
+                    minLength: 1,
+                    description: 'Raw JavaScript source for the controlled TaskAgent code-mode orchestrator.'
+                }),
                 command: stringSchema({
                     minLength: 1,
                     description: 'Command line to run in runtime_environment.command_shell. Use for existing scripts, tests, builds, diagnostics, and short one-shot commands. On Windows, shell strings run as PowerShell: never use POSIX heredocs such as <<EOF; write a temporary script and execute it, or use a short -c command.'
@@ -774,10 +777,34 @@ const TOOL_CONTRACTS = Object.freeze({
             additionalProperties: false
         }),
         customValidate(args = {}) {
-            if (!normalizeString(args.command)) {
-                return ['exec requires command'];
-            }
+            const hasInput = typeof args.input === 'string' && Boolean(args.input.trim());
+            const hasCommand = Boolean(normalizeString(args.command));
+            if (hasInput && hasCommand) return ['exec accepts either input or command, not both'];
+            if (!hasInput && !hasCommand) return ['exec requires raw JavaScript input or a legacy command'];
             return [];
+        }
+    }),
+    exec_wait: Object.freeze({
+        id: 'exec_wait',
+        version: CONTRACT_VERSION,
+        mutates: false,
+        risk: 'low',
+        approval: 'never',
+        experience: TOOL_EXPERIENCE.exec,
+        returns: defaultReturns(),
+        errors: defaultErrors(['cell_not_found', 'exec_wait_failed']),
+        schema: makeObjectSchema({
+            required: ['cell_id'],
+            properties: {
+                cell_id: stringSchema({ minLength: 1 }),
+                yield_time_ms: numberSchema({ minimum: 0, maximum: 300000 }),
+                max_tokens: numberSchema({ minimum: 1, maximum: 50000 }),
+                terminate: booleanSchema()
+            },
+            additionalProperties: false
+        }),
+        customValidate(args = {}) {
+            return normalizeString(args.cell_id) ? [] : ['exec_wait requires cell_id'];
         }
     }),
     exec_command: Object.freeze({
@@ -794,23 +821,39 @@ const TOOL_CONTRACTS = Object.freeze({
             properties: {
                 cmd: stringSchema({
                     minLength: 1,
-                    description: 'Shell command to run. The call yields promptly; when the process is still running the result includes session_id for write_stdin.'
+                    description: 'Shell command to execute.'
                 }),
                 workdir: stringSchema({
-                    description: 'Working directory for the command. Defaults to the active workspace.'
+                    description: 'Working directory for the command. Defaults to the turn cwd.'
                 }),
                 yield_time_ms: numberSchema({
                     minimum: 0,
                     maximum: 30000,
-                    description: 'Maximum time to wait for initial output before yielding a live session.'
+                    description: 'Maximum time to wait before returning a session ID for a still-running command.'
                 }),
                 max_output_tokens: numberSchema({
                     minimum: 1,
                     maximum: 50000,
-                    description: 'Maximum output tokens returned by this call.'
+                    description: 'Output token budget. Defaults to 10000 tokens; larger requests may be capped by policy.'
                 }),
                 tty: booleanSchema({
-                    description: 'Allocate a PTY when the command needs terminal semantics.'
+                    description: 'True allocates a PTY for the command; false or omitted uses plain pipes.'
+                }),
+                shell: stringSchema({
+                    description: "Shell binary to launch. Defaults to the user's default shell."
+                }),
+                login: booleanSchema({
+                    description: 'True runs the shell with -l/-i semantics; false disables them. Defaults to true.'
+                }),
+                sandbox_permissions: stringSchema({
+                    enum: ['use_default', 'require_escalated'],
+                    description: 'Per-command sandbox override.'
+                }),
+                justification: stringSchema({
+                    description: 'User-facing approval question for require_escalated; omit otherwise.'
+                }),
+                prefix_rule: arraySchema(stringSchema(), {
+                    description: 'Reusable approval prefix for an escalated command.'
                 })
             },
             additionalProperties: false
@@ -831,10 +874,13 @@ const TOOL_CONTRACTS = Object.freeze({
         schema: makeObjectSchema({
             required: ['session_id'],
             properties: {
-                session_id: stringSchema({
-                    minLength: 1,
-                    description: 'Live session id returned by exec_command.'
-                }),
+                session_id: {
+                    anyOf: [
+                        numberSchema({ minimum: 1 }),
+                        stringSchema({ minLength: 1 })
+                    ],
+                    description: 'Identifier of the running unified exec session.'
+                },
                 chars: stringSchema({
                     description: 'Characters to write. Use an empty string to poll without sending input.'
                 }),
@@ -852,7 +898,10 @@ const TOOL_CONTRACTS = Object.freeze({
             additionalProperties: false
         }),
         customValidate(args = {}) {
-            return normalizeString(args.session_id) ? [] : ['write_stdin requires session_id'];
+            return (
+                (Number.isSafeInteger(Number(args.session_id)) && Number(args.session_id) > 0) ||
+                normalizeString(args.session_id)
+            ) ? [] : ['write_stdin requires session_id'];
         }
     }),
     request_permissions: Object.freeze({
@@ -919,25 +968,24 @@ const TOOL_CONTRACTS = Object.freeze({
             ...makeObjectSchema({
                 required: ['plan'],
                 properties: {
-                    explanation: stringSchema({ description: 'Optional concise explanation for this plan update.' }),
+                    explanation: stringSchema({ description: 'Optional explanation for this plan update.' }),
                     plan: arraySchema(makeObjectSchema({
                         required: ['step', 'status'],
                         properties: {
-                            id: stringSchema(),
-                            step: stringSchema({ minLength: 1, description: 'Checklist item.' }),
+                            step: stringSchema({ minLength: 1, description: 'Task step text.' }),
                             status: stringSchema({
-                                enum: ['pending', 'in_progress', 'completed']
+                                enum: ['pending', 'in_progress', 'completed'],
+                                description: 'Step status.'
                             })
                         },
-                        additionalProperties: true
+                        additionalProperties: false
                     }), {
-                        minItems: 1,
-                        description: 'Complete current checklist. At most one item may be in_progress.'
+                        description: 'The list of steps'
                     })
                 },
-                additionalProperties: true
+                additionalProperties: false
             }),
-            description: 'Update the user-visible task plan. This records plan state only; continue with execution tools after the call.'
+            description: 'Updates the task plan. Provide an optional explanation and a list of plan items, each with a step and status. At most one step can be in_progress at a time.'
         }
     }),
     tool_search: Object.freeze({

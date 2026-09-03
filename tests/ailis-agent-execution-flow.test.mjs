@@ -48,7 +48,7 @@ test('ordinary and legacy evaluation requests expose the same production tool su
     });
 
     assert.deepEqual(legacyFlags, ordinary);
-    assert.deepEqual(ordinary.map((spec) => spec.name), ['exec']);
+    assert.deepEqual(ordinary.map((spec) => spec.name), ['exec', 'exec_wait']);
     assert.equal(ordinary.some((spec) => spec.name === 'final_answer'), false);
 });
 

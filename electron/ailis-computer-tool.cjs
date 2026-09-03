@@ -149,6 +149,44 @@ function getRuntimePlatform(runtime = {}) {
     return runtime.platformAdapter || getDefaultPlatformAdapter();
 }
 
+function explicitShellSpawnSpec(shell = '', command = '', { cwd, env, login = true, platformAdapter } = {}) {
+    const executable = normalizeString(shell);
+    if (!executable) return null;
+    const shellName = path.basename(executable).toLowerCase();
+    const spawnOptions = {
+        ...platformAdapter.shellSpawnOptions({ cwd, env }),
+        shell: false
+    };
+    if (shellName === 'cmd' || shellName === 'cmd.exe') {
+        return {
+            supported: true,
+            command: executable,
+            args: ['/d', '/s', '/c', command],
+            options: spawnOptions,
+            targetCommand: command,
+            backend: 'explicit-cmd'
+        };
+    }
+    if (shellName === 'powershell' || shellName === 'powershell.exe' || shellName === 'pwsh' || shellName === 'pwsh.exe') {
+        return {
+            supported: true,
+            command: executable,
+            args: ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', command],
+            options: spawnOptions,
+            targetCommand: command,
+            backend: 'explicit-powershell'
+        };
+    }
+    return {
+        supported: true,
+        command: executable,
+        args: [login === false ? '-c' : '-lc', command],
+        options: spawnOptions,
+        targetCommand: command,
+        backend: 'explicit-shell'
+    };
+}
+
 function isPathInside(rootPath, targetPath, platformAdapter = getDefaultPlatformAdapter()) {
     return platformAdapter.isPathInside(rootPath, targetPath);
 }
@@ -2939,7 +2977,12 @@ class ComputerRuntime {
             return createTextResult(JSON.stringify(details, null, 2), details);
         }
         if (normalizeBoolean(args.tty, false)) {
-            const ptyResult = await this.ptyStart({ ...args, command, action: 'pty_start' }, context, runtime);
+            const ptyResult = await this.ptyStart({
+                ...args,
+                command,
+                executable: normalizeString(args.shell || args.executable),
+                action: 'pty_start'
+            }, context, runtime);
             if (ptyResult.isError) {
                 return ptyResult;
             }
@@ -2955,14 +2998,19 @@ class ComputerRuntime {
         }
         const timeoutMs = normalizeNumber(args.timeoutMs || args.timeout, DEFAULT_SESSION_TIMEOUT_MS, 1000, 24 * 60 * 60 * 1000);
         const platformAdapter = getRuntimePlatform(runtime);
-        const spawnSpec = platformAdapter.commandSpawnSpec
+        const spawnSpec = explicitShellSpawnSpec(args.shell, command, {
+            cwd: workdir,
+            env: args.env,
+            login: args.login !== false,
+            platformAdapter
+        }) || (platformAdapter.commandSpawnSpec
             ? platformAdapter.commandSpawnSpec(command, { args: commandArgs, cwd: workdir, env: args.env })
             : {
                   supported: true,
                   command,
                   args: commandArgs,
                   options: platformAdapter.shellSpawnOptions({ cwd: workdir, env: args.env })
-              };
+              });
         if (!spawnSpec.supported) {
             return createErrorResult('not_supported', spawnSpec.reason || 'Command execution is not supported by this platform adapter.', {
                 action: 'exec_command',

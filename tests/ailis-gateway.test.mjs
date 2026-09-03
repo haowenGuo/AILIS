@@ -12,6 +12,7 @@ const {
     attachSuggestedMcpToolsForDirectExposure,
     collectSuggestedMcpToolNames
 } = require('../electron/ailis-gateway.cjs');
+const { createExecToolSpec } = require('../electron/codex-code-mode-protocol.cjs');
 const ExcelJS = require('exceljs');
 
 test('AILIS Gateway uses the low-latency sensitive-word evaluator by default', async () => {
@@ -119,6 +120,71 @@ test('AILIS Gateway exposes Codex-style exec continuation and workspace-safe abs
         });
         assert.equal(rejected.ok, false);
         assert.match(rejected.error, /inside workspace/i);
+    } finally {
+        await fs.rm(workspaceRoot, { recursive: true, force: true });
+    }
+});
+
+test('AILIS Gateway executes code-mode nested tools through the ordinary governed tool path', async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-code-mode-gateway-'));
+    await fs.writeFile(path.join(workspaceRoot, 'evidence.txt'), 'GATEWAY_NESTED_READ_OK', 'utf8');
+    const gateway = new AILISGateway({
+        port: 0,
+        workspaceRoot,
+        projectRoot: path.resolve('.'),
+        auditDir: path.join(workspaceRoot, '.audit'),
+        emberHarnessEnabled: false,
+        profileCurationEnabled: false
+    });
+    try {
+        const readSpec = gateway.gatewayToolRuntimeRegistry.definition('read').spec;
+        const execSpec = createExecToolSpec([readSpec]);
+        const result = await gateway.callTool({
+            tool: 'exec',
+            args: {
+                input: 'const result = await tools.read({path: "evidence.txt"}); text(JSON.stringify(result).includes("GATEWAY_NESTED_READ_OK"));'
+            },
+            context: {
+                workspace: workspaceRoot,
+                sessionId: 'gateway-code-mode-test',
+                codeModeProfileId: execSpec.x_ailis_code_mode_profile
+            },
+            timeoutMs: 30_000
+        });
+        assert.equal(result.ok, true, result.error);
+        assert.match(JSON.stringify(result), /Script completed/);
+        assert.match(JSON.stringify(result), /true/);
+
+        const compactExecSpec = createExecToolSpec([
+            gateway.gatewayToolRuntimeRegistry.definition('exec_command').spec,
+            gateway.gatewayToolRuntimeRegistry.definition('write_stdin').spec
+        ]);
+        const compactExec = await gateway.callTool({
+            tool: 'exec',
+            args: {
+                input: 'const result = await tools.exec_command({cmd: "node --version"}); text(JSON.stringify(result));'
+            },
+            context: {
+                workspace: workspaceRoot,
+                approved: true,
+                sessionId: 'gateway-code-mode-compact-exec-test',
+                codeModeProfileId: compactExecSpec.x_ailis_code_mode_profile
+            },
+            timeoutMs: 30_000
+        });
+        assert.equal(compactExec.ok, true, compactExec.error);
+        const compactExecText = JSON.stringify(compactExec.result);
+        assert.match(compactExecText, /\\"output\\":\\"v\d+/);
+        assert.match(compactExecText, /\\"wall_time_seconds\\":/);
+        assert.doesNotMatch(compactExecText, /gateway-call|\\"callId\\"|\\"details\\"|outputStore|\\"stdout\\"|\\"stderr\\"/);
+
+        const legacyWithoutApproval = await gateway.callTool({
+            tool: 'exec',
+            args: { command: 'node --version' },
+            context: { workspace: workspaceRoot }
+        });
+        assert.equal(legacyWithoutApproval.ok, false);
+        assert.match(legacyWithoutApproval.error, /approval/i);
     } finally {
         await fs.rm(workspaceRoot, { recursive: true, force: true });
     }
@@ -1389,6 +1455,115 @@ test('AILIS Gateway keeps task execution private until one Persona FinalAnswer i
         assert.equal(taskMessage?.payload?.phase, 'final_answer');
         assert.equal(memoryCalls.length, 1);
         assert.equal(gateway.eventLog.filter((event) => event.type === 'agent.message.completed').length, 1);
+    } finally {
+        await fs.rm(workspaceRoot, { recursive: true, force: true });
+    }
+});
+
+test('AILIS Gateway persists Persona as an append-only checkpoint across turns and restart', async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-persona-checkpoint-'));
+    const auditDir = path.join(workspaceRoot, '.audit');
+    const runnerCalls = [];
+    const installRunner = (gateway) => {
+        gateway.ensureAgentRunner = () => ({
+            runMessage: async (request) => {
+                runnerCalls.push(request);
+                const items = request.initialContextManagerCheckpoint
+                    ? structuredClone(request.initialContextManagerCheckpoint.items)
+                    : [{
+                          type: 'message',
+                          role: 'developer',
+                          content: [{ type: 'input_text', text: 'Persona memory' }]
+                      }];
+                const lastItem = items.at(-1);
+                const lastText = lastItem?.content?.[0]?.text || '';
+                if (!(lastItem?.role === 'user' && lastText === request.message)) {
+                    items.push({
+                        type: 'message',
+                        role: 'user',
+                        content: [{ type: 'input_text', text: request.message }]
+                    });
+                }
+                const inputCheckpoint = { history_version: items.length, items: structuredClone(items) };
+                await request.onModelInputContextCheckpoint?.(inputCheckpoint, {
+                    phase: 'before_first_model_decision'
+                });
+                const displayText = `回复：${request.message}`;
+                items.push({
+                    type: 'message',
+                    role: 'assistant',
+                    content: [{ type: 'output_text', text: displayText }]
+                });
+                return {
+                    ok: true,
+                    status: 'completed',
+                    displayText,
+                    taskRunHandoff: {
+                        resume: {
+                            contextManagerCheckpoint: { history_version: items.length, items }
+                        }
+                    }
+                };
+            },
+            recordMemoryTurn: () => {}
+        });
+    };
+
+    try {
+        const firstGateway = new AILISGateway({
+            port: 0,
+            workspaceRoot,
+            projectRoot: path.resolve('.'),
+            auditDir,
+            emberHarnessEnabled: false,
+            profileCurationEnabled: false
+        });
+        installRunner(firstGateway);
+        const first = await firstGateway.runPrivatePersonaTurn({
+            input: { message: '第一轮' },
+            sessionId: 'persona-session'
+        });
+        firstGateway.commitPrivatePersonaResult('persona-session', first, first.displayText);
+
+        const second = await firstGateway.runPrivatePersonaTurn({
+            input: { message: '第二轮' },
+            sessionId: 'persona-session'
+        });
+        assert.deepEqual(
+            runnerCalls[1].initialContextManagerCheckpoint.items.map((item) => ({
+                role: item.role,
+                text: item.content?.[0]?.text || ''
+            })),
+            [
+                { role: 'developer', text: 'Persona memory' },
+                { role: 'user', text: '第一轮' },
+                { role: 'assistant', text: '回复：第一轮' }
+            ]
+        );
+        firstGateway.commitPrivatePersonaResult('persona-session', second, second.displayText);
+
+        const restartedGateway = new AILISGateway({
+            port: 0,
+            workspaceRoot,
+            projectRoot: path.resolve('.'),
+            auditDir,
+            emberHarnessEnabled: false,
+            profileCurationEnabled: false
+        });
+        installRunner(restartedGateway);
+        await restartedGateway.runPrivatePersonaTurn({
+            input: { message: '第三轮' },
+            sessionId: 'persona-session'
+        });
+        const restoredItems = runnerCalls[2].initialContextManagerCheckpoint.items;
+        assert.deepEqual(
+            restoredItems.filter((item) => item.role === 'user').map((item) => item.content[0].text),
+            ['第一轮', '第二轮']
+        );
+        assert.deepEqual(
+            restoredItems.filter((item) => item.role === 'assistant').map((item) => item.content[0].text),
+            ['回复：第一轮', '回复：第二轮']
+        );
     } finally {
         await fs.rm(workspaceRoot, { recursive: true, force: true });
     }

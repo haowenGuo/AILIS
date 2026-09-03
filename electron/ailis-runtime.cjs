@@ -1386,6 +1386,9 @@ class AILISRuntime {
             return { class: 'mutating', mutates: true, requiresApprovalCapable: false, action };
         }
         if (toolId === 'exec') {
+            if (typeof args.input === 'string') {
+                return { class: 'readonly_scoped', mutates: false, requiresApprovalCapable: false, action: 'code_mode_orchestration' };
+            }
             const command = normalizeString(args.cmd || args.command);
             if (command.includes('*** Begin Patch') && command.includes('*** End Patch')) {
                 return { class: 'mutating', mutates: true, requiresApprovalCapable: false, action: 'apply_patch_intercept' };
@@ -1400,6 +1403,9 @@ class AILISRuntime {
             return chars
                 ? { class: 'exec_capable', mutates: true, requiresApprovalCapable: true, action }
                 : { class: 'readonly_scoped', mutates: false, requiresApprovalCapable: false, action };
+        }
+        if (toolId === 'exec_wait') {
+            return { class: 'readonly_scoped', mutates: false, requiresApprovalCapable: false, action: args.terminate === true ? 'terminate_code_mode_cell' : 'wait_code_mode_cell' };
         }
         if (EXEC_TOOLS.has(toolId)) {
             return { class: 'exec_capable', mutates: true, requiresApprovalCapable: true, action };

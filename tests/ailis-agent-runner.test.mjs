@@ -9,6 +9,7 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const { AILISGateway } = require('../electron/ailis-gateway.cjs');
 const { resolveCodexNativeInstructions } = require('../electron/codex-native-instructions.cjs');
+const { getCodeModeProfile } = require('../electron/codex-code-mode-protocol.cjs');
 const {
     recordToolOutputToContextManager
 } = require('../electron/ailis-model-input-builder.cjs');
@@ -632,6 +633,29 @@ test('persistent TaskAgent creates an explicit checkpoint boundary after semanti
     assert.match(JSON.stringify(initial.input), /<ailis_session_checkpoint>/);
     assert.doesNotMatch(JSON.stringify(initial.input), /<task_agent_session_state>/);
     assert.equal(initial.contextManager.historyVersion(), 1);
+});
+
+test('TaskAgent can defer local rule compaction while provider semantic compaction is attempted', () => {
+    const prompt = buildLlmAgentDirectToolPrompt({
+        message: 'Continue the long task.',
+        contextMode: 'task_agent',
+        contextBudgetConfig: {
+            effectiveInputLimitTokens: 2000,
+            hardTokenLimit: 800,
+            stopTokenLimit: 1800
+        },
+        messageHistory: Array.from({ length: 12 }, (_, index) => ({
+            role: index % 2 ? 'assistant' : 'user',
+            content: `${index}:${'long context '.repeat(500)}`
+        })),
+        tools: [],
+        deferSemanticCompaction: true
+    });
+
+    assert.ok(['hard', 'stop'].includes(prompt.contextPackage.budgetReport.level));
+    assert.equal(prompt.semanticCompaction, null);
+    assert.doesNotMatch(JSON.stringify(prompt.input), /<ailis_session_checkpoint>/);
+    assert.equal(prompt.contextManager.historyVersion(), 0);
 });
 
 test('TaskAgent preserves user-requested ordering and duplicates without a benchmark recipe', () => {
@@ -1368,7 +1392,9 @@ test('TaskAgent loads structured MCP follow-up action specs on the next turn', (
         }],
         requestContext: { agentRole: 'task_agent' }
     });
-    assert.ok(specs.some((spec) => spec.name === 'mcp__ailis_research__open_page'));
+    assert.deepEqual(specs.map((spec) => spec.name), ['exec', 'exec_wait']);
+    assert.ok(getCodeModeProfile(specs[0].x_ailis_code_mode_profile)
+        .some((spec) => spec.name === 'mcp__ailis_research__open_page'));
 });
 
 test('TaskAgent receives direct file readers when the current Turn has an attachment', () => {
@@ -1397,7 +1423,11 @@ test('TaskAgent receives direct file readers when the current Turn has an attach
         }
     });
 
-    assert.deepEqual(specs.map((spec) => spec.name), ['read', 'artifact_tools']);
+    assert.deepEqual(specs.map((spec) => spec.name), ['exec', 'exec_wait']);
+    assert.deepEqual(
+        getCodeModeProfile(specs[0].x_ailis_code_mode_profile).map((spec) => spec.name),
+        ['read', 'artifact_tools']
+    );
 });
 
 async function jsonFetch(url, options = {}) {
@@ -1680,7 +1710,9 @@ test('AILIS direct tool specs do not inject Persona progress fields into ordinar
             directToolLimit: 4
         }
     });
-    const readSpec = specs.find((spec) => spec.name === 'read');
+    const readSpec = getCodeModeProfile(
+        specs.find((spec) => spec.name === 'exec').x_ailis_code_mode_profile
+    ).find((spec) => spec.name === 'read');
 
     assert.ok(readSpec);
     assert.equal(readSpec.parameters.properties.progress_note, undefined);
@@ -1714,7 +1746,11 @@ test('AILIS direct tool specs honor an explicit one-tool allowlist', () => {
         }
     });
 
-    assert.deepEqual(specs.map((spec) => spec.name), ['first']);
+    assert.deepEqual(specs.map((spec) => spec.name), ['exec', 'exec_wait']);
+    assert.deepEqual(
+        getCodeModeProfile(specs[0].x_ailis_code_mode_profile).map((spec) => spec.name),
+        ['first']
+    );
 });
 
 test('AILIS Agent Runner rejects visible tool protocols', () => {
@@ -2264,11 +2300,14 @@ test('AILIS Persona and TaskAgent share read-only vision without exposing execut
         }
     });
     assert.deepEqual(routeSpecs.map((spec) => spec.name), [
-        'task_route',
-        'vision_capture_context',
-        'read',
-        'exec'
+        'exec',
+        'exec_wait',
+        'task_route'
     ]);
+    assert.deepEqual(
+        getCodeModeProfile(routeSpecs[0].x_ailis_code_mode_profile).map((spec) => spec.name),
+        ['vision_capture_context', 'read']
+    );
     assert.deepEqual(resolveAgentDirectToolChoice({
         agentRuntimeRole: 'task_agent',
         requestContext: { taskAgentRoutePending: true },
@@ -2282,9 +2321,12 @@ test('AILIS Persona and TaskAgent share read-only vision without exposing execut
             currentUserMessage: '看看当前屏幕上选中了什么'
         }
     });
-    assert.ok(taskSpecs.some((spec) => spec.name === 'read'));
     assert.ok(taskSpecs.some((spec) => spec.name === 'exec'));
-    assert.ok(taskSpecs.some((spec) => spec.name === 'vision_capture_context'));
+    assert.ok(taskSpecs.some((spec) => spec.name === 'exec_wait'));
+    assert.deepEqual(
+        getCodeModeProfile(taskSpecs[0].x_ailis_code_mode_profile).map((spec) => spec.name),
+        ['vision_capture_context', 'read']
+    );
     assert.equal(taskSpecs.some((spec) => spec.name === 'handoff_task'), false);
 
     const codingTaskSpecs = buildAgentDirectToolSpecs(gateway, {
@@ -2293,7 +2335,11 @@ test('AILIS Persona and TaskAgent share read-only vision without exposing execut
             currentUserMessage: '修复仓库里的 Git 历史解析测试'
         }
     });
-    assert.equal(codingTaskSpecs.some((spec) => spec.name === 'vision_capture_context'), false);
+    assert.equal(
+        getCodeModeProfile(codingTaskSpecs[0].x_ailis_code_mode_profile)
+            .some((spec) => spec.name === 'vision_capture_context'),
+        false
+    );
 
     const alreadyRoutedTaskSpecs = buildAgentDirectToolSpecs(gateway, {
         requestContext: {
@@ -2317,8 +2363,77 @@ test('AILIS Persona and TaskAgent share read-only vision without exposing execut
             currentUserMessage: '看看当前屏幕'
         }
     });
-    assert.equal(taskAfterTerminalVisionFailure.some((spec) => spec.name === 'vision_capture_context'), false);
+    assert.equal(
+        getCodeModeProfile(taskAfterTerminalVisionFailure[0].x_ailis_code_mode_profile)
+            .some((spec) => spec.name === 'vision_capture_context'),
+        false
+    );
 
+});
+
+test('AILIS Persona initializes its persistent ledger from the complete visible conversation', () => {
+    const messageHistory = Array.from({ length: 12 }, (_, index) => ({
+        role: index % 2 === 0 ? 'user' : 'assistant',
+        content: `历史消息 ${index + 1}`
+    }));
+    const prompt = buildLlmAgentDirectToolPrompt({
+        message: '当前消息',
+        messageHistory,
+        contextMode: 'persona',
+        tools: []
+    });
+    const visibleMessages = prompt.contextManager.rawItems()
+        .filter((item) => item.type === 'message' && ['user', 'assistant'].includes(item.role))
+        .map((item) => item.content?.[0]?.text || '');
+
+    assert.deepEqual(visibleMessages, [
+        ...messageHistory.map((item) => item.content),
+        '当前消息'
+    ]);
+});
+
+test('append-only context accepts a repeated user message after an assistant reply', () => {
+    const prompt = buildLlmAgentDirectToolPrompt({
+        message: '继续',
+        contextMode: 'persona',
+        tools: []
+    });
+    prompt.contextManager.recordItems([{
+        type: 'message',
+        role: 'developer',
+        content: [{ type: 'input_text', text: 'runtime update' }]
+    }]);
+    assert.equal(appendUserInputToContextManager(prompt.contextManager, '继续'), false);
+    prompt.contextManager.recordItems([{
+        type: 'message',
+        role: 'assistant',
+        content: [{ type: 'output_text', text: '上一轮已完成。' }]
+    }]);
+    assert.equal(appendUserInputToContextManager(prompt.contextManager, '继续'), true);
+});
+
+test('TaskAgent exposes only exec, exec_wait, and direct lifecycle or discovery exceptions', () => {
+    const specs = buildAgentDirectToolSpecs({
+        gatewayToolRuntimeRegistry: {
+            modelVisibleSpecs: () => ['tool_search', 'read', 'exec_command', 'write_stdin', 'apply_patch'].map((name) => ({
+                name,
+                description: `${name} tool`,
+                parameters: {
+                    type: 'object',
+                    properties: name === 'tool_search' ? { query: { type: 'string' } } : {},
+                    additionalProperties: true
+                }
+            })),
+            definition: () => null
+        }
+    }, {
+        requestContext: { agentRole: 'task_agent', directToolLimit: 16 }
+    });
+    assert.deepEqual(specs.map((spec) => spec.name), ['exec', 'exec_wait', 'tool_search']);
+    assert.deepEqual(
+        getCodeModeProfile(specs[0].x_ailis_code_mode_profile).map((spec) => spec.name),
+        ['read', 'exec_command', 'write_stdin', 'apply_patch']
+    );
 });
 
 test('AILIS sanitized agent fork follows Codex rollout filtering rules', () => {

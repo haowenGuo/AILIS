@@ -48,6 +48,19 @@ const {
 const {
     webFetch
 } = require('../scripts/mcp-ailis-research-server.cjs');
+const { getCodeModeProfile } = require('../electron/codex-code-mode-protocol.cjs');
+
+function expandedCodeModeToolSpecs(specs = []) {
+    const visible = Array.isArray(specs) ? specs : [];
+    const execSpec = visible.find((tool) => tool.name === 'exec');
+    const nested = execSpec?.x_ailis_code_mode_profile
+        ? getCodeModeProfile(execSpec.x_ailis_code_mode_profile)
+        : [];
+    return [
+        ...visible.filter((tool) => !['exec', 'exec_wait'].includes(tool.name)),
+        ...nested
+    ];
+}
 
 async function startLocalHttpServer(handler) {
     const server = http.createServer(handler);
@@ -549,6 +562,11 @@ test('AILIS Gateway exposes a small Responses-compatible core surface by default
         requestContext: { nativeDirectTools: true }
     });
     assert.deepEqual(initialSpecs.map((tool) => tool.name).sort(), [
+        'exec',
+        'exec_wait',
+        'tool_search'
+    ].sort());
+    assert.deepEqual(expandedCodeModeToolSpecs(initialSpecs).map((tool) => tool.name).sort(), [
         'apply_patch',
         'exec_command',
         'tool_search',
@@ -615,7 +633,8 @@ test('AILIS rebuilds local runtime direct tool specs from registry after compres
                 }
             }]
         });
-        const artifactSpec = nextSpecs.find((tool) => tool.name === 'artifact_tools');
+        const expandedNextSpecs = expandedCodeModeToolSpecs(nextSpecs);
+        const artifactSpec = expandedNextSpecs.find((tool) => tool.name === 'artifact_tools');
         assert.ok(artifactSpec, 'artifact_tools should be exposed after tool_search');
         assert.ok(artifactSpec.parameters.properties.include, 'registry schema should restore include');
         assert.ok(artifactSpec.parameters.properties.sessionId, 'registry schema should restore sessionId');
@@ -630,7 +649,7 @@ test('AILIS rebuilds local runtime direct tool specs from registry after compres
                 range: 'A1:B2',
                 include: ['style', 'formula']
             }
-        }, nextSpecs);
+        }, expandedNextSpecs);
         assert.equal(valid.ok, true, valid.errors.join('; '));
     } finally {
         await fs.rm(workspaceRoot, { recursive: true, force: true });
@@ -708,7 +727,8 @@ test('AILIS keeps raw tool_search specs hidden from model JSON but available for
                 }
             }]
         });
-        const externalSpec = nextSpecs.find((tool) => tool.name === 'external__mock__lookup');
+        const expandedNextSpecs = expandedCodeModeToolSpecs(nextSpecs);
+        const externalSpec = expandedNextSpecs.find((tool) => tool.name === 'external__mock__lookup');
         assert.ok(externalSpec, 'external tool should be exposed from hidden raw tool_search specs');
         assert.ok(externalSpec.parameters.properties.include, 'hidden raw schema should restore include');
         assert.equal(externalSpec.parameters.properties.__omitted_keys, undefined);
@@ -719,7 +739,7 @@ test('AILIS keeps raw tool_search specs hidden from model JSON but available for
                 query: 'alpha',
                 include: ['metadata']
             }
-        }, nextSpecs);
+        }, expandedNextSpecs);
         assert.equal(valid.ok, true, valid.errors.join('; '));
 
         const gatewaySearch = await gateway.callTool({
@@ -741,7 +761,7 @@ test('AILIS keeps raw tool_search specs hidden from model JSON but available for
     }
 });
 
-test('AILIS exposes update_plan as UI-only bookkeeping and suppresses only repeated plan loops', async () => {
+test('AILIS keeps the Codex-style update_plan tool surface stable across repeated plan calls', async () => {
     const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-tool-plan-loop-'));
     const gateway = new AILISGateway({
         port: 0,
@@ -760,7 +780,7 @@ test('AILIS exposes update_plan as UI-only bookkeeping and suppresses only repea
             }
         }]
     });
-    assert.equal(singlePlanSpecs.some((tool) => tool.name === 'update_plan'), true);
+    assert.match(singlePlanSpecs.find((tool) => tool.name === 'exec')?.description || '', /### `update_plan`/);
     assert.equal(singlePlanSpecs.some((tool) => tool.name === 'tool_search'), true);
 
     const repeatedPlanSteps = Array.from({ length: 2 }, (_, index) => ({
@@ -776,7 +796,11 @@ test('AILIS exposes update_plan as UI-only bookkeeping and suppresses only repea
         requestContext: { nativeDirectTools: true },
         stepResults: repeatedPlanSteps
     });
-    assert.equal(specs.some((tool) => tool.name === 'update_plan'), false);
+    assert.match(specs.find((tool) => tool.name === 'exec')?.description || '', /### `update_plan`/);
+    assert.equal(
+        specs.find((tool) => tool.name === 'exec')?.description,
+        singlePlanSpecs.find((tool) => tool.name === 'exec')?.description
+    );
     assert.equal(specs.some((tool) => tool.name === 'tool_search'), true);
 
     const overrideSpecs = buildAgentDirectToolSpecs(gateway, {
@@ -786,7 +810,7 @@ test('AILIS exposes update_plan as UI-only bookkeeping and suppresses only repea
         },
         stepResults: repeatedPlanSteps
     });
-    assert.equal(overrideSpecs.some((tool) => tool.name === 'update_plan'), true);
+    assert.match(overrideSpecs.find((tool) => tool.name === 'exec')?.description || '', /### `update_plan`/);
 });
 
 test('AILIS scopes web, vision, goals, and permission escalation to the active request', async () => {
@@ -805,9 +829,10 @@ test('AILIS scopes web, vision, goals, and permission escalation to the active r
                 permissionProfile: 'workspace-write'
             }
         });
-        assert.equal(coding.some((tool) => tool.name === 'web_run'), false);
-        assert.equal(coding.some((tool) => tool.name === 'vision_capture_context'), false);
-        assert.equal(coding.some((tool) => tool.name === 'task_goal'), false);
+        const expandedCoding = expandedCodeModeToolSpecs(coding);
+        assert.equal(expandedCoding.some((tool) => tool.name === 'web_run'), false);
+        assert.equal(expandedCoding.some((tool) => tool.name === 'vision_capture_context'), false);
+        assert.equal(expandedCoding.some((tool) => tool.name === 'task_goal'), false);
         assert.equal(coding.some((tool) => tool.name === 'request_permissions'), false);
 
         const research = buildAgentDirectToolSpecs(gateway, {
@@ -816,7 +841,7 @@ test('AILIS scopes web, vision, goals, and permission escalation to the active r
                 currentUserMessage: 'Search the latest official release notes on the web.'
             }
         });
-        assert.equal(research.some((tool) => tool.name === 'web_run'), true);
+        assert.equal(expandedCodeModeToolSpecs(research).some((tool) => tool.name === 'web_run'), true);
 
         const visual = buildAgentDirectToolSpecs(gateway, {
             requestContext: {
@@ -824,7 +849,7 @@ test('AILIS scopes web, vision, goals, and permission escalation to the active r
                 currentUserMessage: 'Look at my screen and tell me what application is open.'
             }
         });
-        assert.equal(visual.some((tool) => tool.name === 'vision_capture_context'), true);
+        assert.equal(expandedCodeModeToolSpecs(visual).some((tool) => tool.name === 'vision_capture_context'), true);
 
         const persistent = buildAgentDirectToolSpecs(gateway, {
             requestContext: {
@@ -832,7 +857,7 @@ test('AILIS scopes web, vision, goals, and permission escalation to the active r
                 explicitPersistentGoal: true
             }
         });
-        assert.equal(persistent.some((tool) => tool.name === 'task_goal'), true);
+        assert.equal(expandedCodeModeToolSpecs(persistent).some((tool) => tool.name === 'task_goal'), true);
 
         const permissionFailure = [{
             tool: 'exec_command',
@@ -1068,27 +1093,28 @@ test('AILIS tool_search returns strict direct MCP specs and native preflight blo
             }
         }]
     });
-    assert.ok(nextSpecs.some((tool) => tool.name === 'mcp__ailis_research__web_search'));
-    assert.ok(nextSpecs.some((tool) => tool.name === 'mcp__ailis_research__web_fetch'));
+    const expandedNextSpecs = expandedCodeModeToolSpecs(nextSpecs);
+    assert.ok(expandedNextSpecs.some((tool) => tool.name === 'mcp__ailis_research__web_search'));
+    assert.ok(expandedNextSpecs.some((tool) => tool.name === 'mcp__ailis_research__web_fetch'));
 
     const invalidWebSearch = validateNativeDirectToolCall({
         name: 'mcp__ailis_research__web_search',
         arguments: {}
-    }, nextSpecs);
+    }, expandedNextSpecs);
     assert.equal(invalidWebSearch.ok, false);
     assert.match(invalidWebSearch.errors.join('\n'), /query is required|empty arguments/);
 
     const invalidWebFetch = validateNativeDirectToolCall({
         name: 'mcp__ailis_research__web_fetch',
         arguments: {}
-    }, nextSpecs);
+    }, expandedNextSpecs);
     assert.equal(invalidWebFetch.ok, false);
     assert.match(invalidWebFetch.errors.join('\n'), /url is required|empty arguments/);
 
     const invalidDescribeImage = validateNativeDirectToolCall({
         name: 'mcp__ailis_research__describe_image',
         arguments: {}
-    }, nextSpecs);
+    }, expandedNextSpecs);
     assert.equal(invalidDescribeImage.ok, false);
     assert.match(invalidDescribeImage.errors.join('\n'), /path is required|empty arguments/);
 
@@ -1114,13 +1140,14 @@ test('AILIS tool_search returns strict direct MCP specs and native preflight blo
             }
         }]
     });
-    assert.equal(nextSpecsAfterVisionFailure.some((tool) => tool.name === 'mcp__ailis_research__describe_image'), false);
-    assert.ok(nextSpecsAfterVisionFailure.some((tool) => tool.name === 'mcp__ailis_research__web_fetch'));
+    const expandedAfterVisionFailure = expandedCodeModeToolSpecs(nextSpecsAfterVisionFailure);
+    assert.equal(expandedAfterVisionFailure.some((tool) => tool.name === 'mcp__ailis_research__describe_image'), false);
+    assert.ok(expandedAfterVisionFailure.some((tool) => tool.name === 'mcp__ailis_research__web_fetch'));
 
     const valid = validateNativeDirectToolCall({
         name: 'mcp__ailis_research__web_search',
         arguments: { query: 'Kaggle AI defense competition strategy', maxResults: 5 }
-    }, nextSpecs);
+    }, expandedNextSpecs);
     assert.equal(valid.ok, true, valid.errors.join('; '));
 });
 

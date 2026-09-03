@@ -78,6 +78,14 @@ test('AILIS tool contracts expose versioned schemas and validate common failures
     assert.equal(badRead.status, 'invalid_tool_args');
     assert.ok(badRead.errors.some((error) => error.includes('path')));
 
+    const validCodeModeExec = validateToolContract('exec', { input: 'text("ok")' });
+    assert.equal(validCodeModeExec.ok, true);
+    const validLegacyExec = validateToolContract('exec', { command: 'node --version' });
+    assert.equal(validLegacyExec.ok, true);
+    assert.equal(validateToolContract('exec', {}).ok, false);
+    assert.equal(validateToolContract('exec', { input: 'text("ok")', command: 'node --version' }).ok, false);
+    assert.equal(validateToolContract('exec_wait', { cell_id: 'cell-1' }).ok, true);
+
     const badEmail = validateToolContract('email', { action: 'check_new' });
     assert.equal(badEmail.ok, false);
     assert.ok(badEmail.errors.some((error) => error.includes('one of')));

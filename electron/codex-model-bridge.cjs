@@ -18,6 +18,7 @@ const CODEX_BRIDGE_PROTOCOL_VERSION = 2;
 const CODEX_HTTP_MODEL_PROVIDER = 'ailis-chatgpt-http';
 const CODEX_CHATGPT_BACKEND_URL = 'https://chatgpt.com/backend-api/codex';
 const CODEX_RESPONSES_PATH = '/backend-api/codex/responses';
+const CODEX_RESPONSES_COMPACT_PATH = `${CODEX_RESPONSES_PATH}/compact`;
 const CODEX_RESPONSES_MAX_BYTES = 64 * 1024 * 1024;
 const CODEX_APP_SERVER_BASE_INSTRUCTIONS = [
     'You are a stateless language-model backend for the AILIS agent harness.',
@@ -40,6 +41,9 @@ const CODEX_ENTRYPOINT_RELATIVE_PATH = path.join(
 const MAX_CODEX_BRIDGE_IMAGES = 8;
 const MAX_CODEX_BRIDGE_IMAGE_BYTES = 20 * 1024 * 1024;
 const MAX_CODEX_BRIDGE_TOTAL_IMAGE_BYTES = 40 * 1024 * 1024;
+const MAX_CODEX_TURN_STATE_ENTRIES = 256;
+const codexTurnStateByPromptCacheKey = new Map();
+let codexProtocolAuditSequence = 0;
 
 function normalizeText(value, fallback = '') {
     if (typeof value !== 'string') {
@@ -63,6 +67,7 @@ function normalizeToolSpec(tool = {}) {
         name,
         description: normalizeText(source?.description || tool?.description),
         parameters,
+        ...(source?.format || tool?.format ? { format: JSON.parse(JSON.stringify(source?.format || tool?.format)) } : {}),
         strict: source?.strict === true || tool?.strict === true
     };
 }
@@ -213,7 +218,8 @@ function codexNativeToolSpecs(tools = []) {
             return {
                 type: 'custom',
                 name: tool.name,
-                description: tool.description
+                description: tool.description,
+                ...(tool.format ? { format: tool.format } : {})
             };
         }
         return {
@@ -226,6 +232,66 @@ function codexNativeToolSpecs(tools = []) {
             ...(tool.strict ? { strict: true } : {})
         };
     });
+}
+
+function resolveCodexProtocolAudit(settings = {}, options = {}) {
+    const filePath = normalizeText(
+        options.protocolAuditPath ||
+            settings.codexProtocolAuditPath ||
+            process.env.AILIS_CODEX_PROTOCOL_AUDIT_PATH
+    );
+    if (!filePath) return null;
+    return {
+        filePath: path.resolve(filePath),
+        includeBody: normalizeText(
+            options.protocolAuditMode ||
+                settings.codexProtocolAuditMode ||
+                process.env.AILIS_CODEX_PROTOCOL_AUDIT_MODE,
+            'summary'
+        ).toLowerCase() === 'full'
+    };
+}
+
+function sha256Json(value) {
+    return createHash('sha256').update(JSON.stringify(value)).digest('hex');
+}
+
+function appendCodexProtocolAudit(audit, event = {}) {
+    if (!audit?.filePath) return;
+    try {
+        fs.mkdirSync(path.dirname(audit.filePath), { recursive: true });
+        fs.appendFileSync(audit.filePath, `${JSON.stringify({
+            schema: 'ailis.codex_protocol_audit.v1',
+            timestamp: new Date().toISOString(),
+            ...event
+        })}\n`, 'utf8');
+    } catch {
+        // Diagnostics must never alter or fail model execution.
+    }
+}
+
+function codexProtocolRequestSummary(requestBody = {}, body = '') {
+    const input = Array.isArray(requestBody.input) ? requestBody.input : [];
+    const tools = Array.isArray(requestBody.tools) ? requestBody.tools : [];
+    return {
+        model: normalizeText(requestBody.model),
+        promptCacheKey: normalizeText(requestBody.prompt_cache_key),
+        topLevelKeys: Object.keys(requestBody),
+        bodyBytes: Buffer.byteLength(body),
+        bodySha256: createHash('sha256').update(body).digest('hex'),
+        instructionsBytes: Buffer.byteLength(String(requestBody.instructions || '')),
+        instructionsSha256: createHash('sha256').update(String(requestBody.instructions || '')).digest('hex'),
+        toolCount: tools.length,
+        toolsSha256: sha256Json(tools),
+        inputItemCount: input.length,
+        inputItemHashes: input.map(sha256Json),
+        inputItemTypes: input.map((item) => normalizeText(item?.type)),
+        reasoning: requestBody.reasoning || null,
+        store: requestBody.store === true,
+        stream: requestBody.stream === true,
+        hasPreviousResponseId: Boolean(normalizeText(requestBody.previous_response_id)),
+        clientMetadataKeys: Object.keys(requestBody.client_metadata || {}).sort()
+    };
 }
 
 function codexNativeToolChoice(payload = {}) {
@@ -383,6 +449,71 @@ function stableCodexPromptCacheKey(instructions = '', tools = []) {
     return `ailis-${digest.slice(0, 48)}`;
 }
 
+function stableUuidFromSeed(seed = '') {
+    const hex = createHash('sha256').update(String(seed || '')).digest('hex').slice(0, 32).split('');
+    hex[12] = '5';
+    hex[16] = ['8', '9', 'a', 'b'][parseInt(hex[16], 16) % 4];
+    const value = hex.join('');
+    return `${value.slice(0, 8)}-${value.slice(8, 12)}-${value.slice(12, 16)}-${value.slice(16, 20)}-${value.slice(20)}`;
+}
+
+function buildCodexClientMetadata(settings = {}, promptCacheKey = '', supplied = {}) {
+    const installationSeed = normalizeText(
+        settings.codexInstallationId ||
+            process.env.CODEX_INSTALLATION_ID ||
+            settings.codexHome ||
+            process.env.CODEX_HOME ||
+            os.homedir(),
+        'ailis-codex-installation'
+    );
+    const suppliedMetadata = supplied && typeof supplied === 'object' && !Array.isArray(supplied)
+        ? supplied
+        : {};
+    const conversationId = normalizeText(
+        suppliedMetadata.session_id || suppliedMetadata.thread_id,
+        stableUuidFromSeed(`conversation\0${promptCacheKey}`)
+    );
+    return {
+        ...suppliedMetadata,
+        session_id: conversationId,
+        thread_id: normalizeText(suppliedMetadata.thread_id, conversationId),
+        'x-codex-installation-id': normalizeText(
+            suppliedMetadata['x-codex-installation-id'],
+            stableUuidFromSeed(`installation\0${installationSeed}`)
+        ),
+        'x-codex-window-id': normalizeText(
+            suppliedMetadata['x-codex-window-id'],
+            stableUuidFromSeed(`window\0${promptCacheKey}`)
+        )
+    };
+}
+
+function getCodexTurnState(promptCacheKey = '') {
+    const key = normalizeText(promptCacheKey);
+    if (!key || !codexTurnStateByPromptCacheKey.has(key)) return '';
+    const state = codexTurnStateByPromptCacheKey.get(key);
+    codexTurnStateByPromptCacheKey.delete(key);
+    codexTurnStateByPromptCacheKey.set(key, state);
+    return state;
+}
+
+function setCodexTurnState(promptCacheKey = '', state = '') {
+    const key = normalizeText(promptCacheKey);
+    const value = normalizeText(Array.isArray(state) ? state[0] : state);
+    if (!key || !value) return;
+    codexTurnStateByPromptCacheKey.delete(key);
+    codexTurnStateByPromptCacheKey.set(key, value);
+    while (codexTurnStateByPromptCacheKey.size > MAX_CODEX_TURN_STATE_ENTRIES) {
+        codexTurnStateByPromptCacheKey.delete(codexTurnStateByPromptCacheKey.keys().next().value);
+    }
+}
+
+function clearCodexTurnState(promptCacheKey = '') {
+    const key = normalizeText(promptCacheKey);
+    if (key) codexTurnStateByPromptCacheKey.delete(key);
+    else codexTurnStateByPromptCacheKey.clear();
+}
+
 function buildCodexResponsesRequest(settings = {}, payload = {}, messages = []) {
     const tools = codexNativeToolSpecs(payload.tools);
     const directInput = Array.isArray(payload.input)
@@ -402,6 +533,10 @@ function buildCodexResponsesRequest(settings = {}, payload = {}, messages = []) 
             process.env.AILIS_CODEX_REASONING_EFFORT,
         DEFAULT_CODEX_REASONING_EFFORT
     ).toLowerCase();
+    const promptCacheKey = normalizeText(
+        payload.prompt_cache_key || payload.promptCacheKey,
+        stableCodexPromptCacheKey(converted.instructions, payload.tools)
+    );
     const request = {
         model: normalizeText(settings.model, DEFAULT_CODEX_MODEL),
         instructions: converted.instructions,
@@ -416,9 +551,11 @@ function buildCodexResponsesRequest(settings = {}, payload = {}, messages = []) 
         store: false,
         stream: true,
         include: ['reasoning.encrypted_content'],
-        prompt_cache_key: normalizeText(
-            payload.prompt_cache_key || payload.promptCacheKey,
-            stableCodexPromptCacheKey(converted.instructions, payload.tools)
+        prompt_cache_key: promptCacheKey,
+        client_metadata: buildCodexClientMetadata(
+            settings,
+            promptCacheKey,
+            payload.client_metadata || payload.clientMetadata
         )
     };
     const maxOutputTokens = Number(
@@ -431,6 +568,61 @@ function buildCodexResponsesRequest(settings = {}, payload = {}, messages = []) 
         request.max_output_tokens = Math.max(1, Math.min(128000, Math.trunc(maxOutputTokens)));
     }
     return request;
+}
+
+function buildCodexCompactionRequest(settings = {}, payload = {}) {
+    const inferenceRequest = buildCodexResponsesRequest(settings, payload);
+    return {
+        model: inferenceRequest.model,
+        input: inferenceRequest.input,
+        instructions: inferenceRequest.instructions,
+        tools: inferenceRequest.tools,
+        parallel_tool_calls: inferenceRequest.parallel_tool_calls,
+        reasoning: inferenceRequest.reasoning,
+        ...(inferenceRequest.service_tier ? { service_tier: inferenceRequest.service_tier } : {}),
+        prompt_cache_key: inferenceRequest.prompt_cache_key,
+        ...(inferenceRequest.text ? { text: inferenceRequest.text } : {})
+    };
+}
+
+function buildCodexV2CompactionRequest(settings = {}, payload = {}) {
+    return buildCodexResponsesRequest(settings, {
+        ...payload,
+        input: [
+            ...(Array.isArray(payload.input) ? payload.input : []),
+            { type: 'compaction_trigger' }
+        ]
+    });
+}
+
+function retainedCodexV2CompactionMessages(items = [], maxApproxTokens = 64000) {
+    let remainingChars = Math.max(0, Number(maxApproxTokens) || 64000) * 4;
+    const retainedReversed = [];
+    const candidates = (Array.isArray(items) ? items : []).filter((item) => (
+        item?.type === 'message' && ['user', 'developer', 'system'].includes(normalizeText(item.role).toLowerCase())
+    ));
+    for (const sourceItem of [...candidates].reverse()) {
+        if (remainingChars <= 0) break;
+        const item = JSON.parse(JSON.stringify(sourceItem));
+        const nextContent = [];
+        for (const sourcePart of Array.isArray(item.content) ? item.content : []) {
+            const part = { ...sourcePart };
+            if (['input_text', 'output_text'].includes(part.type)) {
+                const text = String(part.text || '');
+                if (!text || remainingChars <= 0) continue;
+                part.text = text.slice(0, remainingChars);
+                remainingChars -= part.text.length;
+                if (part.text) nextContent.push(part);
+            } else if (part.type === 'input_image') {
+                nextContent.push(part);
+            }
+        }
+        if (nextContent.length) {
+            item.content = nextContent;
+            retainedReversed.push(item);
+        }
+    }
+    return retainedReversed.reverse();
 }
 
 function imageMimeTypeForPath(filePath = '') {
@@ -555,7 +747,7 @@ function codexResponsesOutputText(items = []) {
 
 function codexResponsesCanonicalItems(items = []) {
     return (Array.isArray(items) ? items : [])
-        .filter((item) => ['reasoning', 'message', 'function_call', 'custom_tool_call'].includes(item?.type))
+        .filter((item) => ['reasoning', 'message', 'function_call', 'custom_tool_call', 'compaction'].includes(item?.type))
         .map((item) => JSON.parse(JSON.stringify(item)));
 }
 
@@ -1247,9 +1439,21 @@ function runCodexResponsesInference(settings = {}, auth = {}, requestBody = {}, 
     timeoutMs = 120000,
     signal = null,
     createAgent = createCodexResponsesAgent,
-    requestImpl = https.request
+    requestImpl = https.request,
+    protocolAuditPath = '',
+    protocolAuditMode = '',
+    requestPath = CODEX_RESPONSES_PATH,
+    responseMode = 'sse',
+    clientMetadata = null,
+    reuseTurnState = true,
+    extraHeaders = null
 } = {}) {
     const effectiveTimeoutMs = Math.max(1, Number(timeoutMs) || 120000);
+    const protocolAudit = resolveCodexProtocolAudit(settings, { protocolAuditPath, protocolAuditMode });
+    const protocolAuditId = protocolAudit
+        ? `request-${process.pid}-${Date.now()}-${++codexProtocolAuditSequence}`
+        : '';
+    let protocolAuditStarted = false;
     return new Promise((resolve) => {
         let agentInfo = null;
         let settled = false;
@@ -1260,6 +1464,20 @@ function runCodexResponsesInference(settings = {}, auth = {}, requestBody = {}, 
                 return;
             }
             settled = true;
+            if (protocolAuditStarted) {
+                appendCodexProtocolAudit(protocolAudit, {
+                    event: 'response',
+                    requestId: protocolAuditId,
+                    ok: result?.ok === true,
+                    code: normalizeText(result?.code),
+                    status: Number(result?.status) || (result?.ok ? 200 : 0),
+                    error: normalizeText(result?.error),
+                    responseId: normalizeText(result?.responseId),
+                    usage: result?.usage || null,
+                    turnStateReused: result?.turnStateReused === true,
+                    turnStateReceived: result?.turnStateReceived === true
+                });
+            }
             clearTimeout(hardTimeout);
             if (typeof signal?.removeEventListener === 'function') {
                 signal.removeEventListener('abort', onAbort);
@@ -1314,22 +1532,64 @@ function runCodexResponsesInference(settings = {}, auth = {}, requestBody = {}, 
             }
             const body = JSON.stringify(requestBody);
             const endpoint = new URL(CODEX_CHATGPT_BACKEND_URL);
+            const promptCacheKey = normalizeText(requestBody.prompt_cache_key);
+            const requestClientMetadata = clientMetadata && typeof clientMetadata === 'object'
+                ? clientMetadata
+                : requestBody.client_metadata;
+            const priorTurnState = reuseTurnState ? getCodexTurnState(promptCacheKey) : '';
+            const sessionId = normalizeText(requestClientMetadata?.session_id);
+            const threadId = normalizeText(requestClientMetadata?.thread_id, sessionId);
+            const installationId = normalizeText(requestClientMetadata?.['x-codex-installation-id']);
+            const windowId = normalizeText(requestClientMetadata?.['x-codex-window-id']);
+            if (protocolAudit) {
+                protocolAuditStarted = true;
+                appendCodexProtocolAudit(protocolAudit, {
+                    event: 'request',
+                    requestId: protocolAuditId,
+                    endpoint: `${endpoint.origin}${requestPath}`,
+                    method: 'POST',
+                    ...codexProtocolRequestSummary(requestBody, body),
+                    turnStateSent: Boolean(priorTurnState),
+                    turnStateSha256: priorTurnState
+                        ? createHash('sha256').update(priorTurnState).digest('hex')
+                        : '',
+                    sessionHeaderSent: Boolean(sessionId),
+                    threadHeaderSent: Boolean(threadId),
+                    sessionHeaderSha256: sessionId
+                        ? createHash('sha256').update(sessionId).digest('hex')
+                        : '',
+                    threadHeaderSha256: threadId
+                        ? createHash('sha256').update(threadId).digest('hex')
+                        : '',
+                    ...(protocolAudit.includeBody ? { requestBody } : {})
+                });
+            }
             clientRequest = requestImpl({
                 host: endpoint.hostname,
                 port: 443,
-                path: CODEX_RESPONSES_PATH,
+                path: requestPath,
                 method: 'POST',
                 agent: agentInfo.agent,
                 headers: {
                     Authorization: `Bearer ${auth.accessToken}`,
                     'ChatGPT-Account-Id': auth.accountId,
                     'Content-Type': 'application/json',
-                    Accept: 'text/event-stream',
+                    Accept: responseMode === 'json' ? 'application/json' : 'text/event-stream',
                     'User-Agent': 'codex_cli_rs/ailis-model-bridge',
                     'x-client-request-id': randomUUID(),
+                    ...(installationId ? { 'x-codex-installation-id': installationId } : {}),
+                    ...(windowId ? { 'x-codex-window-id': windowId } : {}),
+                    ...(sessionId ? { 'session-id': sessionId } : {}),
+                    ...(threadId ? { 'thread-id': threadId } : {}),
+                    ...(priorTurnState ? { 'x-codex-turn-state': priorTurnState } : {}),
+                    ...(extraHeaders && typeof extraHeaders === 'object' ? extraHeaders : {}),
                     'Content-Length': Buffer.byteLength(body)
                 }
             }, (response) => {
+                const returnedTurnState = response.headers?.['x-codex-turn-state'];
+                if (Number(response.statusCode) >= 200 && Number(response.statusCode) < 300) {
+                    setCodexTurnState(promptCacheKey, returnedTurnState);
+                }
                 let raw = '';
                 response.setEncoding('utf8');
                 response.on('data', (chunk) => {
@@ -1362,7 +1622,28 @@ function runCodexResponsesInference(settings = {}, auth = {}, requestBody = {}, 
                         });
                         return;
                     }
-                    const parsed = parseCodexResponsesSse(raw);
+                    let parsed;
+                    if (responseMode === 'json' && !/^\s*(?:data:|event:)/.test(raw)) {
+                        try {
+                            const data = JSON.parse(raw);
+                            parsed = {
+                                events: [],
+                                outputItems: Array.isArray(data?.output) ? data.output : [],
+                                usage: data?.usage || null,
+                                responseId: normalizeText(data?.id),
+                                failure: data?.error || null
+                            };
+                        } catch (error) {
+                            finish({
+                                ok: false,
+                                code: 'invalid_codex_compaction_response',
+                                error: `Codex compaction returned invalid JSON: ${error.message}`
+                            });
+                            return;
+                        }
+                    } else {
+                        parsed = parseCodexResponsesSse(raw);
+                    }
                     if (parsed.failure) {
                         finish({
                             ok: false,
@@ -1377,7 +1658,10 @@ function runCodexResponsesInference(settings = {}, auth = {}, requestBody = {}, 
                     }
                     finish({
                         ok: true,
-                        ...parsed
+                        ...parsed,
+                        promptCacheKey,
+                        turnStateReused: Boolean(priorTurnState),
+                        turnStateReceived: Boolean(normalizeText(Array.isArray(returnedTurnState) ? returnedTurnState[0] : returnedTurnState))
                     });
                 });
             });
@@ -2090,8 +2374,123 @@ async function callCodexModelBridgeOnce(settings = {}, payload = {}, messages = 
             parallelToolCalls: requestBody.parallel_tool_calls === true,
             reasoningEffort: requestBody.reasoning?.effort || '',
             promptCacheKey: requestBody.prompt_cache_key,
+            turnStateReused: processResult.turnStateReused === true,
+            turnStateReceived: processResult.turnStateReceived === true,
             proxyUsed: processResult.proxyUsed === true,
             finishReason: toolCalls.length ? 'tool_calls' : 'stop'
+        }
+    };
+}
+
+async function compactCodexModelBridge(settings = {}, payload = {}) {
+    if (!Array.isArray(payload.input) || !payload.input.length) {
+        return { ok: false, code: 'empty_compaction_input', error: 'AILIS compaction input is empty.' };
+    }
+    const auth = await resolveCodexAuthSnapshot(settings);
+    if (!auth.ok) {
+        return auth;
+    }
+    const timeoutMs = Math.max(5000, Number(payload.timeoutMs ?? settings.timeoutMs) || 120000);
+    let v2RequestBody;
+    try {
+        v2RequestBody = await materializeCodexResponsesImages(
+            buildCodexV2CompactionRequest(settings, payload)
+        );
+    } catch (error) {
+        return {
+            ok: false,
+            code: 'invalid_codex_compaction_input',
+            error: error?.message || String(error)
+        };
+    }
+    const clientMetadata = buildCodexClientMetadata(
+        settings,
+        v2RequestBody.prompt_cache_key,
+        payload.client_metadata || payload.clientMetadata
+    );
+    let result = await runCodexResponsesInference(settings, auth, v2RequestBody, {
+        timeoutMs,
+        signal: payload.abortSignal || payload.signal || null,
+        clientMetadata,
+        extraHeaders: {
+            originator: 'codex_cli_rs',
+            'x-codex-beta-features': 'remote_compaction_v2'
+        }
+    });
+    let transport = 'responses_compaction_trigger';
+    let primaryFailure = null;
+    if (!result.ok) {
+        primaryFailure = {
+            code: result.code || 'codex_compaction_trigger_failed',
+            status: Number(result.status) || 0,
+            error: result.error || ''
+        };
+        let v1RequestBody;
+        try {
+            v1RequestBody = await materializeCodexResponsesImages(
+                buildCodexCompactionRequest(settings, payload)
+            );
+        } catch (error) {
+            return result;
+        }
+        result = await runCodexResponsesInference(settings, auth, v1RequestBody, {
+            timeoutMs,
+            signal: payload.abortSignal || payload.signal || null,
+            requestPath: CODEX_RESPONSES_COMPACT_PATH,
+            responseMode: 'json',
+            clientMetadata,
+            reuseTurnState: false,
+            extraHeaders: { originator: 'codex_cli_rs' }
+        });
+        transport = 'responses_compact';
+    }
+    if (!result.ok) {
+        return primaryFailure
+            ? {
+                  ok: false,
+                  code: primaryFailure.code,
+                  status: primaryFailure.status,
+                  error: primaryFailure.error,
+                  fallbackFailure: {
+                      code: result.code || 'codex_responses_compact_failed',
+                      status: Number(result.status) || 0,
+                      error: result.error || ''
+                  }
+              }
+            : result;
+    }
+    const canonicalOutputItems = codexResponsesCanonicalItems(result.outputItems);
+    const compactionItems = canonicalOutputItems.filter((item) => (
+        item?.type === 'compaction' && normalizeText(item.encrypted_content)
+    ));
+    if (compactionItems.length !== 1) {
+        return {
+            ok: false,
+            code: 'missing_codex_compaction_item',
+            error: `Codex compaction expected exactly one encrypted compaction item, received ${compactionItems.length}.`
+        };
+    }
+    const outputItems = transport === 'responses_compaction_trigger'
+        ? [
+              ...retainedCodexV2CompactionMessages(payload.input),
+              compactionItems[0]
+          ]
+        : canonicalOutputItems;
+    return {
+        ok: true,
+        provider: CODEX_MODEL_BRIDGE_PROVIDER,
+        model: v2RequestBody.model,
+        outputItems,
+        usage: normalizeCodexUsage(result.usage),
+        responseId: result.responseId,
+        providerMessage: {
+            bridge: 'codex_responses_compact',
+            protocolVersion: CODEX_BRIDGE_PROTOCOL_VERSION,
+            transport,
+            promptCacheKey: v2RequestBody.prompt_cache_key,
+            turnStateReused: result.turnStateReused === true,
+            turnStateReceived: result.turnStateReceived === true,
+            proxyUsed: result.proxyUsed === true
         }
     };
 }
@@ -2202,18 +2601,23 @@ module.exports = {
     CODEX_MODEL_BRIDGE_PROVIDER,
     DEFAULT_CODEX_MODEL,
     DEFAULT_CODEX_REASONING_EFFORT,
+    buildCodexCompactionRequest,
+    buildCodexV2CompactionRequest,
     buildCodexBridgeDecisionSchema,
     buildCodexBridgePrompt,
     buildCodexBridgeTurnInput,
+    buildCodexClientMetadata,
     buildCodexResponsesRequest,
     buildProcessTreeTerminationPlan,
     callCodexModelBridge,
+    compactCodexModelBridge,
     callCodexAppServerBridgeOnce,
     codexNativeToolSpecs,
     codexResponsesInputItems,
     codexResponsesCanonicalItems,
     codexResponsesOutputText,
     collectCodexBridgeImageInputs,
+    clearCodexTurnState,
     materializeCodexResponsesImages,
     normalizeBridgeToolCalls,
     normalizeCodexUsage,
@@ -2226,5 +2630,7 @@ module.exports = {
     resolveCodexBridgeRetryDelayMs,
     resolveCodexEntrypoint,
     resolveCodexProxyUrl,
+    retainedCodexV2CompactionMessages,
+    stableUuidFromSeed,
     shouldRetryCodexBridgeFailure
 };

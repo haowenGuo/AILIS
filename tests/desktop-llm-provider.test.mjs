@@ -9,9 +9,11 @@ const {
     buildChatCompletionsUrl,
     buildGeminiGenerateContentUrl,
     buildOllamaChatUrl,
+    buildResponsesCompactUrl,
     buildResponsesUrl,
     callDesktopLlmProvider,
     classifyFetchFailure,
+    compactDesktopLlmProvider,
     checkDesktopLlmProvider,
     getDefaultProviderBaseUrl,
     getProviderCapabilities
@@ -89,8 +91,49 @@ describe('desktop LLM provider', () => {
             response.writeHead(200, {
                 'content-type': 'application/json'
             });
+            const portableCompactionRequest = JSON.stringify(parsedBody)
+                .includes('<ailis_semantic_compaction_request>');
+            const portableCompactionMemory = [
+                '<ailis_semantic_task_memory>',
+                '## Objective',
+                'Continue the original long-running task without repeating completed work.',
+                '## Current state',
+                'The first verified step is complete and one final verification remains.',
+                '## Completed work and evidence',
+                'The repository was inspected and the relevant source file was identified.',
+                '## Remaining work',
+                'Apply the pending change, run the focused test, and report the verified result.',
+                '## Exact continuation point',
+                'Open the identified source file and make the smallest safe edit.',
+                '</ailis_semantic_task_memory>'
+            ].join('\n');
+
+            if (request.url === '/v1/responses/compact') {
+                response.end(JSON.stringify({
+                    id: 'cmp-response-1',
+                    object: 'response.compaction',
+                    output: [
+                        ...parsedBody.input.filter((item) => item.type === 'message'),
+                        {
+                            id: 'cmp-item-1',
+                            type: 'compaction',
+                            encrypted_content: 'opaque-semantic-memory'
+                        }
+                    ],
+                    usage: { input_tokens: 120, output_tokens: 15, total_tokens: 135 }
+                }));
+                return;
+            }
 
             if (request.url === '/v1/responses') {
+                if (portableCompactionRequest) {
+                    response.end(JSON.stringify({
+                        id: 'portable-response-1',
+                        output_text: portableCompactionMemory,
+                        usage: { input_tokens: 120, output_tokens: 60, total_tokens: 180 }
+                    }));
+                    return;
+                }
                 if (Array.isArray(parsedBody.tools) && parsedBody.tools.length) {
                     response.end(JSON.stringify({
                         output: [
@@ -113,6 +156,13 @@ describe('desktop LLM provider', () => {
             }
 
             if (request.url === '/v1/messages') {
+                if (portableCompactionRequest) {
+                    response.end(JSON.stringify({
+                        content: [{ type: 'text', text: portableCompactionMemory }],
+                        usage: { input_tokens: 120, output_tokens: 60 }
+                    }));
+                    return;
+                }
                 if (Array.isArray(parsedBody.tools) && parsedBody.tools.length) {
                     response.end(JSON.stringify({
                         content: [
@@ -140,6 +190,13 @@ describe('desktop LLM provider', () => {
             }
 
             if (request.url.startsWith('/v1beta/models/gemini-demo:generateContent')) {
+                if (portableCompactionRequest) {
+                    response.end(JSON.stringify({
+                        candidates: [{ content: { parts: [{ text: portableCompactionMemory }] } }],
+                        usageMetadata: { promptTokenCount: 120, candidatesTokenCount: 60, totalTokenCount: 180 }
+                    }));
+                    return;
+                }
                 if (Array.isArray(parsedBody.tools) && parsedBody.tools.length) {
                     response.end(JSON.stringify({
                         candidates: [
@@ -183,13 +240,23 @@ describe('desktop LLM provider', () => {
                 response.end(JSON.stringify({
                     message: {
                         role: 'assistant',
-                        content: parsedBody.format === 'json'
+                        content: portableCompactionRequest
+                            ? portableCompactionMemory
+                            : parsedBody.format === 'json'
                             ? '{"ok":true,"kind":"json"}'
                             : '本地 Ollama OK'
                     },
                     prompt_eval_count: 3,
                     eval_count: 4,
                     done: true
+                }));
+                return;
+            }
+
+            if (portableCompactionRequest) {
+                response.end(JSON.stringify({
+                    choices: [{ message: { content: portableCompactionMemory } }],
+                    usage: { prompt_tokens: 120, completion_tokens: 60, total_tokens: 180 }
                 }));
                 return;
             }
@@ -804,6 +871,131 @@ describe('desktop LLM provider', () => {
         assert.equal(receivedRequest.authorization, 'Bearer openai-test-key');
         assert.equal(receivedRequest.body.instructions, 'system');
         assert.equal(result.toolCalls[0].name, 'demo_tool');
+    });
+
+    it('uses portable semantic compaction by default while preserving the original request prefix', async () => {
+        const originalInput = [
+            {
+                type: 'message',
+                role: 'user',
+                content: [{ type: 'input_text', text: 'Long-running task.' }]
+            },
+            {
+                type: 'function_call',
+                call_id: 'call-compact-1',
+                name: 'demo_tool',
+                arguments: '{"path":"source.txt"}'
+            },
+            {
+                type: 'function_call_output',
+                call_id: 'call-compact-1',
+                output: 'source inspected'
+            }
+        ];
+        const result = await compactDesktopLlmProvider({
+            provider: 'openai-responses',
+            baseUrl: `${serverUrl}/v1`,
+            apiKey: 'openai-test-key',
+            model: 'gpt-demo',
+            timeoutMs: 5000
+        }, {
+            instructions: 'stable instructions',
+            prompt_cache_key: 'portable-compact-test',
+            tools: [{ name: 'demo_tool', description: 'demo', parameters: { type: 'object' } }],
+            input: originalInput
+        });
+
+        assert.equal(result.ok, true);
+        assert.equal(receivedRequest.url, '/v1/responses');
+        assert.equal(receivedRequest.body.instructions, 'stable instructions');
+        assert.equal(receivedRequest.body.prompt_cache_key, 'portable-compact-test');
+        assert.equal(receivedRequest.body.tool_choice, 'none');
+        assert.equal(receivedRequest.body.input.length, originalInput.length + 1);
+        assert.deepEqual(receivedRequest.body.input.slice(0, originalInput.length), originalInput);
+        assert.match(JSON.stringify(receivedRequest.body.input.at(-1)), /ailis_semantic_compaction_request/);
+        assert.equal(result.providerMessage.transport, 'portable_semantic_summary');
+        assert.equal(result.providerMessage.opaque, false);
+        assert.equal(result.outputItems[0].role, 'developer');
+        assert.match(JSON.stringify(result.outputItems[0]), /ailis_semantic_task_memory/);
+        assert.deepEqual(result.outputItems.at(-1), originalInput[0]);
+    });
+
+    it('runs the same portable semantic compaction flow through DeepSeek chat completions', async () => {
+        const result = await compactDesktopLlmProvider({
+            provider: 'deepseek',
+            baseUrl: `${serverUrl}/v1`,
+            apiKey: 'deepseek-test-key',
+            model: 'deepseek-chat',
+            timeoutMs: 5000
+        }, {
+            instructions: 'stable task instructions',
+            tools: [{ name: 'demo_tool', description: 'demo', parameters: { type: 'object' } }],
+            input: [
+                {
+                    type: 'message',
+                    role: 'user',
+                    content: [{ type: 'input_text', text: 'Keep this exact current request.' }]
+                },
+                {
+                    type: 'function_call',
+                    call_id: 'call-ds-compact-1',
+                    name: 'demo_tool',
+                    arguments: '{"path":"source.txt"}'
+                },
+                {
+                    type: 'function_call_output',
+                    call_id: 'call-ds-compact-1',
+                    output: 'source inspected'
+                }
+            ]
+        });
+
+        assert.equal(result.ok, true);
+        assert.equal(receivedRequest.url, '/v1/chat/completions');
+        assert.equal(receivedRequest.body.tool_choice, 'none');
+        assert.deepEqual(receivedRequest.body.messages.slice(0, 4).map((message) => message.role), [
+            'system',
+            'user',
+            'assistant',
+            'tool'
+        ]);
+        assert.match(receivedRequest.body.messages.at(-1).content, /ailis_semantic_compaction_request/);
+        assert.equal(result.providerMessage.transport, 'portable_semantic_summary');
+        assert.match(JSON.stringify(result.outputItems[0]), /Apply the pending change/);
+        assert.match(JSON.stringify(result.outputItems.at(-1)), /Keep this exact current request/);
+    });
+
+    it('can explicitly request OpenAI native opaque compaction as an optional optimization', async () => {
+        assert.equal(buildResponsesCompactUrl(`${serverUrl}/v1`), `${serverUrl}/v1/responses/compact`);
+        assert.equal(buildResponsesCompactUrl(`${serverUrl}/v1/responses`), `${serverUrl}/v1/responses/compact`);
+        const result = await compactDesktopLlmProvider({
+            provider: 'openai-responses',
+            baseUrl: `${serverUrl}/v1`,
+            apiKey: 'openai-test-key',
+            model: 'gpt-demo',
+            timeoutMs: 5000
+        }, {
+            compactionMode: 'native',
+            instructions: 'stable instructions',
+            prompt_cache_key: 'semantic-compact-test',
+            input: [
+                {
+                    type: 'message',
+                    role: 'user',
+                    content: [{ type: 'input_text', text: 'Long-running task.' }]
+                }
+            ]
+        });
+
+        assert.equal(result.ok, true);
+        assert.equal(receivedRequest.url, '/v1/responses/compact');
+        assert.equal(receivedRequest.authorization, 'Bearer openai-test-key');
+        assert.equal(receivedRequest.body.instructions, 'stable instructions');
+        assert.equal(receivedRequest.body.prompt_cache_key, 'semantic-compact-test');
+        assert.deepEqual(receivedRequest.body.tools, []);
+        assert.equal(receivedRequest.body.parallel_tool_calls, true);
+        assert.equal(result.outputItems.at(-1).type, 'compaction');
+        assert.equal(result.outputItems.at(-1).encrypted_content, 'opaque-semantic-memory');
     });
 
     it('supports Anthropic adapter request and tool-use extraction', async () => {
