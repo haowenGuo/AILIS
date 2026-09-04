@@ -121,7 +121,9 @@ test('AILIS Gateway exposes Codex-style exec continuation and workspace-safe abs
         assert.equal(rejected.ok, false);
         assert.match(rejected.error, /inside workspace/i);
     } finally {
-        await fs.rm(workspaceRoot, { recursive: true, force: true });
+        await gateway.stop();
+        // Windows may release child-process working-directory handles late.
+        await fs.rm(workspaceRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
     }
 });
 
@@ -186,7 +188,8 @@ test('AILIS Gateway executes code-mode nested tools through the ordinary governe
         assert.equal(legacyWithoutApproval.ok, false);
         assert.match(legacyWithoutApproval.error, /approval/i);
     } finally {
-        await fs.rm(workspaceRoot, { recursive: true, force: true });
+        await gateway.stop();
+        await fs.rm(workspaceRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
     }
 });
 

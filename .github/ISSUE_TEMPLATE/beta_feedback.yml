@@ -1,5 +1,5 @@
 name: AILIS beta feedback
-description: Report a real desktop workflow from the v1.4.0 beta
+description: Report a real desktop workflow from the current AILIS build
 title: "[Beta]: "
 labels:
   - beta-feedback
@@ -11,7 +11,7 @@ body:
     id: version
     attributes:
       label: AILIS version
-      placeholder: v1.4.0
+      placeholder: v1.4.1 or commit SHA
     validations:
       required: true
   - type: dropdown

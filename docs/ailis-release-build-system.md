@@ -69,6 +69,7 @@ SHA256SUMS.txt
 The manifest records:
 
 - AILIS version
+- Git source commit and dirty-worktree status (`null` if Git identity is unavailable)
 - profile name
 - output directory
 - runtime components included in the build plan
@@ -102,7 +103,13 @@ does not ship an automatic per-machine updater, while the assisted installer
 still supports the normal Windows elevation flow when a protected destination
 is explicitly selected.
 
-## Rules
+## Public Release Gate
+
+Run the `Release clean-install gate` GitHub Actions workflow on the exact source commit intended for release. It reads the version from `package.json`, runs regression tests, builds the core packages, then checks install, first launch, portable launch, uninstall, and SHA-256 integrity on a fresh Windows runner. Download and publish those successful-run artifacts without rebuilding or mixing local packages. Confirm the manifest source commit matches the release tag and `source.dirty` is false.
+
+`scripts/validate-clean-install.ps1` is for a disposable Windows CI runner, not an everyday desktop: it stops AILIS processes and exercises installation and uninstallation. Never use it against a live user profile. Keep private state, credentials, local backups, and evaluation outputs out of Git commits and Release assets.
+
+## Packaging Rules
 
 - `core` must stay lightweight.
 - Large runtime assets should be built as sidecar packs, not copied into source-controlled project folders.

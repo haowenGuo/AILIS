@@ -1,6 +1,6 @@
 # AILIS Version And Evidence Registry
 
-Last updated: 2026-08-21
+Last updated: 2026-09-04
 
 [Documentation](README.md) · [Evaluation](evaluation.md) · [GitHub Releases](https://github.com/haowenGuo/AILIS/releases)
 
@@ -10,20 +10,21 @@ AILIS tracks product releases, accepted runtime mechanisms, and benchmark runs s
 
 | Field | Current value |
 | --- | --- |
-| Package version | `1.4.0` |
+| Package version | `1.4.1` |
 | Development branch | `main` / `origin/main` |
-| Latest tagged release candidate | `v1.4.0-rc.2` at `df9e962` |
-| Current TaskAgent context mechanism | A7 canonical tool-history retention and late compaction |
+| Release identity | `v1.4.1`; resolve the tag for the immutable release commit |
+| Runtime development source | `07c1e85` plus attachment-context and voice-language compatibility fixes |
+| Current context mechanism | Stable append-only context, explicit context lanes, governed code-mode tools |
 | A7 mainline integration | `8675ef8` |
 | Frozen A7 Terminal-Bench source | `e3c7e7d` |
 
-Commits after the A7 integration include product, release, documentation, and runtime changes. They remain `v1.4.0` product development unless a new named Harness baseline is explicitly promoted through a fixed evaluation gate.
+The `v1.4.1` product release does not promote a new scored Harness baseline. Historical A6/A7 scores remain attached to their original sources. No fixed cache-hit rate or cost reduction is claimed for v1.4.1; see its [release notes](releases/v1.4.1.md).
 
 ## Version Types
 
 | Type | Example | Meaning |
 | --- | --- | --- |
-| Product version | `v1.4.0-rc.2` | A tagged desktop build |
+| Product version | `v1.4.1` | A tagged desktop build |
 | Runtime mechanism | `TaskAgent A7` | An accepted general Harness behavior |
 | Evaluation source | `e3c7e7d` | The immutable source snapshot used by a score |
 | Experiment | `GAIA A6`, `TB A7` | One source, task set, model, tool surface, and protocol |
@@ -44,6 +45,8 @@ The complete protocols, resource metrics, and Codex comparisons are collected in
 
 | Release | Commit | Date |
 | --- | --- | --- |
+| `v1.4.1` | resolve the release tag | 2026-09-04 |
+| `v1.4.0` | `e475163` | 2026-08-21 |
 | `v1.4.0-rc.2` | `df9e962` | 2026-08-17 |
 | `v1.4.0-rc.1` | `45dd6ae` | 2026-08-17 |
 | `v1.3.0` | `0837fd1` | 2026-08-05 |

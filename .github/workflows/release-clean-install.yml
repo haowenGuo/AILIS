@@ -16,6 +16,13 @@ jobs:
       - name: Check out source
         uses: actions/checkout@v4
 
+      - name: Read release version
+        id: release
+        shell: pwsh
+        run: |
+          $version = (Get-Content -Raw package.json | ConvertFrom-Json).version
+          "version=$version" >> $env:GITHUB_OUTPUT
+
       - name: Set up pnpm
         uses: pnpm/action-setup@v4
         with:
@@ -42,7 +49,7 @@ jobs:
 
       - name: Run release tests
         run: >-
-          pnpm exec node --test
+          pnpm exec node --test --test-concurrency=1
           tests/ailis-web-vrm.test.mjs
           tests/ailis-character-runtime.test.mjs
           tests/ailis-persona-renderer.test.mjs
@@ -50,23 +57,46 @@ jobs:
           tests/ailis-runtime.test.mjs
           tests/ailis-gateway.test.mjs
           tests/ailis-agent-execution-flow.test.mjs
+          tests/ailis-agent-runner.test.mjs
+          tests/ailis-code-mode-runtime.test.mjs
+          tests/ailis-persona-context-store.test.mjs
+          tests/ailis-context-budget.test.mjs
+          tests/ailis-context-compiler.test.mjs
+          tests/ailis-context-dedupe-chain.test.mjs
+          tests/ailis-model-input-builder.test.mjs
+          tests/ailis-context-artifact-store.test.mjs
+          tests/ailis-tool-contracts.test.mjs
+          tests/ailis-hosted-runtime.test.mjs
+          tests/desktop-elevenlabs-tts-settings.test.mjs
+          tests/store-language-compat.test.mjs
+          tests/codex-model-bridge.test.mjs
+          tests/ailis-release-manifest.test.mjs
 
       - name: Build release packages
         run: pnpm release:core -- --output-root "${{ github.workspace }}\release"
+
+      - name: Verify release source identity
+        shell: pwsh
+        run: |
+          $version = "${{ steps.release.outputs.version }}"
+          $manifest = Get-Content -Raw "release/core/AILIS-Release-core-$version.json" | ConvertFrom-Json
+          if ($manifest.version -ne $version -or $manifest.source.commit -ne $env:GITHUB_SHA -or $manifest.source.dirty -cne $false) {
+            throw "Release manifest must match this clean source commit and package version."
+          }
 
       - name: Validate clean install, first launch, portable launch, and uninstall
         shell: pwsh
         run: >-
           ./scripts/validate-clean-install.ps1
           -ArtifactRoot "${{ github.workspace }}\release\core"
-          -ExpectedVersion "1.4.0"
+          -ExpectedVersion "${{ steps.release.outputs.version }}"
           -ReportRoot "${{ github.workspace }}\release-smoke"
 
       - name: Upload release packages and clean-install evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ailis-v1.4.0-clean-install-${{ github.sha }}
+          name: ailis-v${{ steps.release.outputs.version }}-clean-install-${{ github.sha }}
           compression-level: 0
           retention-days: 7
           path: |

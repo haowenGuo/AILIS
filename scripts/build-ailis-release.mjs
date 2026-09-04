@@ -2,7 +2,7 @@ import crypto from 'crypto';
 import fs from 'fs';
 import fsp from 'fs/promises';
 import path from 'path';
-import { spawn } from 'child_process';
+import { execFileSync, spawn } from 'child_process';
 import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -12,6 +12,22 @@ const PACKAGE_JSON = JSON.parse(await fsp.readFile(path.join(PROJECT_ROOT, 'pack
 const VERSION = PACKAGE_JSON.version || '0.0.0';
 const PROFILE_PATH = path.join(PROJECT_ROOT, 'installer', 'ailis-release-profiles.json');
 const COMPONENT_MANIFEST_PATH = path.join(PROJECT_ROOT, 'installer', 'ailis-runtime-components.json');
+
+function readSourceIdentity() {
+    try {
+        const git = (args) => execFileSync('git', args, {
+            cwd: PROJECT_ROOT, encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'pipe']
+        }).trim();
+        return {
+            commit: git(['rev-parse', 'HEAD']),
+            dirty: git(['status', '--porcelain', '--untracked-files=normal']).length > 0
+        };
+    } catch {
+        return { commit: null, dirty: null };
+    }
+}
+
+const SOURCE_IDENTITY = readSourceIdentity();
 
 function readOption(args, name, fallback = '') {
     const prefix = `--${name}=`;
@@ -204,6 +220,10 @@ function buildPlanForProfile(profileName, profile, options, componentManifest, o
                 profile.builderConfig || 'electron-builder.yml',
                 '--publish',
                 'never',
+                ...(SOURCE_IDENTITY.commit ? [
+                    `--config.extraMetadata.ailisBuild.sourceCommit=${SOURCE_IDENTITY.commit}`,
+                    `--config.extraMetadata.ailisBuild.sourceDirty=${SOURCE_IDENTITY.dirty}`
+                ] : []),
                 ...(profile.builderTargets || []),
                 `--config.directories.output=${outputDir}`
             ]
@@ -231,6 +251,7 @@ async function writeReleaseManifest(plan, dryRun) {
         product: 'AILIS',
         version: VERSION,
         profile: plan.profileName,
+        source: SOURCE_IDENTITY,
         title: plan.title,
         generatedAt: new Date().toISOString(),
         outputDir: plan.outputDir,

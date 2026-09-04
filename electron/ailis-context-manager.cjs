@@ -100,7 +100,9 @@ function messageText(item = {}) {
 function isRuntimeContextMessage(item = {}) {
     const text = messageText(item);
     return (item?.role === 'developer' && /<memory_context>/i.test(text)) ||
-        (item?.role === 'user' && /"type"\s*:\s*"context"/.test(text));
+        // Current context envelopes use developer; restored older ledgers use user.
+        // Preserve the original envelope and role in either case during compaction.
+        ((item?.role === 'developer' || item?.role === 'user') && /"type"\s*:\s*"context"/.test(text));
 }
 
 function isSessionCheckpointMessage(item = {}) {

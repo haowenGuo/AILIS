@@ -11,7 +11,7 @@
   <a href="evaluation.md">Benchmarks</a>
 </p>
 
-The pages below describe the current `v1.4.0` codebase and the accepted A7 TaskAgent context baseline. Design studies and experiment logs remain in the repository for traceability, but they are not part of the current product documentation.
+The current product is `v1.4.1`, with context and tool-runtime changes built on source `07c1e85`. Start with the [v1.4.1 release notes](releases/v1.4.1.md) for the current changes. A7 documentation and scores describe a historical frozen baseline, not a new evaluation of this release. Design studies and experiment logs remain for traceability.
 
 ## Start Here
 

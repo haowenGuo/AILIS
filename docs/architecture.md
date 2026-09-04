@@ -49,7 +49,7 @@ This separation prevents a completed task from locking future messages to its or
 
 AILIS stores model-visible history as canonical response items: role messages, function calls, function outputs, tool-search events, images, and compacted history items. Old items keep their order and call pairing. Context compaction is budget-driven and occurs near the effective model limit; it is not a separate forced-final-answer prompt.
 
-The accepted A7 baseline retains canonical tool history longer and preserves tool observations that already passed output-boundary controls. See [TaskAgent A7 Context Baseline](ailis-a7-taskagent-context-baseline.md).
+The v1.4.1 runtime builds on stable append-only history, separate Persona context, and governed code-mode tools; attachment envelopes survive fallback compaction. See the [current release notes](releases/v1.4.1.md). The [A7 Context Baseline](ailis-a7-taskagent-context-baseline.md) documents the historical, scored mechanism, not a new evaluation of this release.
 
 ## Model And Local Execution
 

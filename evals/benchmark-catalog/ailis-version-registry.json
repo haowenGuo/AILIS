@@ -1,10 +1,17 @@
 {
   "schema": "ailis.version_registry.v1",
-  "generatedAt": "2026-08-17",
+  "generatedAt": "2026-09-04",
   "repository": {
-    "path": "F:/AILIS/main",
+    "url": "https://github.com/haowenGuo/AILIS",
     "branch": "main",
     "remote": "origin/main"
+  },
+  "currentProduct": {
+    "version": "1.4.1",
+    "tag": "v1.4.1",
+    "runtimeDevelopmentSource": "07c1e85c63f4df964af54a480328dafa8451d3f3",
+    "compatibilityFixes": ["preserve-developer-attachment-context-on-fallback-compaction", "preserve-korean-voice-profile-language"],
+    "claimBoundary": "Product release only; no new scored Harness baseline or guaranteed cache/cost improvement. Resolve the tag and release manifest for the exact build identity."
   },
   "identityPolicy": {
     "productRelease": "SemVer tag for a shipped product. It does not inherit an experiment score.",
@@ -72,7 +79,9 @@
     { "tag": "v1.0.7", "commit": "67a6b81", "date": "2026-06-30" },
     { "tag": "v1.1.0", "commit": "cbc264e", "date": "2026-07-07" },
     { "tag": "v1.2.0", "commit": "6c17d3c", "date": "2026-07-20" },
-    { "tag": "v1.3.0", "commit": "0837fd1", "date": "2026-08-05" }
+    { "tag": "v1.3.0", "commit": "0837fd1", "date": "2026-08-05" },
+    { "tag": "v1.4.0", "commit": "e47516301c68323e105e693879893375156575b2", "date": "2026-08-21" },
+    { "tag": "v1.4.1", "commitRef": "refs/tags/v1.4.1", "date": "2026-09-04" }
   ],
   "gaiaExperiments": [
     {
@@ -282,9 +291,9 @@
     }
   },
   "workingTree": {
-    "basedOn": "fbf2454dbf32562d995b221386ce95d996b9fcb9",
-    "status": "dirty_unscored_candidate",
-    "notableChanges": "Large Agent Loop extraction plus unrelated benchmark and rendering work.",
-    "policy": "Do not name, tag, merge, or inherit A7 scores until the candidate is isolated, frozen, replay-equivalent, and evaluated."
+    "basedOn": "07c1e85c63f4df964af54a480328dafa8451d3f3",
+    "status": "v1.4.1_product_release_unscored_as_new_harness_baseline",
+    "notableChanges": "Context baseline integration, attachment-context preservation, Korean voice settings compatibility, release gates and provenance.",
+    "policy": "Product packaging does not promote a scored Harness baseline. Do not inherit historical A6/A7 scores; fixed-source evaluation is required for new capability claims."
   }
 }

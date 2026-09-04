@@ -2,12 +2,15 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$ArtifactRoot,
 
-    [string]$ExpectedVersion = "1.4.0",
+    [string]$ExpectedVersion = "",
 
     [string]$ReportRoot = ""
 )
 
 $ErrorActionPreference = "Stop"
+if (-not $ExpectedVersion) {
+    $ExpectedVersion = (Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot "../package.json") | ConvertFrom-Json).version
+}
 $ArtifactRoot = (Resolve-Path -LiteralPath $ArtifactRoot).Path
 if (-not $ReportRoot) {
     $ReportRoot = Join-Path $env:RUNNER_TEMP "ailis-clean-install-report"

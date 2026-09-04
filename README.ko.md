@@ -3,7 +3,7 @@
   <h1>AILIS</h1>
   <p><strong>보고, 듣고, 기억하며 실제 작업을 끝낼 수 있는 오픈소스 데스크톱 AI 동반자.</strong></p>
   <p>
-    <img alt="Version" src="https://img.shields.io/badge/version-1.4.0-2563eb?style=flat-square">
+    <img alt="Version" src="https://img.shields.io/badge/version-1.4.1-2563eb?style=flat-square">
     <img alt="Desktop" src="https://img.shields.io/badge/desktop-Electron-0f172a?style=flat-square">
     <img alt="License" src="https://img.shields.io/badge/license-MIT-059669?style=flat-square">
   </p>
@@ -52,7 +52,7 @@ AILIS는 데스크톱에서 실제로 함께하는 개인 AI를 목표로 합니
 
 ## 평가된 Agent 능력
 
-AILIS는 기능 데모가 아니라 완전한 엔드투엔드 작업으로 평가됩니다. 동일한 Luna 모델에서 AILIS Agent Harness는 Codex와 같은 성능 구간에 도달했습니다.
+AILIS는 완전한 엔드투엔드 작업으로 평가됩니다. 아래는 고정된 소스(GAIA A6 및 Terminal A7)의 과거 결과이며 v1.4.1의 새 평가 결과가 아닙니다. [버전 및 근거 기록](docs/ailis-version-registry.md)과 [릴리스 노트](docs/releases/v1.4.1.md)를 참고하세요.
 
 | Benchmark | AILIS | Codex, 동일 모델 |
 | :--- | ---: | ---: |

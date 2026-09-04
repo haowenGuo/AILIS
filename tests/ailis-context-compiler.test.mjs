@@ -125,7 +125,7 @@ test('model input exposes compiled memory as a developer ResponseItem and keeps 
     assert.equal(input[0].type, 'message');
     assert.equal(input[0].role, 'developer');
     assert.match(input[0].content[0].text, /<memory_context>/);
-    const contextItem = input.find((item) => item.role === 'user' && /"type":"context"/.test(item.content?.[0]?.text || ''));
+    const contextItem = input.find((item) => item.role === 'developer' && /"type":"context"/.test(item.content?.[0]?.text || ''));
     assert.ok(contextItem);
     assert.doesNotMatch(contextItem.content[0].text, /memory_context/);
     const allText = input
@@ -154,5 +154,28 @@ test('semantic compaction preserves both developer memory and runtime attachment
     const messages = compacted.replacement_history.filter((item) => item.type === 'message');
 
     assert.ok(messages.some((item) => item.role === 'developer' && /durable preference/.test(item.content[0].text)));
-    assert.ok(messages.some((item) => item.role === 'user' && /attached_files/.test(item.content[0].text)));
+    assert.ok(messages.some((item) => item.role === 'developer' && /attached_files/.test(item.content[0].text)));
+});
+
+test('fallback compaction preserves current and legacy attachment envelopes without changing their roles', async (t) => {
+    for (const contextMode of ['persona', 'task_agent', 'task_agent_session']) {
+        for (const role of ['developer', 'user']) {
+            await t.test(`${contextMode}: ${role}`, () => {
+                const manager = buildModelInputContextManager({
+                    message: 'continue the attachment review',
+                    fileAttachments: [{ path: 'F:\\workspace\\fixture.xlsx' }],
+                    runtimeEnvironment: { current_date: '2026-09-04' }
+                });
+                const items = manager.rawItems();
+                const envelope = items.find((item) => /attached_files/.test(item.content?.[0]?.text || ''));
+                assert.ok(envelope);
+                envelope.role = role;
+                manager.replace(items);
+                const compacted = manager.semanticCompact({ contextMode, force: true });
+                assert.equal(compacted.compacted, true);
+                const kept = manager.rawItems().filter((item) => /attached_files/.test(item.content?.[0]?.text || ''));
+                assert.deepEqual(kept, [envelope]);
+            });
+        }
+    }
 });

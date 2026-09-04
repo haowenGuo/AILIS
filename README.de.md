@@ -3,7 +3,7 @@
   <h1>AILIS</h1>
   <p><strong>Ein quelloffener Desktop-KI-Begleiter, der sehen, zuhören, sich erinnern und echte Arbeit erledigen kann.</strong></p>
   <p>
-    <img alt="Version" src="https://img.shields.io/badge/version-1.4.0-2563eb?style=flat-square">
+    <img alt="Version" src="https://img.shields.io/badge/version-1.4.1-2563eb?style=flat-square">
     <img alt="Desktop" src="https://img.shields.io/badge/desktop-Electron-0f172a?style=flat-square">
     <img alt="License" src="https://img.shields.io/badge/license-MIT-059669?style=flat-square">
   </p>
@@ -52,7 +52,7 @@ Sprich natürlich mit AILIS. Wenn Arbeit anfällt, versteht sie freigegebenen Bi
 
 ## Bewertete Agent-Fähigkeit
 
-AILIS wird mit vollständigen End-to-End-Aufgaben statt nur mit Feature-Demos getestet. Mit demselben Luna-Modell arbeitet der AILIS Agent Harness im gleichen Leistungsbereich wie Codex.
+AILIS wird mit vollständigen End-to-End-Aufgaben getestet. Die folgenden historischen Ergebnisse gehören zu eingefrorenen Quellständen (GAIA A6 und Terminal A7), nicht zu einer neuen Bewertung von v1.4.1. Details stehen im [Versions- und Evidenzregister](docs/ailis-version-registry.md); Änderungen in den [Versionshinweisen](docs/releases/v1.4.1.md).
 
 | Benchmark | AILIS | Codex, gleiches Modell |
 | :--- | ---: | ---: |

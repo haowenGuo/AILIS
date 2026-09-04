@@ -3,7 +3,7 @@
   <h1>AILIS</h1>
   <p><strong>Un compagnon IA de bureau open source qui peut voir, écouter, mémoriser et accomplir un travail réel.</strong></p>
   <p>
-    <img alt="Version" src="https://img.shields.io/badge/version-1.4.0-2563eb?style=flat-square">
+    <img alt="Version" src="https://img.shields.io/badge/version-1.4.1-2563eb?style=flat-square">
     <img alt="Desktop" src="https://img.shields.io/badge/desktop-Electron-0f172a?style=flat-square">
     <img alt="License" src="https://img.shields.io/badge/license-MIT-059669?style=flat-square">
   </p>
@@ -52,7 +52,7 @@ Parlez naturellement à AILIS. Lorsqu'un travail est nécessaire, elle comprend 
 
 ## Capacité Agent évaluée
 
-AILIS est évalué sur des tâches complètes de bout en bout, pas seulement sur des démonstrations. Avec le même modèle Luna, son Agent Harness se situe dans la même plage de performance que Codex.
+AILIS est évalué sur des tâches complètes de bout en bout. Les résultats historiques ci-dessous appartiennent à des sources figées (GAIA A6 et Terminal A7), et non à une nouvelle évaluation de v1.4.1. Voir le [registre des versions et des preuves](docs/ailis-version-registry.md) et les [notes de version](docs/releases/v1.4.1.md).
 
 | Benchmark | AILIS | Codex, même modèle |
 | :--- | ---: | ---: |

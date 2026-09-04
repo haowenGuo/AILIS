@@ -540,7 +540,7 @@ function normalizeElevenLabsModelId(value) {
 
 function normalizeElevenLabsLanguageCode(value) {
     const normalizedValue = String(value || '').trim().toLowerCase();
-    if (['zh', 'en', 'ja'].includes(normalizedValue)) {
+    if (ELEVENLABS_LANGUAGE_CODES.includes(normalizedValue)) {
         return normalizedValue;
     }
     return DEFAULT_ELEVENLABS_LANGUAGE_CODE;

@@ -3,7 +3,7 @@
   <h1>AILIS</h1>
   <p><strong>An open-source desktop AI companion that can see, listen, remember, and get real work done.</strong></p>
   <p>
-    <img alt="Version" src="https://img.shields.io/badge/version-1.4.0-2563eb?style=flat-square">
+    <img alt="Version" src="https://img.shields.io/badge/version-1.4.1-2563eb?style=flat-square">
     <img alt="Desktop" src="https://img.shields.io/badge/desktop-Electron-0f172a?style=flat-square">
     <img alt="License" src="https://img.shields.io/badge/license-MIT-059669?style=flat-square">
   </p>
@@ -52,7 +52,7 @@ Talk to AILIS naturally, like a companion. When there is work to do, she can und
 
 ## Evaluated Agent Capability
 
-AILIS is tested on complete end-to-end tasks, not only feature demos. With the same Luna model, its Agent Harness now operates in the same performance band as Codex.
+AILIS is tested on complete end-to-end tasks, not only feature demos. The following are historical, frozen-source results (GAIA A6 and Terminal A7), not a benchmark certification of v1.4.1. See the [version and evidence registry](docs/ailis-version-registry.md) for source identities and comparison protocols.
 
 | Benchmark | AILIS | Codex, same model |
 | :--- | ---: | ---: |
@@ -81,6 +81,10 @@ AILIS is tested on complete end-to-end tasks, not only feature demos. With the s
 - [ ] A more complete realtime voice, cross-device, and plugin experience
 
 ## Quick Start
+
+### v1.4.1 update
+
+The latest release brings stable append-only context handling, a governed code-mode tool runtime, auxiliary vision routing, and fixes that preserve attachment context during compaction and Korean voice-profile settings. See the [release notes](docs/releases/v1.4.1.md) for upgrade instructions and limits. Cache hit rates and cost savings depend on the provider and workload; no fixed reduction is promised.
 
 ### Use AILIS
 

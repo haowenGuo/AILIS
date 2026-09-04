@@ -49,7 +49,7 @@ Persona 不会偷偷改写出第二个任务。TaskAgent 接收不可变任务�
 
 AILIS 使用规范 response items 保存模型可见历史，包括角色消息、函数调用、函数输出、工具发现事件、图片与压缩历史项。旧对象保持顺序和调用配对。上下文只在接近模型有效预算时按预算压缩，不再额外构造“强制最终回答 Prompt”。
 
-当前接受的 A7 基线会更长时间保留规范工具历史，并保留已经经过输出边界控制的工具 Observation。详见 [TaskAgent A7 上下文基线](ailis-a7-taskagent-context-baseline.md)。
+v1.4.1 运行时采用稳定追加式历史、独立 Persona 上下文与受治理的 code-mode 工具，并在回退压缩中保留附件上下文。详见[当前版本说明](releases/v1.4.1.md)。[A7 上下文基线](ailis-a7-taskagent-context-baseline.md)记录的是历史受测机制，不代表本版重新评测的结果。
 
 ## 模型与本机执行
 

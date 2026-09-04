@@ -3,7 +3,7 @@
   <h1>AILIS</h1>
   <p><strong>能看、能听、能记住，也能真正把事情做完的开源桌面 AI 伙伴。</strong></p>
   <p>
-    <img alt="Version" src="https://img.shields.io/badge/version-1.4.0-2563eb?style=flat-square">
+    <img alt="Version" src="https://img.shields.io/badge/version-1.4.1-2563eb?style=flat-square">
     <img alt="Desktop" src="https://img.shields.io/badge/desktop-Electron-0f172a?style=flat-square">
     <img alt="License" src="https://img.shields.io/badge/license-MIT-059669?style=flat-square">
   </p>
@@ -52,7 +52,7 @@ AILIS 希望成为真正生活在桌面上的个人 AI。她有可见的 3D 角�
 
 ## 已验证的任务执行能力
 
-AILIS 不只展示功能，也持续用完整端到端任务检验 Agent Harness。在相同 Luna 模型下，AILIS 与 Codex 已处于同一能力区间。
+AILIS 不只展示功能，也持续用完整端到端任务检验 Agent Harness。以下为冻结源码的历史成绩（GAIA A6 与 Terminal A7），不是 v1.4.1 的新版评测认证。源码归属与比较口径见[版本与证据登记](docs/ailis-version-registry.md)。
 
 | Benchmark | AILIS | Codex，同模型 |
 | :--- | ---: | ---: |
@@ -81,6 +81,10 @@ AILIS 不只展示功能，也持续用完整端到端任务检验 Agent Harness
 - [ ] 让实时语音、跨设备体验和插件生态更加完整
 
 ## 快速开始
+
+### v1.4.1 更新
+
+本版整合稳定的追加式上下文、受审批与审计约束的 code-mode 工具运行时、辅助视觉路由，并修复压缩时附件上下文丢失和韩语语音配置兼容问题。升级方式与边界见[版本说明](docs/releases/v1.4.1.md)。缓存命中率与费用取决于服务商和实际任务，不承诺固定降幅。
 
 ### 直接使用
 

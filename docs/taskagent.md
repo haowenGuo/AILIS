@@ -54,7 +54,7 @@ The model can emit multiple function calls. The runtime preserves every call, ex
 - semantic compaction checkpoints;
 - token usage and context-budget metadata.
 
-The A7 baseline keeps bounded tool output in canonical history and starts semantic compaction only when the effective context budget reaches hard pressure. It does not replace the final Turn with a separate four-step summary prompt.
+The historical A7 baseline keeps bounded tool output in canonical history and starts semantic compaction only when the effective context budget reaches hard pressure. It does not replace the final Turn with a separate four-step summary prompt. The v1.4.1 context/tool-runtime changes and their claim boundaries are described in the [release notes](releases/v1.4.1.md); fallback compaction now preserves both developer-role and legacy user-role attachment context envelopes.
 
 ## Checkpoint And Recovery
 
