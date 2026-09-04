@@ -146,11 +146,19 @@ test('companion heartbeat is a minimal ephemeral developer event', () => {
     assert.doesNotMatch(prompt, /topic_followup|soft_checkin|userTurnAfterLastProactive|JSON/);
 });
 
-test('work-mode approved opportunity uses a second context-aware persona call for visible text', async () => {
+test('work-mode approved opportunity delivers through the unified main Session', async () => {
     const calls = [];
+    const agentCalls = [];
     globalThis.window = {
         ailisDesktop: {
-            gateway: {},
+            gateway: {
+                isSupported: true,
+                getStatus: async () => ({ running: true, workspaceRoot: '/test-workspace' }),
+                runAgent: async (payload) => {
+                    agentCalls.push(payload);
+                    return { ok: true, model: 'reply-model', displayText: '刚才你说想把发布流程再理一遍，我陪你从部署状态接着看。' };
+                }
+            },
             llm: {
                 chat: async (payload) => {
                     calls.push(payload);
@@ -167,11 +175,7 @@ test('work-mode approved opportunity uses a second context-aware persona call fo
                             })
                         };
                     }
-                    return {
-                        ok: true,
-                        model: 'reply-model',
-                        content: '刚才你说想把发布流程再理一遍，我陪你从部署状态接着看。'
-                    };
+                    throw new Error('No separate Persona reply call');
                 }
             }
         }
@@ -191,13 +195,13 @@ test('work-mode approved opportunity uses a second context-aware persona call fo
         }
     });
 
-    assert.equal(calls.length, 2);
+    assert.equal(calls.length, 1);
     assert.equal(calls[0].jsonMode, true);
-    assert.equal(calls[1].jsonMode, false);
-    assert.deepEqual(
-        calls[1].messages.slice(1),
-        history.map(({ role, content }) => ({ role, content }))
-    );
+    assert.equal(agentCalls.length, 1);
+    assert.equal(agentCalls[0].context.agentRole, 'unified_agent');
+    assert.equal(agentCalls[0].sessionId, 'proactive-test');
+    assert.equal(agentCalls[0].suppressCurrentUserMessage, true);
+    assert.deepEqual(agentCalls[0].messageHistory, history);
     assert.equal(opportunity.payload.display_text, '刚才你说想把发布流程再理一遍，我陪你从部署状态接着看。');
     assert.equal(opportunity.payload.proactiveCompanion.decisionModel, 'decision-model');
     assert.equal(opportunity.payload.proactiveCompanion.replyModel, 'reply-model');
@@ -333,11 +337,11 @@ test('companion mode directly generates one contextual reply without an opportun
     });
 
     assert.equal(calls.length, 1);
-    assert.equal(calls[0].maxAgentSteps, 1);
+    assert.equal(calls[0].context.agentRole, 'unified_agent');
     assert.equal(calls[0].suppressCurrentUserMessage, true);
     assert.deepEqual(calls[0].messageHistory, history);
     assert.match(calls[0].ephemeralDeveloperMessage, /runtime event, not a user message/);
-    assert.equal(calls[0].context.agentRole, 'persona_orchestrator');
+    assert.equal(calls[0].context.unifiedAgent, true);
     assert.equal(calls[0].context.suppressCurrentUserMessage, true);
     assert.equal(turn.shouldSpeak, true);
     assert.equal(turn.reasonType, 'companion_cycle');

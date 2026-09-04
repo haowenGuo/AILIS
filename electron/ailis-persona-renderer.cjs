@@ -732,6 +732,26 @@ function renderPersonaSurfaceGateway(input = {}) {
     });
 }
 
+function renderUnifiedAgentSurface(input = {}) {
+    // Reuse avatar metadata only. The unified agent owns the answer; legacy
+    // word substitutions, whitespace cleanup and failure prose must not touch it.
+    const surface = renderPersonaSurfaceGateway({
+        ...input,
+        text: '', displayText: '', fallback_text: '', fallbackText: '',
+        speech_text: '', speechText: '', bubble_text: '', bubbleText: ''
+    });
+    const text = typeof input.text === 'string' ? input.text : '';
+    return {
+        ...surface,
+        renderer: 'ailis-unified-surface',
+        text,
+        speechText: typeof input.speech_text === 'string' && input.speech_text
+            ? input.speech_text : text,
+        bubbleText: typeof input.bubble_text === 'string' && input.bubble_text
+            ? input.bubble_text : text
+    };
+}
+
 function attachPersonaSurface(result = {}, surface = null) {
     const personaSurface = surface || renderPersonaSurfaceGateway({
         task_state: result.ok ? 'completed' : (result.status || 'failed'),
@@ -921,6 +941,7 @@ module.exports = {
     renderApprovalSurface,
     renderMaxStepsSurface,
     renderPersonaSurfaceGateway,
+    renderUnifiedAgentSurface,
     renderToolFailureSurface,
     renderStatusSurface,
     withControlTags

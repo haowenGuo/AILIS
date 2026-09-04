@@ -1,14 +1,12 @@
 const {
-    approxTokenCount,
-    makeHeadTailPreview,
     compactToolResultForModel
 } = require('./ailis-runtime-budget.cjs');
 const {
     attachObservationContract
 } = require('./ailis-observation-contract.cjs');
 
-const DEFAULT_MODEL_VISIBLE_TEXT_CHARS = 6000;
-const DEFAULT_STRUCTURED_STRING_CHARS = 1200;
+// Tool implementations own output limits. The shared envelope must not impose
+// another per-string budget or normalize whitespace in tool data.
 
 function normalizeString(value, fallback = '') {
     if (typeof value !== 'string') {
@@ -28,25 +26,17 @@ function cloneJson(value) {
 
 function normalizeContentItem(item) {
     if (!item || typeof item !== 'object' || Array.isArray(item)) {
-        const text = normalizeString(item);
-        return text ? { type: 'text', text } : null;
+        return typeof item === 'string' ? { type: 'text', text: item } : null;
     }
     const type = normalizeString(item.type, 'text');
     if (type === 'text') {
         return {
             type: 'text',
-            text: normalizeString(item.text, JSON.stringify(item, null, 2)),
+            text: typeof item.text === 'string' ? item.text : JSON.stringify(item, null, 2),
             ...Object.fromEntries(Object.entries(item).filter(([key]) => !['type', 'text'].includes(key)))
         };
     }
     return { ...item, type };
-}
-
-function collectModelVisibleText(content = []) {
-    return (Array.isArray(content) ? content : [])
-        .filter((part) => part && typeof part === 'object' && typeof part.text === 'string')
-        .map((part) => part.text)
-        .join('\n\n');
 }
 
 function collectStructuredToolActionKeys(value, keys = new Set(), seen = new Set(), depth = 0) {
@@ -79,96 +69,6 @@ function collectStructuredToolActionKeys(value, keys = new Set(), seen = new Set
     return keys;
 }
 
-function countLines(text = '') {
-    if (!text) {
-        return 0;
-    }
-    return String(text).split(/\r?\n/).length;
-}
-
-function extractOutputRef(output = {}, text = '') {
-    const details = output.details && typeof output.details === 'object' ? output.details : {};
-    const candidates = [
-        details.outputId,
-        details.output_id,
-        details.outputRef?.outputId,
-        details.outputRef?.output_id,
-        details.artifactId,
-        details.artifact_id
-    ].filter(Boolean);
-    const match = String(text || '').match(/\b(?:outputId|output_id|OutputArtifact|artifactId)\s*[:=]\s*([A-Za-z0-9._:-]+)/);
-    if (match?.[1]) {
-        candidates.push(match[1]);
-    }
-    const outputId = candidates.map((entry) => String(entry || '').trim()).find(Boolean);
-    if (!outputId) {
-        return null;
-    }
-    return {
-        outputId,
-        readTools: ['output_read', 'output_tail', 'output_search']
-    };
-}
-
-function applyModelVisiblePreview(output = {}, {
-    toolId = '',
-    maxTextChars = DEFAULT_MODEL_VISIBLE_TEXT_CHARS
-} = {}) {
-    const text = collectModelVisibleText(output.content);
-    if (!text) {
-        return {
-            output,
-            budget: {
-                status: 'complete',
-                tool: toolId,
-                originalTextChars: 0,
-                visibleTextChars: 0,
-                originalLines: 0,
-                approxOriginalTokens: 0,
-                truncated: false,
-                omittedApproxTokens: 0
-            }
-        };
-    }
-    const previewBudget = Math.max(512, Number(maxTextChars || DEFAULT_MODEL_VISIBLE_TEXT_CHARS) - 512);
-    const preview = makeHeadTailPreview(text, previewBudget);
-    const outputRef = extractOutputRef(output, text);
-    const omittedApproxTokens = preview.truncated
-        ? Math.max(1, approxTokenCount(text) - approxTokenCount(preview.text))
-        : 0;
-    const budget = {
-        status: preview.truncated ? 'previewed' : 'complete',
-        tool: toolId,
-        strategy: preview.strategy,
-        originalTextChars: preview.originalTextChars,
-        visibleTextChars: preview.visibleTextChars,
-        omittedTextChars: preview.omittedTextChars,
-        originalLines: countLines(text),
-        approxOriginalTokens: approxTokenCount(text),
-        truncated: Boolean(preview.truncated),
-        omittedApproxTokens,
-        ...(outputRef ? { outputRef } : {})
-    };
-    if (!preview.truncated) {
-        return { output, budget };
-    }
-    output.content = [{
-        type: 'text',
-        text: [
-            'TOOL_OUTPUT_MODEL_PREVIEW:',
-            `tool=${toolId || 'unknown'}`,
-            `originalTextChars=${budget.originalTextChars}`,
-            `visibleTextChars<=${budget.visibleTextChars}`,
-            `originalLines=${budget.originalLines}`,
-            `<truncated omitted_approx_tokens="${budget.omittedApproxTokens}" />`,
-            outputRef ? `outputId=${outputRef.outputId}` : '',
-            outputRef ? `readTools=${outputRef.readTools.join(',')}` : '',
-            '--- preview ---',
-            preview.text
-        ].filter(Boolean).join('\n')
-    }];
-    return { output, budget };
-}
 
 function makeAilisToolResult({ status = 'completed', text = '', content = null, details = {}, structuredContent = null, isError = false } = {}) {
     const normalizedDetails = details && typeof details === 'object' && !Array.isArray(details)
@@ -178,7 +78,7 @@ function makeAilisToolResult({ status = 'completed', text = '', content = null, 
         ? content.map(normalizeContentItem).filter(Boolean)
         : [{
             type: 'text',
-            text: normalizeString(text, JSON.stringify({ status, ...normalizedDetails }, null, 2))
+            text: typeof text === 'string' ? text : JSON.stringify({ status, ...normalizedDetails }, null, 2)
         }];
     const normalizedStructuredContent = structuredContent && typeof structuredContent === 'object' && !Array.isArray(structuredContent)
         ? cloneJson(structuredContent)
@@ -233,8 +133,7 @@ function makeAilisToolError({
 function normalizeAilisToolOutput(result = {}, {
     toolId = '',
     status = 'completed',
-    maxTextChars = DEFAULT_MODEL_VISIBLE_TEXT_CHARS,
-    maxStructuredStringChars = DEFAULT_STRUCTURED_STRING_CHARS
+    maxTextChars
 } = {}) {
     const output = result && typeof result === 'object' && !Array.isArray(result)
         ? cloneJson(result)
@@ -260,36 +159,9 @@ function normalizeAilisToolOutput(result = {}, {
         status: 'normalized',
         tool: toolId
     };
-    attachObservationContract(output, { toolId });
-    const previewed = applyModelVisiblePreview(output, { toolId, maxTextChars });
-    output.details.modelBudget = previewed.budget;
-    if (previewed.budget.outputRef) {
-        output.details.outputRef = previewed.budget.outputRef;
-    }
-    const resultStatus = String(output.details?.status || '').trim().toLowerCase();
-    const preserveControlGuidance = output.isError === true ||
-        output.details?.ok === false ||
-        !['completed', 'success'].includes(resultStatus);
-    const structuredToolActionKeys = collectStructuredToolActionKeys(previewed.output);
-    const compacted = compactToolResultForModel(previewed.output, {
-        maxTextChars,
-        maxStructuredStringChars,
-        preserveGuidanceKeys: [
-            ...(preserveControlGuidance ? ['suggestedNext', 'suggested_next'] : []),
-            ...structuredToolActionKeys
-        ]
-    });
-    compacted.modelBudget = {
-        ...(compacted.modelBudget || {}),
-        ...previewed.budget,
-        status: previewed.budget.truncated ? 'previewed_and_compacted' : 'compacted'
-    };
-    compacted.details = {
-        ...(compacted.details || {}),
-        modelBudget: compacted.modelBudget,
-        ...(previewed.budget.outputRef ? { outputRef: previewed.budget.outputRef } : {})
-    };
-    return compacted;
+    const normalized = compactToolResultForModel(output, { maxTextChars });
+    attachObservationContract(normalized, { toolId });
+    return normalized;
 }
 
 module.exports = {

@@ -25,6 +25,7 @@ const {
     attachPersonaSurface,
     renderApprovalSurface,
     renderPersonaSurfaceGateway,
+    renderUnifiedAgentSurface,
     renderStatusSurface,
     renderToolFailureSurface
 } = require('../ailis-persona-renderer.cjs');
@@ -39,6 +40,7 @@ const {
     truncateMiddleText
 } = require('../ailis-runtime-budget.cjs');
 const {
+    buildMemoryDeveloperMessage,
     buildModelInputContextManager,
     functionCall,
     functionCallOutput,
@@ -2938,11 +2940,14 @@ function resolveAgentRuntimeRole(request = {}, requestContext = {}) {
             requestContext.contextMode ||
             requestContext.context_mode
     ).toLowerCase().replace(/[-\s]+/g, '_');
-    if (['persona', 'main', 'ailis', 'ailis_main', 'persona_orchestrator', 'main_agent'].includes(rawRole)) {
-        return 'persona_orchestrator';
-    }
     if (['task', 'task_agent', 'worker', 'subagent', 'child_agent'].includes(rawRole)) {
         return 'task_agent';
+    }
+    if (['unified', 'unified_agent'].includes(rawRole) || requestContext.unifiedAgent === true) {
+        return 'unified_agent';
+    }
+    if (['persona', 'main', 'ailis', 'ailis_main', 'persona_orchestrator', 'main_agent'].includes(rawRole)) {
+        return 'persona_orchestrator';
     }
     if (requestContext.personaOrchestrator === true || requestContext.mainAgent === true) {
         return 'persona_orchestrator';
@@ -2959,6 +2964,10 @@ function isPersonaOrchestratorRole(role = '') {
 
 function isTaskAgentRole(role = '') {
     return normalizeText(role).toLowerCase() === 'task_agent';
+}
+
+function isUnifiedAgentRole(role = '') {
+    return normalizeText(role).toLowerCase() === 'unified_agent';
 }
 
 function resolveMemoryPolicy(request = {}, requestContext = request?.context || {}) {
@@ -3028,7 +3037,9 @@ function resolveAgentDirectToolChoice({
 }
 
 function resolveAgentContextMode(request = {}, requestContext = {}) {
-    return isPersonaOrchestratorRole(resolveAgentRuntimeRole(request, requestContext))
+    const role = resolveAgentRuntimeRole(request, requestContext);
+    if (isUnifiedAgentRole(role)) return 'unified';
+    return isPersonaOrchestratorRole(role)
         ? 'persona'
         : 'task_agent';
 }
@@ -7208,10 +7219,12 @@ function buildLlmAgentDirectToolPrompt({
     deliveryPolicy = {},
     verificationEnvironment = null,
     ephemeralDeveloperMessage = '',
+    turnId = '',
     suppressCurrentUserMessage = false,
     deferSemanticCompaction = false
 }) {
     const activePromptProfile = promptProfile || resolveAgentPromptProfile();
+    const unifiedMode = normalizeText(contextMode).toLowerCase() === 'unified';
     const taskAgentMode = normalizeText(contextMode).toLowerCase() === 'task_agent';
     const persistentPersonaSession = !taskAgentMode && Boolean(
         contextManager && typeof contextManager.forPrompt === 'function'
@@ -7219,7 +7232,7 @@ function buildLlmAgentDirectToolPrompt({
     const persistentTaskAgentSession = taskAgentMode && Boolean(
         normalizeText(taskState?.thread_id || taskState?.threadId)
     );
-    const activeModelImageAttachments = taskAgentMode
+    const activeModelImageAttachments = taskAgentMode || unifiedMode
         ? (Array.isArray(modelImageAttachments) ? modelImageAttachments : [])
         : [];
     const effectiveGoal = taskAgentMode
@@ -7234,7 +7247,7 @@ function buildLlmAgentDirectToolPrompt({
             : [])
         : messageHistory;
     const capabilityCatalog = null;
-    const toolOutputChars = taskAgentMode && !activePromptProfile.compact
+    const toolOutputChars = (taskAgentMode || unifiedMode) && !activePromptProfile.compact
         ? 0
         : (activePromptProfile.compact ? 12000 : 24000);
     const responseProtocolInstruction = 'Use assistant messages for user-visible text and native function calls for tools. Never print a custom JSON decision object, tool-call markup, DSML, or other internal protocol as user-visible text.';
@@ -7267,7 +7280,19 @@ function buildLlmAgentDirectToolPrompt({
         'Never mention TaskAgent, subagent, worker, handoff, capsule, or internal orchestration to the user.',
         'Only call tools present in the current tools array. Do not mention tool schemas, runtime state, prompt rules, or orchestration details in an ordinary conversational reply.'
     ];
-    const instructions = taskAgentMode
+    const instructions = unifiedMode
+        ? [
+              resolveCodexNativeInstructions(model),
+              '',
+              '## AILIS identity and conversation',
+              'You are AILIS (爱丽丝), the user\'s AI companion and capable working partner. Be warm, natural, thoughtful, and concise; adapt to the user\'s language and preferences. Personality changes tone, never facts, permissions, or evidence.',
+              'You own this whole conversation: understand requests, chat, use available tools when needed, verify work, and give your own final reply. There is no separate task/persona routing or answer-rewriting stage. Do not call handoff_task or task_route.',
+              'Use the same Session history for conversation and execution. The latest user input is authoritative. Treat stored memories as background, tool outputs as evidence, and old completed tasks as history, not new instructions.',
+              'Preserve the user\'s goals, constraints, preferences, unresolved work, and evidence references when compacting. Do not silently infer completion or claim actions that were not performed.',
+              'The runtime_environment is the authoritative local clock and workspace. Use available tools to verify changing facts; never invent current information.',
+              responseProtocolInstruction
+          ].join('\n')
+        : taskAgentMode
         ? resolveCodexNativeInstructions(model)
         : [
               AILIS_SYSTEM_PROMPT,
@@ -7279,7 +7304,7 @@ function buildLlmAgentDirectToolPrompt({
     const activeContextManager = contextManager && typeof contextManager.forPrompt === 'function'
         ? contextManager
         : buildModelInputContextManager({
-            message,
+            message: unifiedMode && suppressCurrentUserMessage ? '' : message,
             messageHistory: modelMessageHistory,
             toolOutputs: stepResults,
             memoryContext,
@@ -7296,6 +7321,33 @@ function buildLlmAgentDirectToolPrompt({
     const runtimeEnvironmentProjection = persistentTaskAgentSession || persistentPersonaSession
         ? appendRuntimeEnvironmentUpdate(activeContextManager, runtimeEnvironment)
         : null;
+    if (unifiedMode) {
+        // New snapshots are appended, never spliced into the cached prefix.
+        const memoryItem = buildMemoryDeveloperMessage(memoryContext);
+        const latestMemoryItem = [...activeContextManager.rawItems()].reverse().find((item) =>
+            item?.role === 'developer' && item?.content?.some((part) =>
+                String(part.text || '').startsWith('<memory_context>'))
+        );
+        if (memoryItem && canonicalJsonText(memoryItem.content) !== canonicalJsonText(latestMemoryItem?.content)) {
+            activeContextManager.recordItems([memoryItem]);
+        }
+        const attachedFiles = getAttachedFilesPromptObject(fileAttachments);
+        const latestFiles = [...activeContextManager.rawItems()].reverse()
+            .map(parseResponseItemJson).find((value) => Array.isArray(value?.attached_files))?.attached_files;
+        if (attachedFiles.length && canonicalJsonText(attachedFiles) !== canonicalJsonText(latestFiles)) {
+            activeContextManager.recordItems([responseMessage('developer', JSON.stringify({
+                type: 'context', attached_files: attachedFiles
+            }))]);
+        }
+        if (ephemeralDeveloperMessage) {
+            const packet = { type: 'unified_turn_context', turn_id: turnId, text: ephemeralDeveloperMessage };
+            const latest = [...activeContextManager.rawItems()].reverse().map(parseResponseItemJson)
+                .find((value) => value?.type === 'unified_turn_context');
+            if (canonicalJsonText(packet) !== canonicalJsonText(latest)) {
+                activeContextManager.recordItems([responseMessage('developer', JSON.stringify(packet))]);
+            }
+        }
+    }
     recordModelImageAttachmentsToContextManager(
         activeContextManager,
         activeModelImageAttachments
@@ -7315,14 +7367,14 @@ function buildLlmAgentDirectToolPrompt({
     const contextPackageOptions = {
         instructions,
         staticPrefix: instructions,
-        contextMode: persistentTaskAgentSession
+        contextMode: unifiedMode ? 'unified_session' : persistentTaskAgentSession
             ? 'task_agent_session'
             : taskAgentMode
                 ? 'task_agent'
                 : 'persona',
         goal: effectiveGoal,
         runtimeEnvironment,
-        taskState: persistentTaskAgentSession ? null : taskContextState,
+        taskState: persistentTaskAgentSession || unifiedMode ? null : taskContextState,
         constraints,
         currentPlan,
         unresolvedFields,
@@ -7338,7 +7390,7 @@ function buildLlmAgentDirectToolPrompt({
         semanticCompaction = activeContextManager.semanticCompact(contextPackageOptions);
         contextPackage = semanticCompaction.packageAfter;
     }
-    const ephemeralDeveloperItem = !persistentTaskAgentSession
+    const ephemeralDeveloperItem = !persistentTaskAgentSession && !unifiedMode
         ? responseMessage('developer', ephemeralDeveloperMessage)
         : null;
     const input = [
@@ -7384,7 +7436,7 @@ function buildLlmAgentDirectToolPrompt({
             task_session_state_projection: null,
             developer_context_projection: null,
             runtime_environment_projection: runtimeEnvironmentProjection,
-            task_agent_prompt_projection: taskAgentMode ? 'codex-native' : 'persona',
+            task_agent_prompt_projection: unifiedMode ? 'unified-agent' : taskAgentMode ? 'codex-native' : 'persona',
             legacy_events: Array.isArray(events) ? events.length : 0
         }
     };
@@ -8166,14 +8218,14 @@ class AILISAgentRunner {
             return false;
         }
         record.pendingInputs = Array.isArray(record.pendingInputs) ? record.pendingInputs : [];
+        // Reject overflow so the caller can serialize the turn, not drop an
+        // already acknowledged user instruction.
+        if (record.pendingInputs.length >= 32) return false;
         record.pendingInputs.push({
             id: randomUUID(),
             ts: Date.now(),
             message: text
         });
-        if (record.pendingInputs.length > 32) {
-            record.pendingInputs = record.pendingInputs.slice(-32);
-        }
         this.activeRuns.set(record.runId, record);
         return true;
     }
@@ -8339,7 +8391,14 @@ class AILISAgentRunner {
             nextAction,
             source
         });
-        const surface = renderPersonaSurfaceGateway(gatewayInput);
+        const surface = isUnifiedAgentRole(resolveAgentRuntimeRole({}, requestContext))
+            ? renderUnifiedAgentSurface({
+                ...gatewayInput,
+                text: typeof result.displayText === 'string' ? result.displayText : gatewayInput.text,
+                speech_text: result.speechText || result.displayText || '',
+                bubble_text: result.bubbleText || ''
+            })
+            : renderPersonaSurfaceGateway(gatewayInput);
         return attachPersonaSurface(result, surface);
     }
 
@@ -8356,9 +8415,10 @@ class AILISAgentRunner {
                 request?.context?.evalMemoryContext
         );
         const personaMode = normalizeText(contextMode, 'persona').toLowerCase() === 'persona';
+        const unifiedMode = normalizeText(contextMode).toLowerCase() === 'unified';
         let preferenceContext = '';
         let activeTaskContext = '';
-        if (personaMode) {
+        if (personaMode || unifiedMode) {
             try {
                 preferenceContext = this.preferenceState?.buildPromptContext?.({
                     sessionId,
@@ -8372,9 +8432,9 @@ class AILISAgentRunner {
                 });
             }
             try {
-                activeTaskContext = this.taskResultCapsules?.buildActiveTaskContext?.(sessionId, {
+                activeTaskContext = personaMode ? this.taskResultCapsules?.buildActiveTaskContext?.(sessionId, {
                     maxChars: 2200
-                }) || '';
+                }) || '' : '';
             } catch (error) {
                 this.gateway.emitGatewayEvent?.('agent.task_state.context_error', {
                     sessionId,
@@ -8390,12 +8450,12 @@ class AILISAgentRunner {
                 activeTaskState: activeTaskContext,
                 interactionPreferences: preferenceContext,
                 explicitMemoryContext,
-                agentMode: personaMode ? 'persona' : 'task_agent',
+                agentMode: unifiedMode ? 'unified' : personaMode ? 'persona' : 'task_agent',
                 sectionBudgets: request?.memorySectionBudgets || request?.context?.memorySectionBudgets || {},
                 maxChars: Number(
                     request?.memoryContextMaxChars ||
                     request?.context?.memoryContextMaxChars ||
-                    (personaMode ? MAX_PROMPT_MEMORY_CHARS : 12000)
+                    (personaMode || unifiedMode ? MAX_PROMPT_MEMORY_CHARS : 12000)
                 )
             });
         } catch (error) {
@@ -8409,6 +8469,7 @@ class AILISAgentRunner {
 
     recordMemoryTurn({ request = {}, result = {}, message = '', sessionId = 'main', source = 'agent' } = {}) {
         if (
+            request?.context?.unifiedGatewayOwnsFinalization === true ||
             request.classifyOnly === true ||
             request?.context?.personaDraft === true ||
             request?.context?.personaRenderOnly === true ||
@@ -9383,7 +9444,8 @@ class AILISAgentRunner {
         );
         const turnInputs = [currentTurnRequest];
         let modelInputContextManager = restoreModelInputContextManagerFromCheckpoint(initialContextManagerCheckpoint);
-        if (modelInputContextManager) {
+        if (modelInputContextManager && request.suppressCurrentUserMessage !== true &&
+            requestContext.suppressCurrentUserMessage !== true) {
             appendUserInputToContextManager(modelInputContextManager, currentTurnRequest);
         }
         let runtimeEnvironmentNeedsRecording = true;
@@ -9530,9 +9592,18 @@ class AILISAgentRunner {
             }
             receivePendingTurnInputs(iteration);
             const decisionSettings = resolveAgentDecisionSettings(settings, requestContext);
-            const modelImageAttachments = isTaskAgentRole(agentRuntimeRole)
+            const modelImageAttachments = isTaskAgentRole(agentRuntimeRole) || isUnifiedAgentRole(agentRuntimeRole)
                 ? buildDirectModelImageAttachments(fileAttachments, decisionSettings)
                 : [];
+            if (isUnifiedAgentRole(agentRuntimeRole) && Array.isArray(request.modelImageAttachments)) {
+                for (const image of request.modelImageAttachments.slice(0, 3)) {
+                    const imageUrl = normalizeText(image?.image_url);
+                    if (!imageUrl.startsWith('data:image/')) {
+                        throw new Error('Invalid AILIS inline image attachment');
+                    }
+                    modelImageAttachments.push({ image_url: imageUrl, detail: image.detail || 'original' });
+                }
+            }
             const taskCompactPrompt = looksLikeArtifactAnswerQuestion({
                 message: currentTurnRequest,
                 fileAttachments
@@ -9633,6 +9704,7 @@ class AILISAgentRunner {
                 iteration
             });
             const commonPromptArgs = {
+                turnId: runId,
                 message: currentTurnRequest,
                 model: normalizeText(decisionSettings.model),
                 originalUserGoal: normalizeText(
@@ -9698,7 +9770,9 @@ class AILISAgentRunner {
                 directToolSpecs,
                 stepResults
             });
-            const promptCacheKey = buildAgentPromptCacheKey(runId, sessionId);
+            const promptCacheKey = buildAgentPromptCacheKey(
+                isUnifiedAgentRole(agentRuntimeRole) ? 'unified-session-v1' : runId, sessionId
+            );
             let directModelInputPrompt = buildLlmAgentDirectToolPrompt({
                 ...commonPromptArgs,
                 unrestrictedToolExecution:
@@ -9810,17 +9884,20 @@ class AILISAgentRunner {
             runtimeEnvironmentNeedsRecording = false;
             modelInputContextManager = directModelInputPrompt.contextManager || modelInputContextManager;
             if (
-                !initialModelInputCheckpointPublished &&
+                (!initialModelInputCheckpointPublished || isUnifiedAgentRole(agentRuntimeRole)) &&
                 modelInputContextManager &&
                 typeof request.onModelInputContextCheckpoint === 'function'
             ) {
                 initialModelInputCheckpointPublished = true;
-                try {
-                    await request.onModelInputContextCheckpoint(
+                const publishCheckpoint = () => request.onModelInputContextCheckpoint(
                         modelInputContextManager.toCheckpoint(),
-                        { runId, sessionId, iteration, phase: 'before_first_model_decision' }
+                        { runId, sessionId, iteration, phase: 'before_model_decision' }
                     );
-                } catch {}
+                if (isUnifiedAgentRole(agentRuntimeRole)) {
+                    await publishCheckpoint();
+                } else {
+                    try { await publishCheckpoint(); } catch {}
+                }
             }
             const modelInputFingerprint = buildModelInputFingerprint({
                 instructions: directModelInputPrompt.instructions,
@@ -10036,6 +10113,13 @@ class AILISAgentRunner {
                 modelInputContextManager?.recordItems
             ) {
                 modelInputContextManager.recordItems(decision.providerResponseItems);
+            }
+            if (isUnifiedAgentRole(agentRuntimeRole) && decision.ok && decision.action === 'final' &&
+                !decision.providerResponseItems?.some((item) => item?.type === 'message' && item.role === 'assistant')) {
+                // Chat Completions adapters may expose only text, not native
+                // ResponseItems. Preserve that exact answer in the same history.
+                const assistantItem = responseMessage('assistant', decision.finalAnswer || decision.summary);
+                if (assistantItem) modelInputContextManager?.recordItems([assistantItem]);
             }
             const llmCallDurationMs = Date.now() - llmCallStartedAt;
             const usageSummary = summarizeLlmUsage(decision.usage);
@@ -10455,7 +10539,7 @@ class AILISAgentRunner {
                     policy: activeDeliveryPolicy,
                     isMutatingTool: (toolId) => getToolContract(toolId)?.mutates === true
                 });
-                if (isTaskAgentRole(agentRuntimeRole) && activeDeliveryPolicy.requireVerification && !delivery.canDeliver) {
+                if ((isTaskAgentRole(agentRuntimeRole) || isUnifiedAgentRole(agentRuntimeRole)) && activeDeliveryPolicy.requireVerification && !delivery.canDeliver) {
                     const gateSignature = JSON.stringify({
                         status: delivery.status,
                         lastMutationIndex: delivery.lastMutationIndex,
@@ -12274,6 +12358,10 @@ class AILISAgentRunner {
                 initialContextManagerCheckpoint: request.initialContextManagerCheckpoint ||
                     llmRequestContext.initialContextManagerCheckpoint ||
                     null
+            }).catch((error) => {
+                this.activeRuns.delete(runId);
+                this.completedRunCount += 1;
+                throw error;
             });
             if (llmResult) {
                 this.activeRuns.delete(runId);

@@ -357,7 +357,10 @@ class AILISToolRuntimeRegistry {
                 }
             });
         }
-        return await tool.dispatch(args, context);
+        const result = await tool.dispatch(args, context);
+        return this.runtime.boundToolOutput
+            ? await this.runtime.boundToolOutput(result, { toolId, callId: context.callId })
+            : result;
     }
 
     async dispatchDirectMcpTool(directMcp, args = {}, context = {}) {
@@ -372,7 +375,10 @@ class AILISToolRuntimeRegistry {
             },
             context
         );
-        return normalizeToolOutput(output, { toolId: directMcp.id });
+        const bounded = this.runtime.boundToolOutput
+            ? await this.runtime.boundToolOutput(output, { toolId: directMcp.id, callId: context.callId })
+            : output;
+        return normalizeToolOutput(bounded, { toolId: directMcp.id });
     }
 }
 

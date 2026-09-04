@@ -334,7 +334,9 @@ function buildObservationContract(output = {}, { toolId = '' } = {}) {
     const truncated = existing.truncated === true ||
         details.truncated === true ||
         details.textTruncated === true ||
-        details.modelBudget?.truncated === true;
+        details.modelBudget?.truncated === true ||
+        output.modelBudget?.truncated === true ||
+        (Array.isArray(output.content) && output.content.some((part) => part?.truncated === true));
     const complete = status === 'completed' && !truncated && (
         existing.complete !== false &&
         details.complete !== false

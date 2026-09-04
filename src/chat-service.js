@@ -3,15 +3,7 @@ import { createAilisCompanionChatService } from './ailis-companion-chat-service.
 import { AILISHostedGatewayClient } from './ailis-hosted-gateway-client.js';
 import { CONFIG } from './config.js';
 
-function normalizeConversationMode(preferences = {}) {
-    const mode = String(preferences?.conversationMode || window.ailisDesktop?.preferences?.conversationMode || 'assistant')
-        .trim()
-        .toLowerCase();
-    return mode === 'daily' ? 'daily' : 'assistant';
-}
-
-export function createChatService(preferences = window.ailisDesktop?.preferences || {}) {
-    const mode = normalizeConversationMode(preferences);
+export function createChatService() {
     const desktopAgentAvailable = Boolean(
         window.ailisDesktop?.platform === 'electron' &&
         window.ailisDesktop?.gateway?.isSupported &&
@@ -22,8 +14,8 @@ export function createChatService(preferences = window.ailisDesktop?.preferences
         CONFIG.HOSTED_AGENT_ENABLED &&
         CONFIG.BACKEND_BASE_URL
     );
-    const useDesktopAgent = mode === 'assistant' && desktopAgentAvailable;
-    const useHostedAgent = mode === 'assistant' && !useDesktopAgent && hostedAgentAvailable;
+    const useDesktopAgent = desktopAgentAvailable;
+    const useHostedAgent = !useDesktopAgent && hostedAgentAvailable;
     const service = useDesktopAgent
         ? new AILISDesktopChatService({ runtimeKind: 'desktop' })
         : useHostedAgent

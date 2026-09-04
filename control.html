@@ -2231,7 +2231,7 @@
                     <div class="page-intro">
                         <div class="page-eyebrow">Agent</div>
                         <div class="page-title">任务能力</div>
-                        <div class="page-copy">这里放和任务执行有关的用户决策：对话模式、执行权限、Agent Lab。内部工具细节不塞进普通设置页。</div>
+                        <div class="page-copy">聊天与任务由同一个 AILIS 处理。这里设置执行权限并查看 Agent Lab。</div>
                     </div>
                     <div class="section-grid">
                 <section class="panel-section section-permissions" id="section-agent">
@@ -2240,13 +2240,7 @@
                         <div class="section-copy">只保留用户需要决定的安全开关，内部实现细节不在控制面板展示。</div>
                     </div>
                     <div class="section-body">
-                        <label class="field">
-                            <div class="field-meta">
-                                <span class="field-label">对话模式</span>
-                            </div>
-                            <select id="conversation-mode"></select>
-                            <div class="field-help">日常对话模式只加载角色设定和本地记忆，不向模型暴露工具、MCP 和任务执行上下文，用来测试低延迟聊天。</div>
-                        </label>
+                        <div class="field-help">AILIS 使用统一会话：聊天、记忆、工具执行与最终回复共享上下文，无需切换人物和任务模式。</div>
 
                         <label class="field inline">
                             <div>

@@ -453,7 +453,7 @@ class ContextManager {
         const packageBefore = this.buildContextPackage(options);
         const contextMode = String(options.contextMode || 'task_agent').trim().toLowerCase();
         const personaMode = contextMode === 'persona';
-        const persistentTaskAgentSession = contextMode === 'task_agent_session';
+        const persistentTaskAgentSession = ['task_agent_session', 'unified_session'].includes(contextMode);
         const contextMessages = this.items
             .filter((item) => persistentTaskAgentSession
                 ? isRuntimeContextMessage(item) && !isSessionCheckpointMessage(item)

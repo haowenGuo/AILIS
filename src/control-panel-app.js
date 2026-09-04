@@ -368,8 +368,7 @@ const recognitionModeLabels = {
 };
 
 const conversationModeLabels = {
-    assistant: '助手模式：任务执行',
-    daily: '日常对话：低延迟'
+    assistant: 'AILIS：统一会话'
 };
 
 const elevenLabsLanguagePresets = {
@@ -1721,9 +1720,7 @@ function normalizePreferences(preferences = {}) {
         speechMode: String(preferences.speechMode || 'off'),
         chunkedTtsEnabled: preferences.chunkedTtsEnabled !== false,
         recognitionMode: String(preferences.recognitionMode || 'auto-vad'),
-        conversationMode: ['assistant', 'daily'].includes(String(preferences.conversationMode || '').trim())
-            ? String(preferences.conversationMode).trim()
-            : 'assistant',
+        conversationMode: 'assistant',
         uiLanguage: normalizeUiLanguage(preferences.uiLanguage || 'zh-CN'),
         preferredMicDeviceId: String(preferences.preferredMicDeviceId || ''),
         ailisStateDir: String(preferences.ailisStateDir || ''),
@@ -7035,7 +7032,7 @@ async function initialize() {
         fillScaleOptions(panelState.options?.petScaleOptions || []);
         fillSpeechModeOptions(panelState.options?.speechModeOptions || []);
         fillRecognitionModeOptions(panelState.options?.recognitionModeOptions || ['fast-vad', 'auto-vad', 'continuous', 'manual']);
-        fillConversationModeOptions(panelState.options?.conversationModeOptions || ['assistant', 'daily']);
+        fillConversationModeOptions(['assistant']);
         fillLlmProviderOptions(panelState.options?.llmProviderOptions || ['openai-compatible']);
         fillVisionLlmProviderOptions(panelState.options?.llmProviderOptions || ['openai-compatible']);
         fillLlmPresetOptions();

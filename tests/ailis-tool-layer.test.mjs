@@ -1240,9 +1240,8 @@ test('AILIS runtime budget preserves primary tool text beyond structured string 
     });
 
     assert.equal(compacted.content[0].text, text);
-    assert.equal(compacted.content[0].originalTextChars, text.length);
-    assert.equal(compacted.content[0].truncated, false);
-    assert.equal(compacted.details.stdout.length < text.length, true);
+    assert.notEqual(compacted.content[0].truncated, true);
+    assert.equal(compacted.details.stdout, text);
 });
 
 test('AILIS runtime budget preserves every line in a bounded source viewport', () => {

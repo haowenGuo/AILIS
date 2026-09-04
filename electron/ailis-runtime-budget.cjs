@@ -135,15 +135,15 @@ function compactJsonByteLength(value) {
 }
 
 function truncateMiddleText(value, maxChars = DEFAULT_TEXT_BUDGET_CHARS) {
-    const text = normalizeString(value);
+    const text = typeof value === 'string' ? value : '';
     const budget = Math.max(0, Number(maxChars) || 0);
     if (!budget || text.length <= budget) {
         return text;
     }
-    if (budget <= 16) {
-        return `${text.slice(0, Math.max(0, budget - 3))}...`;
-    }
     const marker = '\n... [truncated for model budget] ...\n';
+    if (budget < marker.length) {
+        return `${text.slice(0, Math.max(0, budget - 3))}${'.'.repeat(Math.min(3, budget))}`;
+    }
     const remaining = Math.max(0, budget - marker.length);
     const head = Math.ceil(remaining * 0.6);
     const tail = Math.max(0, remaining - head);
@@ -151,7 +151,7 @@ function truncateMiddleText(value, maxChars = DEFAULT_TEXT_BUDGET_CHARS) {
 }
 
 function makeHeadTailPreview(value, maxChars = DEFAULT_TEXT_BUDGET_CHARS, options = {}) {
-    const text = normalizeString(value);
+    const text = typeof value === 'string' ? value : '';
     const budget = Math.max(0, Number(maxChars) || 0);
     const headRatio = Math.min(0.85, Math.max(0.15, Number(options.headRatio || 0.6)));
     if (!budget || text.length <= budget) {
@@ -164,8 +164,9 @@ function makeHeadTailPreview(value, maxChars = DEFAULT_TEXT_BUDGET_CHARS, option
             omittedTextChars: 0
         };
     }
-    if (budget <= 16) {
-        const preview = `${text.slice(0, Math.max(0, budget - 3))}...`;
+    const marker = '\n... [middle omitted for model budget; use output refs for exact slices when available] ...\n';
+    if (budget < marker.length) {
+        const preview = `${text.slice(0, Math.max(0, budget - 3))}${'.'.repeat(Math.min(3, budget))}`;
         return {
             text: preview,
             strategy: 'head_tail',
@@ -175,7 +176,6 @@ function makeHeadTailPreview(value, maxChars = DEFAULT_TEXT_BUDGET_CHARS, option
             omittedTextChars: Math.max(0, text.length - preview.length)
         };
     }
-    const marker = '\n... [middle omitted for model budget; use output refs for exact slices when available] ...\n';
     const remaining = Math.max(0, budget - marker.length);
     const head = Math.ceil(remaining * headRatio);
     const tail = Math.max(0, remaining - head);
@@ -632,126 +632,44 @@ function summarizeForModel(value, maxChars = DEFAULT_TEXT_BUDGET_CHARS) {
 }
 
 function compactToolResultForModel(result = {}, options = {}) {
-    const maxTextChars = Math.max(256, Number(options.maxTextChars || DEFAULT_TEXT_BUDGET_CHARS));
-    const maxStructuredStringChars = Math.max(128, Number(options.maxStructuredStringChars || DEFAULT_JSON_STRING_BUDGET_CHARS));
-    const output = stripModelGuidance(cloneJson(result || {}), {
-        preserveGuidanceKeys: options.preserveGuidanceKeys
-    });
+    // This is an envelope boundary, not an implicit summary of every JSON
+    // string/array. Tool-owned structured data and binary blocks stay intact.
+    const output = cloneJson(result);
     if (!output || typeof output !== 'object') {
-        return {
-            content: [{ type: 'text', text: summarizeForModel(output, maxTextChars) }],
-            isError: false,
-            details: {}
-        };
+        return { content: [{ type: 'text', text: String(output ?? '') }], details: {} };
     }
-    if (Array.isArray(output.content)) {
-        let remaining = maxTextChars;
+    const explicitBudget = options.maxTextChars == null ? NaN : Number(options.maxTextChars);
+    let truncated = false;
+    if (Number.isFinite(explicitBudget) && explicitBudget >= 0 && Array.isArray(output.content)) {
+        let remaining = Math.floor(explicitBudget);
         output.content = output.content.map((part) => {
-            if (!part || typeof part !== 'object') {
-                const text = truncateMiddleText(String(part ?? ''), remaining);
-                remaining = Math.max(0, remaining - text.length);
-                return { type: 'text', text };
+            if (!part || typeof part.text !== 'string') return part;
+            const source = part.text;
+            if (source.length <= remaining) {
+                remaining -= source.length;
+                return part;
             }
-            if (typeof part.text === 'string') {
-                const metadata = { ...part };
-                delete metadata.text;
-                const next = compactJsonForModel(metadata, {
-                    maxStringChars: maxStructuredStringChars,
-                    maxArrayItems: 16,
-                    maxObjectKeys: 48,
-                    maxDepth: 5
-                });
-                const sourceText = stripGuidanceFromModelText(part.text);
-                const originalTextChars = Number.isFinite(Number(part.originalTextChars))
-                    ? Number(part.originalTextChars)
-                    : sourceText.length;
-                const jsonLikeText = /^\s*[\[{]/.test(sourceText);
-                let modelText = sourceText;
-                let structurallyCompacted = false;
-                if (jsonLikeText && sourceText.length > maxTextChars) {
-                    try {
-                        modelText = JSON.stringify(compactJsonForModel(JSON.parse(sourceText), {
-                            maxStringChars: maxStructuredStringChars,
-                            maxArrayItems: 32,
-                            maxObjectKeys: 80,
-                            maxDepth: 8
-                        }), null, 2);
-                        structurallyCompacted = modelText.length < sourceText.length;
-                    } catch {
-                        modelText = sourceText;
-                    }
+            const preview = remaining > 0 ? makeHeadTailPreview(source, remaining).text : '';
+            truncated = true;
+            remaining = Math.max(0, remaining - preview.length);
+            return {
+                ...part,
+                text: preview,
+                truncated: true,
+                originalTextChars: part.originalTextChars ?? source.length,
+                modelVisibleTruncation: {
+                    originalTextChars: source.length,
+                    visibleTextChars: preview.length,
+                    truncationScope: 'explicit_tool_text_budget'
                 }
-                next.text = jsonLikeText ? modelText : truncateMiddleText(modelText, remaining || 128);
-                next.originalTextChars = originalTextChars;
-                const modelViewShortened = structurallyCompacted || next.text.length < sourceText.length || originalTextChars > next.text.length;
-                next.truncated = Boolean(part.truncated) || modelViewShortened;
-                if (modelViewShortened) {
-                    const notice = buildModelVisibleTruncationNotice({
-                        originalTextChars,
-                        visibleTextChars: next.text.length
-                    });
-                    next.modelVisibleTruncation = {
-                        originalTextChars,
-                        visibleTextChars: next.text.length,
-                        truncationScope: 'model_visible_tool_result_text'
-                    };
-                    if (!jsonLikeText) {
-                        const noticeBudget = remaining || 128;
-                        next.text = truncateMiddleText(`${notice}\n\n${next.text}`, noticeBudget);
-                    }
-                }
-                remaining = Math.max(0, remaining - next.text.length);
-                return next;
-            }
-            const next = compactJsonForModel(part, {
-                maxStringChars: Math.min(maxStructuredStringChars, Math.max(128, remaining || maxStructuredStringChars)),
-                maxArrayItems: 16,
-                maxObjectKeys: 48,
-                maxDepth: 5
-            });
-            if (typeof next.text === 'string') {
-                next.originalTextChars = part.text.length;
-                next.text = truncateMiddleText(next.text, remaining || 128);
-                const modelViewShortened = next.text.length < part.text.length;
-                next.truncated = next.truncated || modelViewShortened;
-                if (modelViewShortened) {
-                    const notice = buildModelVisibleTruncationNotice({
-                        originalTextChars: next.originalTextChars,
-                        visibleTextChars: next.text.length
-                    });
-                    next.modelVisibleTruncation = {
-                        originalTextChars: next.originalTextChars,
-                        visibleTextChars: next.text.length,
-                        truncationScope: 'model_visible_tool_result_text'
-                    };
-                    if (!/^\s*[\[{]/.test(part.text)) {
-                        next.text = truncateMiddleText(`${notice}\n\n${next.text}`, remaining || 128);
-                    }
-                }
-                remaining = Math.max(0, remaining - next.text.length);
-            }
-            return next;
-        });
-    }
-    if (output.details && typeof output.details === 'object') {
-        output.details = compactJsonForModel(output.details, {
-            maxStringChars: maxStructuredStringChars,
-            maxArrayItems: 20,
-            maxObjectKeys: 64,
-            maxDepth: 5
-        });
-    }
-    if (output.structuredContent && typeof output.structuredContent === 'object') {
-        output.structuredContent = compactJsonForModel(output.structuredContent, {
-            maxStringChars: maxStructuredStringChars,
-            maxArrayItems: 20,
-            maxObjectKeys: 64,
-            maxDepth: 5
+            };
         });
     }
     output.modelBudget = {
-        status: 'compacted',
-        maxTextChars,
+        ...(output.modelBudget || {}),
+        status: 'tool_owned',
+        ...(truncated ? { truncated: true, truncationScope: 'explicit_tool_text_budget' } : {}),
+        ...(Number.isFinite(explicitBudget) && explicitBudget >= 0 ? { maxTextChars: explicitBudget } : {}),
         approxTokens: approxTokenCount(output)
     };
     return output;

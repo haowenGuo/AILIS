@@ -85,7 +85,9 @@ test('AILIS runtime guards tool results and repairs incomplete transcripts', asy
     assert.equal(guarded.content[0].truncated, true);
     assert.equal(guarded.details.apiKey, '__REDACTED__');
     assert.equal(guarded.details.guard.tool, 'read');
-    assert.equal(guarded.details.modelVisibleContent.status, 'model_visible_truncated');
+    assert.equal(guarded.modelBudget.truncationScope, 'explicit_tool_text_budget');
+    assert.equal(guarded.details.observationContract.truncated, true);
+    assert.equal(guarded.details.observationContract.complete, false);
 
     const guardedWorkbenchRead = runtime.guardToolResult(
         {
@@ -101,14 +103,12 @@ test('AILIS runtime guards tool results and repairs incomplete transcripts', asy
         },
         { toolId: 'read', callId: 'guard-workbench-read', maxTextChars: 512 }
     );
-    assert.equal(guardedWorkbenchRead.content[0].modelVisibleTruncated, true);
-    assert.match(guardedWorkbenchRead.content[0].text, /MODEL_VISIBLE_CONTENT_TRUNCATED/);
-    assert.match(guardedWorkbenchRead.content[0].text, /truncationScope=model_visible_tool_result_text/);
-    assert.equal(guardedWorkbenchRead.details.modelVisibleContent.fullFileReadTruncated, false);
-    assert.equal(
-        guardedWorkbenchRead.details.modelVisibleContent.semantics.contentTruncatedMeansModelVisibleProjectionTruncation,
-        true
-    );
+    assert.equal(guardedWorkbenchRead.content[0].truncated, true);
+    assert.ok(guardedWorkbenchRead.content[0].text.length <= 512);
+    assert.equal(guardedWorkbenchRead.content[0].modelVisibleTruncation.truncationScope, 'explicit_tool_text_budget');
+    // A complete file read and an explicitly budgeted text view are distinct.
+    assert.equal(guardedWorkbenchRead.details.truncated, false);
+    assert.equal(guardedWorkbenchRead.details.observationContract.complete, false);
 
     const sourceLines = Array.from({ length: 60 }, (_, index) => ({
         lineno: 330 + index,
