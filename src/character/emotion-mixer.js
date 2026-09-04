@@ -97,16 +97,3 @@ export function mixExpressionsForSurface(surface = {}) {
 
     return normalizeMix(expressionMix);
 }
-
-export function mixExpressionsForAmicaEmotion(emotionName = 'relaxed', options = {}) {
-    return normalizeMix({
-        ...(EXPRESSION_MIXES[emotionName] || EXPRESSION_MIXES.relaxed),
-        ...(options.extraMix || {})
-    });
-}
-
-export function getPrimaryExpressionForSurface(surface = {}) {
-    const mix = mixExpressionsForSurface(surface);
-    const entries = Object.entries(mix).sort((a, b) => b[1] - a[1]);
-    return entries[0]?.[0] || 'relaxed';
-}

@@ -290,16 +290,6 @@ function matchingRoutingProfiles(query = '') {
     return ROUTING_PROFILES.filter((profile) => profile.patterns.some((pattern) => pattern.test(normalized)));
 }
 
-function toolMatchesRoutingProfile(entry = {}, query = '') {
-    const toolName = canonicalToolName(entry);
-    if (!toolName) {
-        return false;
-    }
-    return matchingRoutingProfiles(query).some((profile) => (
-        (profile.tools || []).includes(toolName) ||
-        (profile.primaryTools || []).includes(toolName)
-    ));
-}
 
 function tokenizeSearchQuery(query = '') {
     return normalizeForSearch(query)
@@ -528,5 +518,4 @@ module.exports = {
     matchingRoutingProfiles,
     rankToolSearchResults,
     scoreToolForQuery,
-    toolMatchesRoutingProfile
 };

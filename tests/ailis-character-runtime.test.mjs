@@ -6,7 +6,7 @@ import { CharacterSceneDirector } from '../src/character/scene-director.js';
 import { CharacterStateMachine } from '../src/character/character-state-machine.js';
 import { CharacterEmoteController } from '../src/character/emote-controller.js';
 import { ChatVRMAmicaMotionController } from '../src/character/chatvrm-amica-motion-controller.js';
-import { parseEmotionTaggedText, surfaceToScreenplay, textsToScreenplay } from '../src/character/chatvrm-amica-screenplay.js';
+import { surfaceToScreenplay } from '../src/character/chatvrm-amica-screenplay.js';
 import { CharacterBehaviorScheduler } from '../src/character/behavior-scheduler.js';
 import { mixExpressionsForSurface } from '../src/character/emotion-mixer.js';
 import { isMotionApproved, listMotionLibrary, selectMotionForSurface } from '../src/character/motion-library.js';
@@ -211,22 +211,18 @@ test('lip sync keeps fast speech peaks visible without double smoothing', () => 
     assert.ok(values.aa < 0.8);
 });
 
-test('chatvrm/amica screenplay parses emotion tags without leaking VRM action names', () => {
-    const parsed = parseEmotionTaggedText('[love]我有点想贴贴。');
-    assert.equal(parsed.emotion, 'love');
-    assert.equal(parsed.message, '我有点想贴贴。');
-
-    const talks = textsToScreenplay(['[serious]我先检查一下。', '然后告诉你结果。']);
-    assert.equal(talks[0].expression, 'serious');
-    assert.equal(talks[0].talk.style, 'talk');
-    assert.equal(talks[1].expression, 'serious');
-
+test('chatvrm/amica screenplay maps the structured surface to speech and emotion', () => {
     const screenplay = surfaceToScreenplay({
         emotion: 'victory',
         text: '搞定啦。'
     });
     assert.equal(screenplay.expression, 'victory');
     assert.equal(screenplay.talk.style, 'happy');
+    assert.equal(screenplay.talk.message, '搞定啦。');
+    const serious = surfaceToScreenplay({ emotion: 'serious', text: '我先检查一下。' });
+    assert.equal(serious.expression, 'serious');
+    assert.equal(serious.talk.style, 'talk');
+    assert.equal(serious.talk.message, '我先检查一下。');
 });
 
 test('amica-style motion controller plays one-shot action and fades back to idle', () => {

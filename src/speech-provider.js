@@ -435,9 +435,6 @@ class CosyVoice3TTSCandidate {
         return normalizeSynthesisResult(result);
     }
 
-    async synthesizeChunk(text) {
-        return this.synthesizeSpeech(text);
-    }
 
     async speak({
         payload,

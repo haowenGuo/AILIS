@@ -17,7 +17,6 @@ const CRON_TOOL_DISPLAY_SUMMARY = 'Schedule reminders, cron, wake events.';
 const SESSIONS_LIST_TOOL_DISPLAY_SUMMARY = 'List visible sessions; filters/previews.';
 const SESSIONS_HISTORY_TOOL_DISPLAY_SUMMARY = 'Read sanitized session history.';
 const SESSIONS_SEND_TOOL_DISPLAY_SUMMARY = 'Message session or configured agent.';
-const SESSIONS_SPAWN_TOOL_DISPLAY_SUMMARY = 'Spawn subagent or ACP session.';
 const SESSION_STATUS_TOOL_DISPLAY_SUMMARY = 'Show session status/model/usage.';
 const UPDATE_PLAN_TOOL_DISPLAY_SUMMARY = 'Track short work plan.';
 

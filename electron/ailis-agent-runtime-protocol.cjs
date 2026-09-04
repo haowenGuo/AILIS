@@ -62,9 +62,6 @@ const MODEL_VISIBLE_RESPONSE_ITEM_TYPES = Object.freeze([
     'tool_search_output'
 ]);
 
-function responseItemTypes() {
-    return SUPPORTED_RESPONSE_ITEM_TYPES.slice();
-}
 
 function modelVisibleResponseItemTypes() {
     return MODEL_VISIBLE_RESPONSE_ITEM_TYPES.slice();
@@ -281,7 +278,6 @@ module.exports = {
     modelVisibleResponseItemTypes,
     normalizeRuntimeEvent,
     responseItemProtocolRole,
-    responseItemTypes,
     runtimeEventMetadata,
     validateSupportedResponseItem
 };

@@ -1094,30 +1094,6 @@ export class ChatTTSSystem {
         throw lastError || new Error('获取回复失败');
     }
 
-    async renderAssistantReply(payload, aiMessageDiv) {
-        const displayText = payload.display_text || payload.speech_text || '...';
-        const alignment = payload.normalized_alignment || payload.alignment || null;
-
-        if (payload.streamMode) {
-            this.updateMessageContent(aiMessageDiv, displayText);
-            this.scrollToBottom();
-            await this.playPreferredSpeech({
-                payload,
-                displayText,
-                alignment,
-                aiMessageDiv
-            });
-            return;
-        }
-
-        this.executeAvatarCue(payload, aiMessageDiv);
-        await this.playPreferredSpeech({
-            payload,
-            displayText,
-            alignment,
-            aiMessageDiv
-        });
-    }
 
     renderStreamingAssistantReply(payload, aiMessageDiv) {
         const displayText = payload.display_text || payload.speech_text || '';

@@ -1,5 +1,7 @@
 # AILIS Realtime Voice Plan v2
 
+> 历史方案，不是当前运行链路说明。2026-09-05 精简工作树保留流式 TTS 的 session/queue 实现；本文旧基线中的 `renderAssistantReply()` 已无生产调用并已移除。当前入口见 `src/chat-tts-system.js` 的 `sendMessage()` 与 `playPreferredSpeech()`，回归见 `tests/realtime-voice-tts.test.mjs`、`tests/chat-tts-streaming-lip-sync.test.mjs`。
+
 Branch: `codex/realtime-voice-airi`
 
 这版方案替代第一版。第一版的问题是太像“从零建一个完整实时语音系统”。现在的目标改成更务实的一句话：

@@ -780,14 +780,6 @@ class ContextManager {
         });
     }
 
-    totalModelVisibleChars() {
-        return this.items.reduce((sum, item) => {
-            if (item?.type === 'function_call_output' || item?.type === 'custom_tool_call_output' || item?.type === 'tool_search_output') {
-                return sum + responseItemOutputToText(item).length;
-            }
-            return sum + JSON.stringify(item || {}).length;
-        }, 0);
-    }
 
     toCheckpoint() {
         return {

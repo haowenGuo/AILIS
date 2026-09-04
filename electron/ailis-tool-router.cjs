@@ -113,11 +113,6 @@ class ToolRegistry {
         });
     }
 
-    byExposure(exposure = ToolExposure.DIRECT) {
-        return this.entries
-            .filter((entry) => entry.exposure === exposure)
-            .map((entry) => entry.spec);
-    }
 
     all() {
         return this.entries.map((entry) => ({ ...entry }));

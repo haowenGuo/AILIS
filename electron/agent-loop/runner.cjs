@@ -7,7 +7,6 @@ const {
 } = require('../desktop-llm-provider.cjs');
 const { VISION_TOOL_ID } = require('../ailis-vision-tool.cjs');
 const {
-    listAILISSkillSummaries,
     buildAILISSkillContextText
 } = require('../ailis-skills.cjs');
 const {
@@ -16,7 +15,6 @@ const {
     validateAgainstSchema
 } = require('../ailis-tool-contracts.cjs');
 const {
-    buildObservationLedgerPromptObject,
     classifyToolFailureObservation,
     formatFailureHint,
     sanitizeToolArgsForPrompt
@@ -121,7 +119,6 @@ const A7_LUNA_CONTEXT_PROFILE = Object.freeze({
 });
 const MAX_RESULT_PREVIEW_CHARS = 2600;
 const STRUCTURED_TOOL_RESULT_PREVIEW_CHARS = 12000;
-const MAX_PROMPT_PROGRESS_CHARS = 700;
 const MAX_PROMPT_MEMORY_CHARS = 20000;
 const LOCAL_AGENT_PROMPT_MEMORY_CHARS = 1200;
 const LOCAL_AGENT_PROMPT_HISTORY_ITEMS = 4;
@@ -244,7 +241,6 @@ const EMAIL_UNREAD_ACTION_HINTS = new Set([
     'unseen'
 ]);
 
-const AGENT_SKILL_CATALOG = Object.freeze(listAILISSkillSummaries().map((skill) => Object.freeze(skill)));
 const AGENT_TOOL_CATALOG = Object.freeze([
     Object.freeze({ id: VISION_TOOL_ID, label: VISION_TOOL_ID, summary: '只读视觉感知：截图并返回视觉理解 observation。' }),
     Object.freeze({ id: 'computer', label: 'computer', summary: '完整电脑操作入口。' }),
@@ -263,9 +259,6 @@ const AGENT_TOOL_CATALOG = Object.freeze([
     Object.freeze({ id: 'capability_manager', label: 'capability_manager', summary: '能力注册、安装、外部工具批量暴露、Contract 编译/验收、Skill 生成、回滚和已审批修复执行。' }),
     Object.freeze({ id: 'self_debugger', label: 'self_debugger', summary: 'AILIS 自身 bug 的专用排查协议：建案、收集运行资料、诊断、提补丁和验证。' }),
     Object.freeze({ id: 'self_evolution', label: 'self_evolution', summary: '通过对话和任务执行分析用户偏好、工具瓶颈、能力缺口，并生成可审批的自我优化提案。' })
-]);
-const AGENT_MCP_CATALOG = Object.freeze([
-    Object.freeze({ id: 'mcp_bridge', label: 'MCP Bridge', summary: '发现 MCP servers/tool specs/resources/prompts；普通网页、PDF、GitHub、数据库取证任务应先获得 mcp__server__tool direct spec，再直接调用。' })
 ]);
 const VISION_NATIVE_TOOL_NAME = 'vision_capture_context';
 const CAPABILITY_ID_ALIASES = new Map([
@@ -4229,13 +4222,6 @@ function sanitizeComputerPlannerStep(step, index, phase = 'execute') {
     };
 }
 
-function stepNeedsConfirmation(step) {
-    if (!step || step.tool !== 'computer') {
-        return true;
-    }
-    const action = normalizeText(step.args?.action || step.args?.operation || step.args?.intent).toLowerCase();
-    return COMPUTER_MUTATING_ACTIONS.has(action);
-}
 
 function isConfirmationMessage(message) {
     return /^(确认|确认执行|批准|同意|允许|可以|可以看|看吧|你看吧|看一下|可以执行|开始执行|执行吧|继续|approve|approved|confirm|yes|y|ok)$/i.test(compactText(message));
@@ -4249,26 +4235,7 @@ function isPlanExpired(plan) {
     return Boolean(plan?.expiresAt && Date.now() > plan.expiresAt);
 }
 
-function displayPlanLines(steps = []) {
-    return steps.map((step, index) => {
-        const action = normalizeText(step.args?.action, 'schema');
-        const target = normalizeText(step.args?.path || step.args?.target || step.args?.source || step.args?.command || step.args?.dir);
-        return `${index + 1}. ${step.title || `处理步骤（${action}）`}${target ? `：${target}` : ''}`;
-    });
-}
 
-function buildPlanConfirmationText(plan) {
-    const lines = [
-        '我已经把这件事拆成可执行的小计划，但还没有动你的电脑。',
-        plan.summary ? `目标：${plan.summary}` : '',
-        '计划步骤：',
-        ...displayPlanLines(plan.steps),
-        plan.verificationSteps?.length ? '复核步骤：' : '',
-        ...displayPlanLines(plan.verificationSteps || []),
-        '你点头我就继续，不想继续也可以先停。'
-    ].filter(Boolean);
-    return lines.join('\n');
-}
 
 function stripControlTags(value) {
     return stripInternalControlBlocks(value)
@@ -7136,41 +7103,6 @@ function buildLlmAgentDirectToolPrompt({
     };
 }
 
-function buildTaskRouteDirectToolPrompt({
-    message = '',
-    taskState = null,
-    fileAttachments = [],
-    runtimeEnvironment = null,
-    tools = []
-} = {}) {
-    const sessionLedger = taskState?.session_ledger && typeof taskState.session_ledger === 'object'
-        ? taskState.session_ledger
-        : {};
-    const visibleHistory = (Array.isArray(sessionLedger.visible_history)
-        ? sessionLedger.visible_history
-        : [])
-        .slice(-240)
-        .map((entry) => ({
-            role: normalizeText(entry?.role) === 'assistant' ? 'assistant' : 'user',
-            content: normalizeText(entry?.content)
-        }))
-        .filter((entry) => entry.content);
-    return buildLlmAgentDirectToolPrompt({
-        message,
-        messageHistory: visibleHistory,
-        fileAttachments,
-        runtimeEnvironment,
-        tools,
-        contextMode: 'task_agent',
-        taskAgentRoutingOwned: true,
-        taskAgentRoutePending: true,
-        taskAgentInheritanceMode: 'clean',
-        taskState: {
-            ...(taskState && typeof taskState === 'object' ? taskState : {}),
-            thread_id: normalizeText(taskState?.thread_id || taskState?.threadId, 'task-route-preview')
-        }
-    });
-}
 
 function appendUserInputToContextManager(contextManager, text = '') {
     const normalized = normalizeText(text);
@@ -8354,67 +8286,7 @@ class AILISAgentRunner {
         return plan;
     }
 
-    buildPendingPlan({ plan, message, sessionId, settings }) {
-        const executeSteps = plan.steps
-            .map((step, index) => sanitizeComputerPlannerStep(step, index, 'execute'))
-            .filter(Boolean);
-        const verificationSteps = plan.verificationSteps
-            .map((step, index) => sanitizeComputerPlannerStep(step, index, 'verify'))
-            .filter(Boolean);
-        return {
-            planId: randomUUID(),
-            sessionId,
-            message,
-            createdAt: Date.now(),
-            expiresAt: Date.now() + DEFAULT_PENDING_PLAN_TTL_MS,
-            planner: 'llm-computer-planner',
-            intent: plan.intent,
-            summary: plan.summary || message,
-            riskLevel: plan.riskLevel,
-            requiresConfirmation: plan.requiresConfirmation || executeSteps.some(stepNeedsConfirmation),
-            model: settings.model,
-            steps: executeSteps,
-            verificationSteps,
-            raw: plan.raw
-        };
-    }
 
-    buildNeedsConfirmationResult({ runId, sessionId, message, startedAt, pendingPlan, dryRun }) {
-        const displayText = dryRun
-            ? ['我已经用 LLM Planner 拆出计划：', ...displayPlanLines(pendingPlan.steps)].join('\n')
-            : buildPlanConfirmationText(pendingPlan);
-        return {
-            ok: dryRun,
-            runId,
-            sessionId,
-            status: dryRun ? 'planned' : 'needs_approval',
-            mode: 'task',
-            planner: 'llm-computer-planner',
-            intent: pendingPlan.intent || 'llm_computer_task',
-            confirmationRequired: !dryRun,
-            approvalType: 'plan_confirmation',
-            planId: pendingPlan.planId,
-            expiresAt: new Date(pendingPlan.expiresAt).toISOString(),
-            executionRequired: pendingPlan.steps.length > 0,
-            durationMs: Date.now() - startedAt,
-            message,
-            displayText,
-            speechText: displayText.replace(/\n/g, ' '),
-            plan: pendingPlan.steps.map((step) => ({
-                id: step.id,
-                title: step.title,
-                tool: step.tool,
-                args: step.args
-            })),
-            verificationPlan: pendingPlan.verificationSteps.map((step) => ({
-                id: step.id,
-                title: step.title,
-                tool: step.tool,
-                args: step.args
-            })),
-            steps: []
-        };
-    }
 
     pruneExpiredAgentApprovals() {
         let changed = false;
@@ -12355,7 +12227,6 @@ module.exports = {
     buildToolExecutionGroups,
     buildAgentPromptCacheKey,
     buildLlmAgentDirectToolPrompt,
-    buildTaskRouteDirectToolPrompt,
     appendUserInputToContextManager,
     buildTaskRunHandoffPackage,
     buildResearchProgressState,

@@ -10,22 +10,6 @@ const DEFAULT_HOLD_SECONDS = Object.freeze({
     hold: Infinity
 });
 
-const EMOTION_FALLBACK_MIXES = Object.freeze({
-    neutral: { relaxed: 0.16 },
-    relaxed: { relaxed: 0.42 },
-    happy: { happy: 0.42, relaxed: 0.18 },
-    angry: { angry: 0.5 },
-    sad: { sad: 0.48, relaxed: 0.16 },
-    surprised: { surprised: 0.46, relaxed: 0.1 },
-    shy: { happy: 0.16, relaxed: 0.28, blinkRight: 0.2 },
-    jealous: { angry: 0.22, sad: 0.12, relaxed: 0.12 },
-    bored: { relaxed: 0.24, sad: 0.12 },
-    serious: { relaxed: 0.34, surprised: 0.06 },
-    suspicious: { surprised: 0.16, angry: 0.12, relaxed: 0.16 },
-    victory: { happy: 0.5, relaxed: 0.18 },
-    sleep: { relaxed: 0.28, sad: 0.12, blink: 0.24 },
-    love: { happy: 0.22, relaxed: 0.34, blinkRight: 0.18 }
-});
 
 function clamp(value, minimum = 0, maximum = 1) {
     const numberValue = Number(value);
@@ -181,17 +165,6 @@ export class CharacterEmoteController {
         return true;
     }
 
-    playEmotion(emotionName, options = {}) {
-        const normalized = String(emotionName || 'relaxed').trim().toLowerCase();
-        const directExpressionName = this.resolveExpressionName(normalized);
-        const fallbackMix = EMOTION_FALLBACK_MIXES[normalized] || EMOTION_FALLBACK_MIXES.relaxed;
-        const mix = directExpressionName
-            ? { [directExpressionName]: normalized === 'surprised' ? 0.5 : 1 }
-            : fallbackMix;
-        return this.setEmotionMix(mix, {
-            durationHint: options.durationHint || 'medium'
-        });
-    }
 
     lipSync(expressionName = 'aa', value = 0) {
         if (this.resolveExpressionName(expressionName || 'aa') !== 'aa') {
@@ -217,13 +190,6 @@ export class CharacterEmoteController {
         }
     }
 
-    forceBlink() {
-        if (!this.expressionManager) {
-            return false;
-        }
-        this.closeBlink();
-        return true;
-    }
 
     closeBlink() {
         this.isBlinkClosed = true;

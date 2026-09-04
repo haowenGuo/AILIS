@@ -90,53 +90,6 @@ export function emotionToTalkStyle(emotion) {
             return 'talk';
     }
 }
-
-export function splitScreenplaySentences(text = '') {
-    const normalized = normalizeText(text);
-    if (!normalized) {
-        return [];
-    }
-    return normalized
-        .split(/(?<=[。．！？!?；;\n])/g)
-        .map((item) => item.trim())
-        .filter(Boolean);
-}
-
-export function parseEmotionTaggedText(text = '', fallbackEmotion = 'relaxed') {
-    const rawText = normalizeText(text);
-    const tagMatch = rawText.match(/^\s*\[([^\]]+)\]\s*/);
-    const emotion = normalizeAmicaEmotion(tagMatch?.[1], fallbackEmotion);
-    const message = tagMatch
-        ? rawText.slice(tagMatch[0].length).trim()
-        : rawText;
-
-    return {
-        emotion,
-        message,
-        rawText
-    };
-}
-
-export function textsToScreenplay(texts = [], { previousEmotion = 'relaxed' } = {}) {
-    const screenplays = [];
-    let activeEmotion = normalizeAmicaEmotion(previousEmotion, 'relaxed');
-
-    for (const text of Array.isArray(texts) ? texts : [texts]) {
-        const parsed = parseEmotionTaggedText(text, activeEmotion);
-        activeEmotion = parsed.emotion;
-        screenplays.push({
-            expression: activeEmotion,
-            talk: {
-                style: emotionToTalkStyle(activeEmotion),
-                message: parsed.message
-            },
-            text: parsed.rawText
-        });
-    }
-
-    return screenplays;
-}
-
 export function surfaceToScreenplay(surface = {}, fallbackText = '') {
     const emotion = normalizeAmicaEmotion(surface.emotion, 'relaxed');
     const text = normalizeText(surface.text || fallbackText);

@@ -28,7 +28,6 @@ const {
         buildLlmAgentDirectToolPrompt,
         buildRunCostSummary,
     appendUserInputToContextManager,
-    buildTaskRouteDirectToolPrompt,
     buildToolExecutionGroups,
     buildResearchProgressState,
         buildStagedAttachmentFilename,
@@ -230,40 +229,6 @@ test('a smaller explicit Luna window keeps ratio thresholds instead of collapsin
     assert.equal(config.softTokenLimit, 0);
     assert.equal(config.hardTokenLimit, 0);
     assert.equal(config.stopTokenLimit, 0);
-});
-
-test('TaskAgent first route reuses the canonical raw conversation instead of a route-context duplicate', () => {
-    const prompt = buildTaskRouteDirectToolPrompt({
-        message: '不用列清单，直接告诉我：今晚该继续硬撑，还是早点休息？',
-        taskState: {
-            active_goal: null,
-            session_ledger: {
-                visible_history: [
-                    { role: 'user', content: '我今天有点累，陪我简单聊两句。', authority: 'user_instruction' },
-                    { role: 'assistant', content: '那就在聊天里歇一会儿吧。', authority: 'display_only' }
-                ],
-                completed_turns: [],
-                unresolved_fields: []
-            }
-        },
-        tools: [{
-            name: 'task_route',
-            description: 'Route this turn.',
-            parameters: {
-                type: 'object',
-                required: ['mode'],
-                properties: { mode: { type: 'string', enum: ['chat', 'execute'] } }
-            }
-        }]
-    });
-
-    assert.deepEqual(prompt.tools.map((tool) => tool.name), ['task_route']);
-    assert.equal(prompt.instructions, CODEX_NATIVE_INSTRUCTIONS);
-    assert.doesNotMatch(prompt.instructions, /AILIS Responses-Compatible Tool Runtime|coding agent running in AILIS/);
-    assert.doesNotMatch(JSON.stringify(prompt.input), /task_route_context|current_request|visible_history/);
-    assert.match(JSON.stringify(prompt.input), /今晚该继续硬撑/);
-    assert.match(JSON.stringify(prompt.input), /我今天有点累/);
-    assert.equal(JSON.stringify(prompt.input).match(/今晚该继续硬撑/g)?.length, 1);
 });
 
 test('DeepSeek first route disables thinking while preserving native model routing', () => {

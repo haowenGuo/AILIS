@@ -771,16 +771,7 @@ export function setUiLanguage(language) {
     return currentLanguage;
 }
 
-export function getUiLanguage() {
-    return currentLanguage;
-}
 
-export function getUiLanguageOptions() {
-    return UI_LANGUAGE_OPTIONS.map((value) => ({
-        value,
-        label: UI_LANGUAGE_NATIVE_LABELS[value] || value
-    }));
-}
 
 export function t(source, replacements = {}) {
     const key = String(source ?? '');

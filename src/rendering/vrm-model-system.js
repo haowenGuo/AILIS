@@ -229,46 +229,8 @@ export class VRMModelSystem {
         this.animate = this.animate.bind(this);
     }
 
-    isBlinkExpression(expressionName) {
-        return ['blink', 'blinkLeft', 'blinkRight'].includes(expressionName);
-    }
-
-    hasActiveBlinkExpression() {
-        for (const expressionName of this.activeExpressions) {
-            if (this.isBlinkExpression(expressionName)) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    hasBlockingEmotionExpression() {
-        for (const expressionName of this.activeExpressions) {
-            if (
-                expressionName !== 'aa' &&
-                !this.isBlinkExpression(expressionName)
-            ) {
-                return true;
-            }
-        }
-        return false;
-    }
-
     getExpressionPresets() {
         return { ...CONFIG.EXPRESSION_PRESETS };
-    }
-
-    getExpressionPresetValue(expressionName) {
-        return CONFIG.EXPRESSION_PRESETS[expressionName];
-    }
-
-    setExpressionPresetValue(expressionName, value) {
-        if (!(expressionName in CONFIG.EXPRESSION_PRESETS)) {
-            console.warn(`⚠️ 表情预设 "${expressionName}" 不存在，无法更新`);
-            return;
-        }
-
-        CONFIG.EXPRESSION_PRESETS[expressionName] = THREE.MathUtils.clamp(value, 0, 1);
     }
 
     init(containerId) {
@@ -1154,20 +1116,6 @@ export class VRMModelSystem {
         return this.characterRuntime.applyPayload(payload, context);
     }
 
-    playAction(actionName, options = {}) {
-        if (actionName === 'idle') {
-            return this.playResolvedAction('idle');
-        }
-
-        return this.applyPersonaSurfacePayload({
-            action: actionName,
-            source: 'legacy_action'
-        }, {
-            source: 'legacy_action',
-            allowLegacyActionMotion: true,
-            allowExperimentalMotion: Boolean(options.allowExperimental)
-        });
-    }
 
     playResolvedAction(actionName, options = {}) {
         if (!this.isModelLoaded) {
@@ -1205,30 +1153,8 @@ export class VRMModelSystem {
         return played;
     }
 
-    getRandomIdleAction() {
-        return this.motionController?.selectIdleAction() || null;
-    }
 
-    getRandomDanceAction() {
-        return this.motionController?.selectDanceAction() || null;
-    }
 
-    applyExpressionPreset(expressionName) {
-        if (expressionName === 'neutral') {
-            this.resetExpression();
-            return;
-        }
-
-        const presetValue = this.getExpressionPresetValue(expressionName);
-        if (typeof presetValue !== 'number') {
-            console.warn(`⚠️ 表情预设 "${expressionName}" 不存在`);
-            return;
-        }
-
-        this.applyExpressionMix({ [expressionName]: presetValue }, {
-            durationHint: this.isBlinkExpression(expressionName) ? 'short' : 'medium'
-        });
-    }
 
     applyExpressionMix(expressionMix = {}, { durationHint = 'short' } = {}) {
         if (!this.isModelLoaded || !this.vrm || !expressionMix || typeof expressionMix !== 'object') {
@@ -1238,12 +1164,6 @@ export class VRMModelSystem {
         return this.characterEmoteController?.setEmotionMix(expressionMix, { durationHint }) ?? false;
     }
 
-    setExpression(expressionName, value) {
-        if (!this.isModelLoaded || !this.vrm) return;
-        this.characterEmoteController?.setEmotionMix({ [expressionName]: value }, {
-            durationHint: 'hold'
-        });
-    }
 
     clearExpressionValues() {
         if (!this.isModelLoaded || !this.vrm) return;
@@ -1255,9 +1175,6 @@ export class VRMModelSystem {
         this.clearExpressionValues();
     }
 
-    scheduleNeutralReset() {
-        // Expression lifetimes are owned by CharacterEmoteController.
-    }
 
     startAudioDrivenSpeech() {
         if (!this.isModelLoaded) return;
@@ -1305,10 +1222,6 @@ export class VRMModelSystem {
         }, 900);
     }
 
-    triggerBlink() {
-        if (!this.isModelLoaded || !this.autoBlinkEnabled) return;
-        return this.characterEmoteController?.forceBlink() ?? false;
-    }
 
     scheduleWindowResize(container) {
         if (this.resizeAnimationFrame) {
@@ -1376,9 +1289,6 @@ export class VRMModelSystem {
         this.renderer.render(this.scene, this.camera);
     }
 
-    updateAutoBlink() {
-        this.characterEmoteController?.setAutoBlinkEnabled(this.autoBlinkEnabled);
-    }
 
     updateSpeaking(deltaTime) {
         if (!this.isModelLoaded || !this.vrm) return;
