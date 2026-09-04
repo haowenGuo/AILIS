@@ -226,12 +226,12 @@ test('hosted runtime stores browser uploads inside the active tenant workspace',
             mimeType: 'application/pdf',
             bytes: Buffer.from('%PDF-1.4\nAILIS_ATTACHMENT_TOKEN')
         });
-        const expectedWorkspace = path.join(
+        const expectedWorkspace = await fs.realpath(path.join(
             dataRoot,
             'tenants',
             tenantKey('web:attachment-alice'),
             'workspace'
-        );
+        ));
         assert.equal(result.ok, true);
         assert.equal(result.attachment.source, 'hosted-upload');
         assert.equal(result.attachment.name, '_论文测试.pdf');

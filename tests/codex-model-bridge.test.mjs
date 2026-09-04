@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import { EventEmitter } from 'node:events';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { describe, it } from 'node:test';
 
@@ -1010,6 +1011,11 @@ describe('Codex model bridge', () => {
         assert.equal(capabilities.transport, 'codex-responses-native');
         assert.equal(capabilities.nativeToolCalling, true);
         assert.equal(capabilities.vision, true);
-        assert.equal(resolveCodexEntrypoint().ok, true);
+        // Test entrypoint resolution without requiring a developer's CLI installation.
+        const entrypoint = fileURLToPath(import.meta.url);
+        const resolved = resolveCodexEntrypoint({ codexEntrypoint: entrypoint });
+        assert.equal(resolved.ok, true);
+        assert.equal(resolved.entrypoint, entrypoint);
+        assert.deepEqual(resolved.argsPrefix, [entrypoint]);
     });
 });

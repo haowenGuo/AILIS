@@ -86,18 +86,27 @@ test('AILIS Gateway exposes Codex-style exec continuation and workspace-safe abs
         assert.equal(execution.ok, true, execution.error);
         assert.ok(execution.result.details.session_id);
 
-        const continued = await gateway.callTool({
-            tool: 'write_stdin',
-            args: {
-                session_id: execution.result.details.session_id,
-                chars: '',
-                yield_time_ms: 1000,
-                max_output_tokens: 1000
-            },
-            context: { workspace: workspaceRoot }
-        });
-        assert.equal(continued.ok, true, continued.error);
-        assert.match(continued.result.details.output, /CONTINUED_OK/);
+        let details = execution.result.details;
+        let output = details.output || '';
+        const deadline = Date.now() + 15_000;
+        // A cold CI shell may take more than one poll to start and finish.
+        while (details.session_id && details.exit_code == null && Date.now() < deadline) {
+            const continued = await gateway.callTool({
+                tool: 'write_stdin',
+                args: {
+                    session_id: details.session_id,
+                    chars: '',
+                    yield_time_ms: 1000,
+                    max_output_tokens: 1000
+                },
+                context: { workspace: workspaceRoot }
+            });
+            assert.equal(continued.ok, true, continued.error);
+            details = continued.result.details;
+            output += details.output || '';
+        }
+        assert.equal(details.exit_code, 0, 'child process must complete within the test deadline');
+        assert.match(output, /CONTINUED_OK/);
 
         const target = path.join(workspaceRoot, 'absolute-patch.txt');
         const applied = await gateway.callTool({

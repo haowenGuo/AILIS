@@ -1156,7 +1156,8 @@ test('TaskAgent research progress stays mechanical after repeated historical sea
 });
 
 test('AILIS stages external attachments inside the active workspace', async () => {
-    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-attachment-workspace-'));
+    // Hosted Windows runners can expose TEMP through an 8.3 alias or junction.
+    const workspaceRoot = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-attachment-workspace-')));
     const sourceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-attachment-source-'));
     const sourcePath = path.join(sourceRoot, 'inventory.xlsx');
     await fs.writeFile(sourcePath, 'spreadsheet-bytes');
@@ -1199,7 +1200,7 @@ test('AILIS preserves file extensions when staging long attachment names', async
 });
 
 test('AILIS keeps staged attachment paths below the Windows subprocess safety limit', async () => {
-    const workspaceBase = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-stage-path-'));
+    const workspaceBase = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-stage-path-')));
     const workspaceRoot = path.join(
         workspaceBase,
         'isolated-benchmark-workspace-with-a-deliberately-long-run-identifier',
