@@ -26,10 +26,6 @@ function normalizeArray(value) {
     return Array.isArray(value) ? value : [value];
 }
 
-function isPlainObject(value) {
-    return Boolean(value && typeof value === 'object' && !Array.isArray(value));
-}
-
 function cloneJson(value) {
     try {
         return JSON.parse(JSON.stringify(value));
@@ -45,13 +41,6 @@ function truncateText(value, maxChars = 900) {
         return normalized;
     }
     return `${normalized.slice(0, Math.max(0, maxChars - 1))}…`;
-}
-
-function safeSegment(value, fallback = 'item') {
-    return normalizeString(value, fallback)
-        .replace(/[^a-zA-Z0-9._-]+/g, '-')
-        .replace(/^-+|-+$/g, '')
-        .slice(0, 90) || fallback;
 }
 
 function stableId(...parts) {

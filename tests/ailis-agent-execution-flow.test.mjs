@@ -11,7 +11,7 @@ const {
     buildToolResultEvent,
     detectInvalidDecisionNoProgress,
     validateNativeDirectToolCall
-} = require('../electron/ailis-agent-runner.cjs');
+} = require('../electron/agent-loop/index.cjs');
 
 function createGateway(specs = []) {
     return {

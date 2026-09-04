@@ -167,29 +167,6 @@ function makeMcpToolSpec(serverName, tool = {}) {
     });
 }
 
-function buildMcpToolSearchText(spec = {}) {
-    return [
-        spec.id,
-        spec.legacy_id,
-        spec.name,
-        spec.display_name,
-        spec.namespace,
-        spec.callable_name,
-        spec.server,
-        spec.tool,
-        spec.title,
-        spec.description,
-        Array.isArray(spec.schema_properties)
-            ? spec.schema_properties.join(' ')
-            : Array.isArray(spec.schemaProperties)
-                ? spec.schemaProperties.join(' ')
-                : ''
-    ]
-        .filter(Boolean)
-        .join(' ')
-        .toLowerCase();
-}
-
 function sanitizeServerConfig(config = {}) {
     const clean = normalizeObject(config);
     const next = { ...clean };

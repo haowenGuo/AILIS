@@ -49,45 +49,6 @@ function shouldAllowChatMotion(payload = {}) {
         payload.demoMode === true;
 }
 
-function normalizeVisionAttachments(attachments = []) {
-    if (!Array.isArray(attachments)) {
-        return [];
-    }
-
-    return attachments
-        .filter((attachment) => {
-            if (!attachment?.dataUrl) {
-                return false;
-            }
-            if (attachment.type && attachment.type !== 'vision') {
-                return false;
-            }
-            return String(attachment.mimeType || 'image/png').startsWith('image/');
-        })
-        .map((attachment) => ({
-            type: 'vision',
-            id: String(attachment.id || ''),
-            source: String(attachment.source || ''),
-            label: String(attachment.label || '截图'),
-            dataUrl: String(attachment.dataUrl || ''),
-            thumbnailDataUrl: String(attachment.thumbnailDataUrl || attachment.dataUrl || ''),
-            mimeType: String(attachment.mimeType || 'image/png'),
-            width: Number(attachment.width) || 0,
-            height: Number(attachment.height) || 0,
-            createdAt: String(attachment.createdAt || '')
-        }))
-        .slice(0, 3);
-}
-
-function appendAttachmentHint(content, attachments = []) {
-    if (!attachments.length) {
-        return content;
-    }
-
-    const labels = attachments.map((attachment) => attachment.label || '截图').join('、');
-    return `${content}\n\n[附带视觉上下文：${labels}]`;
-}
-
 export class ChatTTSSystem {
     constructor(vrmSystem, audioPlayer, chatService, { speechProvider = null, chunkedTtsEnabled = true } = {}) {
         this.vrmSystem = vrmSystem;

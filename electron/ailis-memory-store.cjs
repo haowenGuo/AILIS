@@ -58,17 +58,6 @@ function truncateText(value, maxChars = 1200) {
     return `${text.slice(0, Math.max(0, maxChars - 1))}…`;
 }
 
-function truncateStructuredText(value, maxChars = 1200) {
-    const text = String(value || '')
-        .replace(/\r\n/g, '\n')
-        .replace(/[ \t]+$/gm, '')
-        .trim();
-    if (!text || text.length <= maxChars) {
-        return text;
-    }
-    return `${text.slice(0, Math.max(0, maxChars - 1))}…`;
-}
-
 function normalizeBlockText(value, maxChars = MAX_BLOCK_CHARS) {
     const text = String(value || '')
         .replace(/\r\n/g, '\n')

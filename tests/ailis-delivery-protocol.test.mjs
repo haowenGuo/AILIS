@@ -15,7 +15,7 @@ const {
 const {
     buildAgentDirectToolSpecs,
     buildTaskRunHandoffPackage
-} = require('../electron/ailis-agent-runner.cjs');
+} = require('../electron/agent-loop/index.cjs');
 const { AILISGateway } = require('../electron/ailis-gateway.cjs');
 const { getCodeModeProfile } = require('../electron/codex-code-mode-protocol.cjs');
 const { buildTaskResultPacket } = require('../electron/ailis-task-agent-harness.cjs');

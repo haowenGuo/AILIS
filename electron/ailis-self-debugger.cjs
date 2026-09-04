@@ -43,18 +43,6 @@ function normalizeArray(value) {
     return Array.isArray(value) ? value : [value];
 }
 
-function isPlainObject(value) {
-    return Boolean(value && typeof value === 'object' && !Array.isArray(value));
-}
-
-function cloneJson(value) {
-    try {
-        return JSON.parse(JSON.stringify(value));
-    } catch {
-        return value;
-    }
-}
-
 function safeSegment(value, fallback = 'case') {
     return normalizeString(value, fallback)
         .replace(/[^a-zA-Z0-9._-]+/g, '-')

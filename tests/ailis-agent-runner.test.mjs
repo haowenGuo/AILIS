@@ -46,7 +46,7 @@ const {
     splitNativeProgressNoteArgs,
     stripControlTags,
     validateNativeDirectToolCall
-} = require('../electron/ailis-agent-runner.cjs');
+} = require('../electron/agent-loop/index.cjs');
 
 const CODEX_NATIVE_INSTRUCTIONS = resolveCodexNativeInstructions('gpt-5.6-luna');
 

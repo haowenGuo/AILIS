@@ -1,5 +1,7 @@
 # AILIS Artifact Tools Architecture
 
+> Historical design (v0.5), not the current tool contract. The unregistered `read_xlsx_workbook` adapter has been removed in the consolidation worktree. Current spreadsheet operations use `artifact_tools`; `artifact_query` still reads persisted context artifacts. See [current architecture](architecture.md) and executable contracts in `electron/ailis-tool-contracts.cjs`.
+
 Version: 0.5
 
 Reference design:

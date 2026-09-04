@@ -626,14 +626,6 @@ const TOOL_EXPERIENCE = Object.freeze({
         failureStyle: 'plain_explain',
         userFacingVerb: '分析上下文产物'
     }),
-    read_xlsx_workbook: makeExperienceMetadata({
-        embodiedAction: 'read_spreadsheet',
-        permissionStyle: 'silent_read',
-        progressStyle: 'focused',
-        successStyle: 'summarize_result',
-        failureStyle: 'plain_explain',
-        userFacingVerb: '读取 Excel'
-    }),
     github_pages: makeExperienceMetadata({
         embodiedAction: 'diagnose_deployment',
         permissionStyle: 'silent_internal',
@@ -2507,56 +2499,6 @@ const TOOL_CONTRACTS = Object.freeze({
             return [];
         }
     }),
-    read_xlsx_workbook: Object.freeze({
-        id: 'read_xlsx_workbook',
-        version: CONTRACT_VERSION,
-        mutates: false,
-        risk: 'low',
-        approval: 'never',
-        experience: TOOL_EXPERIENCE.read_xlsx_workbook,
-        returns: defaultReturns(),
-        errors: defaultErrors([
-            'missing_path',
-            'file_not_found',
-            'path_outside_workspace',
-            'unsupported_format',
-            'parse_failed',
-            'sheet_not_found'
-        ]),
-        schema: actionSchema(['schema', 'inspect', 'read', 'read_workbook'], {
-            path: stringSchema({ minLength: 1 }),
-            file: stringSchema({ minLength: 1 }),
-            filePath: stringSchema({ minLength: 1 }),
-            file_path: stringSchema({ minLength: 1 }),
-            sheet: stringSchema(),
-            sheetName: stringSchema(),
-            sheet_name: stringSchema(),
-            worksheet: stringSchema(),
-            sheetIndex: numberSchema({ minimum: 1, maximum: 1000 }),
-            sheet_index: numberSchema({ minimum: 1, maximum: 1000 }),
-            range: stringSchema(),
-            addressRange: stringSchema(),
-            address_range: stringSchema(),
-            maxRows: numberSchema({ minimum: 1, maximum: 10000 }),
-            max_rows: numberSchema({ minimum: 1, maximum: 10000 }),
-            maxCols: numberSchema({ minimum: 1, maximum: 1000 }),
-            max_cols: numberSchema({ minimum: 1, maximum: 1000 }),
-            maxColumns: numberSchema({ minimum: 1, maximum: 1000 }),
-            max_columns: numberSchema({ minimum: 1, maximum: 1000 }),
-            maxCells: numberSchema({ minimum: 1, maximum: 1000000 }),
-            max_cells: numberSchema({ minimum: 1, maximum: 1000000 }),
-            maxSheets: numberSchema({ minimum: 1, maximum: 100 }),
-            max_sheets: numberSchema({ minimum: 1, maximum: 100 }),
-            previewChars: numberSchema({ minimum: 1000, maximum: 20000 }),
-            preview_chars: numberSchema({ minimum: 1000, maximum: 20000 }),
-            includeEmpty: booleanSchema(),
-            include_empty: booleanSchema(),
-            includeStyles: booleanSchema(),
-            include_styles: booleanSchema(),
-            includeFormulas: booleanSchema(),
-            include_formulas: booleanSchema()
-        })
-    }),
     github_pages: Object.freeze({
         id: 'github_pages',
         version: CONTRACT_VERSION,
@@ -2770,16 +2712,8 @@ function getToolContract(toolId) {
     return TOOL_CONTRACTS[toolId] || null;
 }
 
-const HIDDEN_MODEL_TOOL_CONTRACT_IDS = new Set([
-    'read_xlsx_workbook'
-]);
-
-function isModelVisibleToolContract(contract = {}) {
-    return !HIDDEN_MODEL_TOOL_CONTRACT_IDS.has(contract.id);
-}
-
 function listToolContracts() {
-    return Object.values(TOOL_CONTRACTS).filter(isModelVisibleToolContract).map((contract) => ({
+    return Object.values(TOOL_CONTRACTS).map((contract) => ({
         id: contract.id,
         version: contract.version,
         mutates: contract.mutates,

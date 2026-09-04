@@ -12,7 +12,7 @@ const {
     buildAgentDirectToolSpecs,
     validateAgentToolLoopGuard,
     validateNativeDirectToolCall
-} = require('../electron/ailis-agent-runner.cjs');
+} = require('../electron/agent-loop/index.cjs');
 const {
     AILIS_RUNTIME_TOOL_DEFINITIONS,
     AILIS_TOOL_EXPOSURE,

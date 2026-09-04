@@ -5,7 +5,6 @@
 - `core-loop.cjs`：最小、真实、带完整中文注释的生产 Agent Loop。**第一次先读它。**
 - `index.cjs`：稳定公共入口。
 - `runner.cjs`：每一轮的具体业务，包括上下文、LLM 决策、工具执行、Observation、审批恢复和最终结果组装。
-- `../ailis-agent-runner.cjs`：旧导入路径的兼容转发，不再放实现。
 
 建议按下面顺序阅读：
 
@@ -14,7 +13,7 @@
 3. 顺着 `Round 1/5` 到 `Round 5/5` 的注释，理解一轮怎样完成 Context → Decision → Action → Observation。
 4. 最后再看 `runMessage()`，理解新任务、审批恢复和调试恢复怎样进入同一个 Loop。
 
-`core-loop.cjs` 是完整 AILIS 正在使用的代码，不是为了讲解而复制的伪代码。它由 `runner.cjs` 直接调用，Persona Agent 与 TaskAgent 都会经过它。
+`core-loop.cjs` 是生产代码，由 `runner.cjs` 直接调用。主对话使用统一 Agent；显式任务 API 仍复用同一内核。旧转发入口已删除，测试也直接使用 `index.cjs`。
 
 只运行 Core Loop 的三个最小测试：
 

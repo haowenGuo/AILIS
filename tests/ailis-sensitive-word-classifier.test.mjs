@@ -4,11 +4,6 @@ import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
 const {
-    AILISLocalSafetyClassifier,
-    buildTextChunks,
-    getToxicityScore
-} = require('../electron/ailis-local-safety-classifier.cjs');
-const {
     AILISSensitiveWordClassifier,
     buildAhoCorasick,
     normalizeLexicon,
@@ -16,127 +11,6 @@ const {
 } = require('../electron/ailis-sensitive-word-classifier.cjs');
 const { AILISEmberHarness } = require('../electron/ailis-ember-harness.cjs');
 
-function createMockPipelineFactory(onClassify) {
-    const calls = {
-        factory: 0,
-        classify: 0,
-        disposed: 0
-    };
-    const factory = async () => {
-        calls.factory += 1;
-        const classifier = async (texts) => {
-            calls.classify += 1;
-            return texts.map((text) => {
-                const toxicScore = onClassify(String(text));
-                return [
-                    { label: 'not-toxic', score: 1 - toxicScore },
-                    { label: 'toxic', score: toxicScore }
-                ];
-            });
-        };
-        classifier.dispose = async () => {
-            calls.disposed += 1;
-        };
-        return classifier;
-    };
-    return { factory, calls };
-}
-
-test('local safety classifier loads lazily and releases its pipeline', async () => {
-    const mock = createMockPipelineFactory((text) => text.includes('unsafe') ? 0.98 : 0.02);
-    const classifier = new AILISLocalSafetyClassifier({
-        pipelineFactory: mock.factory,
-        cacheDir: '.tmp/ailis-safety-test'
-    });
-
-    assert.equal(classifier.getStatus().status, 'idle');
-    assert.equal(mock.calls.factory, 0);
-
-    const safe = await classifier.evaluate({ text: 'ordinary safe text' });
-    const unsafe = await classifier.evaluate({ text: 'unsafe text' });
-    assert.equal(safe.decision, 'allow');
-    assert.equal(unsafe.decision, 'block');
-    assert.equal(mock.calls.factory, 1);
-    assert.equal(classifier.getStatus().status, 'ready');
-
-    await classifier.dispose();
-    assert.equal(mock.calls.disposed, 1);
-    assert.equal(classifier.getStatus().status, 'idle');
-});
-
-test('disabling during model loading cannot reactivate the classifier afterward', async () => {
-    let releasePipeline;
-    let disposed = 0;
-    let markFactoryEntered;
-    const factoryEntered = new Promise((resolve) => {
-        markFactoryEntered = resolve;
-    });
-    const pipelineFactory = async () => new Promise((resolve) => {
-        markFactoryEntered();
-        releasePipeline = () => {
-            const pipeline = async () => [];
-            pipeline.dispose = async () => {
-                disposed += 1;
-            };
-            resolve(pipeline);
-        };
-    });
-    const classifier = new AILISLocalSafetyClassifier({
-        pipelineFactory,
-        cacheDir: '.tmp/ailis-safety-cancel'
-    });
-
-    const preparing = classifier.prepare();
-    await factoryEntered;
-    assert.equal(classifier.getStatus().status, 'loading');
-    await classifier.dispose();
-    releasePipeline();
-
-    await assert.rejects(preparing, /safety_classifier_load_cancelled/);
-    assert.equal(classifier.getStatus().status, 'idle');
-    assert.equal(classifier.getStatus().ready, false);
-    assert.equal(disposed, 1);
-});
-
-test('local safety classifier samples the whole long input instead of only its prefix', async () => {
-    const mock = createMockPipelineFactory((text) => text.includes('unsafe-at-the-end') ? 0.99 : 0.01);
-    const classifier = new AILISLocalSafetyClassifier({
-        pipelineFactory: mock.factory,
-        cacheDir: '.tmp/ailis-safety-long-input',
-        chunkChars: 128,
-        chunkOverlap: 16,
-        maxChunks: 4,
-        batchSize: 2
-    });
-    const text = `${'a'.repeat(5000)} unsafe-at-the-end`;
-    const result = await classifier.evaluate({ text });
-
-    assert.equal(result.decision, 'block');
-    assert.equal(result.details.coverageComplete, false);
-    assert.equal(result.details.checkedChunks, 4);
-    assert.ok(result.details.highestRiskSpan.start > 4000);
-    await classifier.dispose();
-});
-
-test('chunk builder preserves both ends when sampling oversized text', () => {
-    const result = buildTextChunks('x'.repeat(5000), {
-        chunkChars: 128,
-        overlapChars: 16,
-        maxChunks: 5
-    });
-    assert.equal(result.coverageComplete, false);
-    assert.equal(result.chunks.length, 5);
-    assert.equal(result.chunks[0].start, 0);
-    assert.equal(result.chunks.at(-1).end, 5000);
-});
-
-test('toxicity score supports positive and negative binary labels', () => {
-    assert.equal(getToxicityScore([{ label: 'toxic', score: 0.91 }]), 0.91);
-    assert.equal(
-        Number(getToxicityScore([{ label: 'not-toxic', score: 0.94 }]).toFixed(2)),
-        0.06
-    );
-});
 
 test('EMBER Harness observes or enforces the same local evaluator decision by mode', async () => {
     const evaluator = async () => ({

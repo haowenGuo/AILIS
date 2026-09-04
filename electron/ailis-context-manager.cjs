@@ -59,12 +59,6 @@ function truncateFunctionOutputPayload(payload = '', maxChars = DEFAULT_TOOL_OUT
     );
 }
 
-function stripImagesFromContentItems(content = []) {
-    return (Array.isArray(content) ? content : [])
-        .filter((item) => item?.type !== 'input_image')
-        .map(cloneJson);
-}
-
 function stripImagesFromFunctionOutput(payload = '') {
     const normalized = FunctionCallOutputPayload.normalize(payload);
     if (normalized.body?.kind !== 'content_items') {

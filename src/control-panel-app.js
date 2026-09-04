@@ -1548,29 +1548,6 @@ function switchElevenLabsVoiceProfile(languageCode) {
     setStatus(`已切换到 ${label} 语音配置。`);
 }
 
-function applyElevenLabsLanguagePreset(languageCode) {
-    const normalizedLanguage = normalizeElevenLabsLanguageCode(languageCode);
-    const preset = elevenLabsLanguagePresets[normalizedLanguage];
-    if (!preset) {
-        return;
-    }
-
-    elements.elevenLabsLanguageCode.value = normalizedLanguage;
-    elements.elevenLabsModelId.value = preset.modelId;
-    elements.elevenLabsOutputFormat.value = preset.outputFormat;
-    elements.elevenLabsOptimizeLatency.value = String(preset.optimizeStreamingLatency);
-    elements.elevenLabsStability.value = String(preset.stability);
-    elements.elevenLabsSimilarity.value = String(preset.similarityBoost);
-    elements.elevenLabsStyle.value = String(preset.style);
-    elements.elevenLabsSpeed.value = String(preset.speed);
-    elements.elevenLabsSpeakerBoost.checked = preset.useSpeakerBoost;
-    draftElevenLabsActiveLanguageCode = normalizedLanguage;
-    draftElevenLabsVoiceProfiles = normalizeElevenLabsVoiceProfiles(draftElevenLabsVoiceProfiles, currentPreferences || {});
-    draftElevenLabsVoiceProfiles[normalizedLanguage] = readElevenLabsProfileFromFields(normalizedLanguage);
-    updateRangeLabels();
-    setStatus(`已套用 ${preset.label} ElevenLabs 语音参数。`);
-}
-
 function clampNumber(value, minimum, maximum, fallbackValue, digits = 2) {
     const numericValue = Number(value);
     if (!Number.isFinite(numericValue)) {
@@ -2486,32 +2463,6 @@ function renderCharacterAssets(characterAssets = {}) {
         }
         elements.characterPackList.appendChild(card);
     });
-}
-
-async function refreshCharacterAssets({ silent = false } = {}) {
-    if (!window.ailisDesktop?.assetPacks?.list) {
-        return null;
-    }
-    try {
-        const snapshot = await window.ailisDesktop.assetPacks.list();
-        panelState = {
-            ...(panelState || {}),
-            preferences: {
-                ...((panelState && panelState.preferences) || {}),
-                characterAssets: snapshot
-            }
-        };
-        renderCharacterAssets(snapshot);
-        return snapshot;
-    } catch (error) {
-        if (elements.characterActiveSummary) {
-            elements.characterActiveSummary.textContent = `读取人物资产失败：${error.message || error}`;
-        }
-        if (!silent) {
-            setStatus(`读取人物资产失败：${error.message || error}`);
-        }
-        return null;
-    }
 }
 
 async function installCharacterPackFromFolder() {
@@ -5943,47 +5894,6 @@ function getVoiceRuntimeOutcome(runtime = {}) {
     };
 }
 
-function getVoiceRuntimeActionItems(runtime = {}) {
-    const steps = getVoiceRuntimeSteps(runtime);
-    const stepIds = new Set(steps.map((step) => step.id));
-    const bootstrap = runtime.bootstrap || {};
-    const actions = [];
-    if (bootstrap.status === 'running') {
-        actions.push('保持控制面板打开即可查看进度；下载模型时可能长时间停在同一阶段。');
-        actions.push('如果失败，AILIS 会保留失败步骤和最后日志，不会假装安装成功。');
-        return actions;
-    }
-    if (runtime.ok) {
-        actions.push('点击“启用 CosyVoice3”会切换到本地语音播放；如果已经启用，可以直接聊天测试。');
-        if (getVoiceOptionalSteps(runtime).length) {
-            actions.push('ASR 和 GPU 加速是可选项，不影响基础语音播放；需要语音输入或更快首包时再补。');
-        }
-        return actions;
-    }
-    if (stepIds.has('install_portable_python')) {
-        actions.push('AILIS 会创建自己的私有 Python runtime，不要求用户手动安装或改系统 PATH。');
-    }
-    if (stepIds.has('install_voice_python_packages')) {
-        actions.push('会把 torch、torchaudio、transformers、huggingface_hub 等语音依赖安装到 AILIS 私有 venv。');
-    }
-    if (stepIds.has('install_cosyvoice_source')) {
-        actions.push('会自动拉取 CosyVoice 源码和 Matcha-TTS 子模块，作为 CosyVoice3 worker 的运行代码。');
-    }
-    if (stepIds.has('install_cosyvoice3_model')) {
-        actions.push('会下载 Fun-CosyVoice3-0.5B 本地模型，体积较大；下载完成后可离线合成语音。');
-    }
-    if (stepIds.has('install_asr_model')) {
-        actions.push('会补齐本地 ASR 模型缓存，用于语音输入识别。');
-    }
-    if (stepIds.has('install_onnxruntime_gpu')) {
-        actions.push('ONNX Runtime GPU 是可选性能项；失败时会回退 CPU provider，不再阻塞基础 TTS。');
-    }
-    if (!actions.length) {
-        actions.push('点击“诊断环境”刷新状态；如果仍然未就绪，再点击“自动安装并启用”。');
-    }
-    return actions;
-}
-
 function getVoiceComponentTone(component = {}) {
     if (component.ok || component.status === 'verified' || component.status === 'ready') {
         return 'ready';
@@ -6723,122 +6633,6 @@ async function loadAgentLabAnalysis(runId, { silent = false } = {}) {
             setAgentLabStatus(`分析失败：${error.message || error}`);
         }
     }
-}
-
-async function refreshAgentLabRuns({ selectLatest = false, silent = false } = {}) {
-    if (!window.ailisDesktop?.agentLab?.listRuns) {
-        setAgentLabStatus('当前环境不支持 Agent Lab。');
-        renderAgentLabAnalysis(null);
-        return;
-    }
-    if (!silent) {
-        setAgentLabStatus('正在刷新...');
-    }
-    try {
-        const result = await window.ailisDesktop.agentLab.listRuns({ limit: 40 });
-        agentLabRuns = Array.isArray(result?.runs) ? result.runs : [];
-        const nextRunId = selectLatest
-            ? agentLabRuns[0]?.runId
-            : agentLabSelectedRunId || agentLabRuns[0]?.runId || '';
-        renderAgentLabRuns(agentLabRuns);
-        if (nextRunId) {
-            await loadAgentLabAnalysis(nextRunId, { silent: true });
-        } else {
-            renderAgentLabAnalysis(null);
-        }
-    } catch (error) {
-        if (!silent) {
-            setAgentLabStatus(`刷新失败：${error.message || error}`);
-        }
-    }
-}
-
-function syncAgentLabRunButton() {
-    if (!elements.agentLabRunBtn) {
-        return;
-    }
-    elements.agentLabRunBtn.disabled = agentLabRunInFlight;
-    elements.agentLabRunBtn.textContent = agentLabRunInFlight ? '运行中...' : '运行并分析';
-}
-
-async function runAgentLabTask() {
-    if (!window.ailisDesktop?.agentLab?.runTask) {
-        setAgentLabStatus('当前环境不支持 Agent Lab。');
-        return;
-    }
-    const message = elements.agentLabTask?.value.trim() || '';
-    if (!message) {
-        setAgentLabStatus('请先输入一个测试任务。');
-        elements.agentLabTask?.focus();
-        return;
-    }
-    const sessionId = elements.agentLabSession?.value.trim() || 'agent-lab';
-    const maxAgentSteps = Math.max(1, Math.min(Number(elements.agentLabMaxSteps?.value || 30), 30));
-    const dryRun = elements.agentLabDryRun?.checked === true;
-    const classifyOnly = elements.agentLabClassifyOnly?.checked === true;
-    const approved = elements.agentLabApproved?.checked === true;
-
-    agentLabRunInFlight = true;
-    syncAgentLabRunButton();
-    setAgentLabStatus('正在运行 Agent Loop...');
-
-    try {
-        const result = await window.ailisDesktop.agentLab.runTask({
-            message,
-            sessionId,
-            agentLoop: 'llm',
-            planner: 'llm',
-            maxAgentSteps,
-            dryRun,
-            classifyOnly,
-            autoConfirm: approved,
-            analysis: {
-                transcriptLimit: 2500
-            },
-            context: {
-                sessionId,
-                sessionKey: sessionId,
-                agentLoop: 'llm',
-                planner: 'llm',
-                maxAgentSteps,
-                dryRun,
-                approved,
-                autoConfirm: approved,
-                confirmationPolicy: approved ? 'auto' : 'manual',
-                analysisMode: true,
-                source: 'control-panel-agent-lab'
-            }
-        });
-        if (result?.analysis?.ok) {
-            renderAgentLabAnalysis(result.analysis);
-        }
-        if (result?.runId) {
-            agentLabSelectedRunId = result.runId;
-            await refreshAgentLabRuns({ selectLatest: true, silent: true });
-            await loadAgentLabAnalysis(result.runId, { silent: true });
-        } else if (!result?.ok) {
-            setAgentLabStatus(`运行失败：${result?.status || 'unknown'}`);
-        }
-    } catch (error) {
-        setAgentLabStatus(`运行失败：${error.message || error}`);
-    } finally {
-        agentLabRunInFlight = false;
-        syncAgentLabRunButton();
-    }
-}
-
-function scheduleAgentLabAnalysisRefresh(runId) {
-    const id = String(runId || agentLabSelectedRunId || '').trim();
-    if (!id || id !== agentLabSelectedRunId) {
-        return;
-    }
-    if (agentLabRefreshTimer) {
-        clearTimeout(agentLabRefreshTimer);
-    }
-    agentLabRefreshTimer = setTimeout(() => {
-        agentLabRefreshTimer = null;
-        void loadAgentLabAnalysis(id, { silent: true });
-    }, 650);
 }
 
 async function resetAffinityScore() {

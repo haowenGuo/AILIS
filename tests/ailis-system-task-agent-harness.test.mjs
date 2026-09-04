@@ -10,7 +10,7 @@ const {
     AILISSystemTaskAgentHarness,
     TASK_RESULT_SCHEMA
 } = require('../electron/ailis-task-agent-harness.cjs');
-const { buildAgentDirectToolSpecs } = require('../electron/ailis-agent-runner.cjs');
+const { buildAgentDirectToolSpecs } = require('../electron/agent-loop/index.cjs');
 const { getCodeModeProfile } = require('../electron/codex-code-mode-protocol.cjs');
 const { getToolContract, validateToolContract } = require('../electron/ailis-tool-contracts.cjs');
 

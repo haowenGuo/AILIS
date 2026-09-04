@@ -2550,7 +2550,7 @@ function parseCodeJsonCommand(message) {
     if (rawArgs && (!args || typeof args !== 'object' || Array.isArray(args))) {
         return {
             intent: 'invalid_code_command',
-            response: '代码工具调用需要 JSON 参数，例如：/code git_status {}、/code search {"query":"foo"}、/code symbols {"path":"src/app.js"}。',
+            response: '代码工具调用需要 JSON 参数，例如：/code git_status {}、/code search {"query":"foo"}、/code symbols {"path":"src/pet-app.js"}。',
             steps: []
         };
     }
@@ -3220,29 +3220,6 @@ function resolveEmailProfileSummaries(emailProfiles = {}) {
     });
 }
 
-function buildInitialPlanHint(initialPlan) {
-    if (!initialPlan || typeof initialPlan !== 'object') {
-        return null;
-    }
-    const steps = Array.isArray(initialPlan.steps)
-        ? initialPlan.steps
-              .map((step) => ({
-                  title: normalizeText(step.title),
-                  tool: normalizeText(step.tool),
-                  args: step.args && typeof step.args === 'object' && !Array.isArray(step.args) ? redactPromptObject(step.args) : {}
-              }))
-              .filter((step) => step.tool)
-              .slice(0, 4)
-        : [];
-    if (!steps.length && (!initialPlan.intent || initialPlan.intent === 'casual_chat')) {
-        return null;
-    }
-    return {
-        intent: normalizeText(initialPlan.intent),
-        suggested_steps: steps
-    };
-}
-
 function buildEmailAgentSkillText(emailProfiles = {}) {
     const profileSummaries = resolveEmailProfileSummaries(emailProfiles)
         .map((profile) => {
@@ -3395,76 +3372,6 @@ function normalizeDirectMcpToolStep(step = {}) {
         phase: step.phase || 'execute',
         args: args && typeof args === 'object' && !Array.isArray(args) ? args : {},
         directMcpTool: direct.id
-    };
-}
-
-function buildDeferredCapabilityIndexEntry(entry = {}, lane = 'tools') {
-    const id = normalizeText(entry.id);
-    return {
-        id,
-        label: entry.label || id,
-        summary: entry.summary || '',
-        contract: 'deferred',
-        load_context: lane === 'mcp'
-            ? { mcp: [id] }
-            : { tools: [id] }
-    };
-}
-
-function buildAgentCapabilityCatalog({ compact = false, role = 'task_agent' } = {}) {
-    if (isPersonaOrchestratorRole(role)) {
-        return {
-            model: 'persona_capability_index',
-            note: 'AILIS owns persona, relationship memory, and user-facing conversation. Concrete task execution is handed to the system TaskAgent through one blocking handoff; the Harness owns its lifecycle and context.',
-            tools: [
-                {
-                    id: 'handoff_task',
-                    label: 'System TaskAgent handoff',
-                    summary: 'Transfer the immutable current user request to the persistent system TaskAgent and receive one compact result packet.'
-                }
-            ]
-        };
-    }
-    if (compact) {
-        return {
-            model: 'capability_index_compact',
-            note: 'Compact local-model capability index. Use tool_search or load_context to discover detailed skills/tools/MCP contracts only when the current user goal truly needs them.',
-            core_tools: [
-                'tool_search',
-                'read',
-                'write',
-                'exec',
-                'artifact_query',
-                'artifact_tools',
-                'artifact_import',
-                'request_permissions'
-            ],
-            deferred_contracts: true,
-            load_protocol: {
-                action: 'load_context',
-                request_shape: {
-                    skills: ['computer'],
-                    tools: ['computer'],
-                    mcp: []
-                }
-            }
-        };
-    }
-    return {
-        model: 'capability_index',
-        note: 'This first-turn catalog is only an index. Detailed tool contracts, input schemas, return schemas, and usage limits are deferred into capability_context via load_context. MCP tools are AILIS direct namespace tools: load/search MCP specs, then call returned mcp__server__tool direct ids. mcp_bridge is for discovery, resources, server management, and repair.',
-        skills: AGENT_SKILL_CATALOG,
-        tools: AGENT_TOOL_CATALOG.map((tool) => buildDeferredCapabilityIndexEntry(tool, 'tools')),
-        mcp: AGENT_MCP_CATALOG.map((entry) => buildDeferredCapabilityIndexEntry(entry, 'mcp')),
-        deferred_contracts: true,
-        load_protocol: {
-            action: 'load_context',
-            request_shape: {
-                skills: ['email'],
-                tools: ['email'],
-                mcp: ['mcp_bridge']
-            }
-        }
     };
 }
 
@@ -4546,76 +4453,6 @@ function inferNextActionFromResult(result = {}, fallback = '') {
     return result.ok === false ? '继续排查当前卡点' : '';
 }
 
-function buildLlmPlannerMessages({ message, observations = [], toolSummary = '' }) {
-    const system = [
-        AILIS_SYSTEM_PROMPT,
-        '',
-        '【AILIS LLM Planner 控制协议】',
-        '在保持 AILIS 人设、语气、动作/表情指令规范的前提下，你同时运行 AILIS LLM Planner，一个桌面电脑操作智能体。',
-        '你的任务是把复杂目标拆成多步 computer 工具调用，并提供执行后的复核步骤。',
-        '情感对话：直接返回 final_answer，不调用工具。',
-        '任务执行：本地文件、进程、命令和 GUI 操作用 tool="computer"。',
-        '优先用安全、可复核的步骤：先 list/stat/read/search，再 mkdir/write/copy/move/exec，最后用 read/list/stat/hash/search 复核。',
-        '危险动作由 Gateway 的 approval gate 和 plan confirmation 处理，你不要在 args 或 context 里写 approved=true。',
-        '只输出 JSON，JSON 外不要输出 Markdown。final_answer 字段是给用户看的 Markdown 字符串，可以使用短标题、列表、代码块和加粗。',
-        'JSON 格式：{"mode":"conversation|task","intent":"...","summary":"...","risk_level":"low|medium|high","requires_confirmation":true,"final_answer":"Markdown...","steps":[{"tool":"computer","title":"...","args":{"action":"list|read|write|append|mkdir|copy|move|delete|search|hash|du|exec_command|write_stdin|exec|session_start|process_read|process_write|process_kill","path":"...","content":"...","cmd":"...","session_id":"..."}}],"verification_steps":[{"tool":"computer","title":"...","args":{"action":"read|list|stat|search|hash|exec_command|write_stdin","path":"...","cmd":"...","session_id":"..."}}]}',
-        `computer 工具摘要：${toolSummary || 'filesystem/binary/watch/rollback/shell/pty/process'}`
-    ].join('\n');
-    const obsText = observations.length
-        ? `\n\n已执行 observation：\n${observations.map((item, index) => `${index + 1}. ${summarize(item, 1200)}`).join('\n')}`
-        : '';
-    return [
-        { role: 'system', content: system },
-        { role: 'user', content: `用户消息：${message}${obsText}` }
-    ];
-}
-
-async function callLlmPlanner(settings, payload) {
-    let response = await callDesktopLlmProvider(settings, {
-        ...payload,
-        jsonMode: true
-    });
-    if (!response.ok && response.code === 'provider_error') {
-        response = await callDesktopLlmProvider(settings, payload);
-    }
-    if (!response.ok) {
-        return {
-            ok: false,
-            status: response.code || 'llm_error',
-            error: response.error || 'LLM planner failed'
-        };
-    }
-    const json = extractJsonObject(response.content);
-    if (!json || typeof json !== 'object') {
-        return {
-            ok: false,
-            status: 'invalid_llm_plan',
-            error: 'LLM planner 没有返回合法 JSON。',
-            raw: response.content
-        };
-    }
-    const steps = Array.isArray(json.steps)
-        ? json.steps.map((step, index) => sanitizeLlmStep(step, index)).filter(Boolean)
-        : [];
-    const verificationSteps = Array.isArray(json.verification_steps || json.verificationSteps)
-        ? (json.verification_steps || json.verificationSteps).map((step, index) => sanitizeLlmStep(step, index)).filter(Boolean)
-        : [];
-    return {
-        ok: true,
-        mode: json.mode === 'task' || steps.length ? 'task' : 'conversation',
-        intent: normalizeText(json.intent, steps.length ? 'llm_task' : 'llm_conversation'),
-        summary: normalizeText(json.summary || json.objective || json.goal),
-        riskLevel: normalizeText(json.risk_level || json.riskLevel, steps.some(stepNeedsConfirmation) ? 'medium' : 'low'),
-        requiresConfirmation: json.requires_confirmation !== false && json.requiresConfirmation !== false,
-        finalAnswer: normalizeText(json.final_answer || json.answer || json.response),
-        steps,
-        verificationSteps,
-        raw: json,
-        model: response.model,
-        usage: response.usage
-    };
-}
-
 function sanitizeAgentToolCall(toolCall, index, phase = 'execute') {
     const candidate = toolCall?.tool_call || toolCall?.toolCall || toolCall?.step || toolCall;
     const sanitized = sanitizeLlmStep(candidate, index);
@@ -4635,20 +4472,6 @@ function sanitizeAgentToolCall(toolCall, index, phase = 'execute') {
         ...sanitized,
         id: normalizeText(sanitized.id, `agent-${phase}-${index + 1}`),
         phase
-    };
-}
-
-function buildRootToolCallCandidate(json = {}) {
-    const tool = normalizeText(json.tool || json.tool_name || json.toolName);
-    if (!tool) {
-        return null;
-    }
-    return {
-        id: json.id || json.tool_call_id || json.toolCallId,
-        title: json.title || json.summary || json.intent,
-        tool,
-        args: json.args || json.arguments || json.input || json.parameters || json.params || json.tool_args || json.toolArgs || {},
-        context: json.context
     };
 }
 
@@ -4719,32 +4542,6 @@ function getVisionStepTargetLabel(step) {
     return '屏幕';
 }
 
-function normalizeAgentAction(value, fallback = '') {
-    const action = normalizeText(value, fallback).toLowerCase().replace(/[-\s]+/g, '_');
-    if (['tool', 'tool_call', 'call_tool', 'execute', 'computer', 'use_tool'].includes(action)) {
-        return 'tool';
-    }
-    if (['load_context', 'load_capabilities', 'load_capability', 'request_context', 'request_capability', 'load_skill', 'load_tool_schema'].includes(action)) {
-        return 'load_context';
-    }
-    if (['final', 'done', 'finish', 'answer', 'conversation', 'respond'].includes(action)) {
-        return 'final';
-    }
-    if (['blocked', 'fail', 'failed', 'stop', 'need_user', 'needs_user', 'clarify'].includes(action)) {
-        return 'blocked';
-    }
-    return action;
-}
-
-function normalizePlanUpdates(value) {
-    const raw = value || [];
-    if (Array.isArray(raw)) {
-        return raw.map((entry) => normalizeText(entry)).filter(Boolean).slice(0, 8);
-    }
-    const single = normalizeText(raw);
-    return single ? [single] : [];
-}
-
 function sanitizePersonaOutput(value = {}) {
     if (!value || typeof value !== 'object' || Array.isArray(value)) {
         return null;
@@ -4796,96 +4593,6 @@ function sanitizePersonaOutput(value = {}) {
         gazeTarget,
         durationHint,
         ttsStyle
-    };
-}
-
-function buildAgentEventPreview(event) {
-    if (!event) {
-        return '';
-    }
-    if (event.type === 'capability_context') {
-        return [
-            `capability_context: ${event.status}`,
-            event.loaded?.skills?.length ? `skills=${event.loaded.skills.join(',')}` : '',
-            event.loaded?.tools?.length ? `tools=${event.loaded.tools.join(',')}` : '',
-            event.loaded?.mcp?.length ? `mcp=${event.loaded.mcp.join(',')}` : '',
-            event.loaded?.mcpToolSpecs?.length ? `mcp_tool_specs=${event.loaded.mcpToolSpecs.join(',')}` : '',
-            event.content ? `content=${summarize(event.content, 1800)}` : ''
-        ].filter(Boolean).join(' | ');
-    }
-    if (event.type === 'tool_result') {
-        return [
-            `${event.title || event.tool}: ${event.status}`,
-            event.ok ? 'ok=true' : 'ok=false',
-            event.preview ? `preview=${event.preview}` : ''
-        ].filter(Boolean).join(' | ');
-    }
-    if (event.type === 'tool_call') {
-        return `${event.title || event.tool}: ${summarize(event.args, 800)}`;
-    }
-    if (event.type === 'reasoning') {
-        return `reasoning: ${summarize(event.text || event.summary || event, 800)}`;
-    }
-    return summarize(event, 1000);
-}
-
-function buildAgentPromptProgressSnapshot({ events = [], stepResults = [], turnItems = null } = {}) {
-    const items = turnItems?.items || buildObservationLedgerPromptObject({
-        events,
-        stepResults,
-        maxItems: 8
-    }).items || [];
-    const toolResultItems = items.filter((item) => item.type === 'tool_result');
-    const latestToolResultItem = toolResultItems[toolResultItems.length - 1] || null;
-    const fallbackLatestObservation = latestToolResultItem ? {
-        type: latestToolResultItem.type || null,
-        status: latestToolResultItem.status || null,
-        tool: latestToolResultItem.tool || null,
-        title: latestToolResultItem.title || null,
-        ok: latestToolResultItem.ok,
-        result_status: latestToolResultItem.result_status || null,
-        error_type: latestToolResultItem.error_type || latestToolResultItem.errorType || null
-    } : null;
-    const latestObservation = turnItems?.latest_observation || fallbackLatestObservation;
-    const latestFailedObservation = turnItems?.latest_failed_observation ||
-        [...toolResultItems].reverse().find((item) => item.status === 'failed') || null;
-    const toolStatusCounts = toolResultItems.reduce((acc, item) => {
-        const status = item.status || 'unknown';
-        acc[status] = (acc[status] || 0) + 1;
-        return acc;
-    }, {});
-    return {
-        model: 'compact_progress_snapshot',
-        status: 'compacted',
-        event_count: Array.isArray(events) ? events.length : 0,
-        step_result_count: Array.isArray(stepResults) ? stepResults.length : 0,
-        retained_recent_items: items.length,
-        omitted_turn_items: turnItems?.retention?.omitted_items || 0,
-        tool_status_counts: toolStatusCounts,
-        latest_observation: latestObservation,
-        latest_failed_observation: latestFailedObservation ? {
-            type: latestFailedObservation.type || null,
-            status: latestFailedObservation.status || null,
-            tool: latestFailedObservation.tool || null,
-            title: latestFailedObservation.title || null,
-            ok: latestFailedObservation.ok,
-            result_status: latestFailedObservation.result_status || null,
-            error_type: latestFailedObservation.error_type || latestFailedObservation.errorType || null
-        } : null,
-        text: summarizeForModel(
-            [
-                latestObservation
-                    ? `latest=${latestObservation.tool || latestObservation.title || latestObservation.type}:${latestObservation.status || 'unknown'}`
-                    : '',
-                latestFailedObservation
-                    ? `latest_failed=${latestFailedObservation.tool || latestFailedObservation.title || latestFailedObservation.type}:${latestFailedObservation.error_type || latestFailedObservation.status || 'failed'}`
-                    : '',
-                `tool_status_counts=${JSON.stringify(toolStatusCounts)}`,
-                `retained=${items.length}`,
-                `omitted=${turnItems?.retention?.omitted_items || 0}`
-            ].filter(Boolean).join('\n'),
-            MAX_PROMPT_PROGRESS_CHARS
-        )
     };
 }
 
@@ -6230,22 +5937,6 @@ function collectTemporarilyDisabledDirectTools(stepResults = []) {
         }
     }
     return disabled;
-}
-
-function countTrailingDirectToolCalls(stepResults = [], toolId = '') {
-    const expected = canonicalDirectToolId(toolId);
-    if (!expected) {
-        return 0;
-    }
-    let count = 0;
-    for (let index = stepResults.length - 1; index >= 0; index -= 1) {
-        const current = canonicalDirectToolId(stepResults[index]?.tool);
-        if (current !== expected) {
-            break;
-        }
-        count += 1;
-    }
-    return count;
 }
 
 function getTerminalVisionFailure(stepResult = null) {

@@ -1,5 +1,7 @@
 # AILIS Shader Rendering System Research
 
+> Historical research: “Current State” below describes the source at the time of writing. The removed `src/vrm-model-system.js` forwarding entry is not the current implementation. Use `src/rendering/index.js` and [the current reading guide](ailis-core-loop-reading-guide.zh-CN.md).
+
 ## Current State
 
 AILIS is rendered by `src/vrm-model-system.js` with a transparent `THREE.WebGLRenderer`, one ambient light, one directional light, and the VRM model's loaded materials. There is no dedicated render runtime for material tuning, outline tuning, rim light, matcap, color grading, or post-processing.

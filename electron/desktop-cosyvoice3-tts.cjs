@@ -227,10 +227,6 @@ function resolvePythonRuntime(projectRoot, userDataPath = '', voiceRuntimeRoot =
     };
 }
 
-function resolvePythonPath(projectRoot, userDataPath = '', voiceRuntimeRoot = '') {
-    return resolvePythonRuntime(projectRoot, userDataPath, voiceRuntimeRoot).pythonPath;
-}
-
 class CosyVoice3TTSManager {
     constructor({
         projectRoot = getProjectRoot(),

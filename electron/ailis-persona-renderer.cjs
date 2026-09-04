@@ -211,11 +211,6 @@ function normalizeTaskState(value) {
     return 'failed';
 }
 
-function isSurfaceTaskState(value) {
-    const state = normalizeText(value).toLowerCase().replace(/[-\s]+/g, '_');
-    return ALLOWED_SURFACE_TASK_STATES.has(state);
-}
-
 function isSurfaceOnlyTaskState(value) {
     const state = normalizeText(value).toLowerCase().replace(/[-\s]+/g, '_');
     return ALLOWED_SURFACE_TASK_STATES.has(state) && !ALLOWED_TASK_STATES.has(state);

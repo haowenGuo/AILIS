@@ -5,6 +5,14 @@ import test from 'node:test';
 const require = createRequire(import.meta.url);
 const { AILISGateway } = require('../electron/ailis-gateway.cjs');
 const { buildLlmAgentDirectToolPrompt } = require('../electron/agent-loop/runner.cjs');
+const { getToolContract, listToolContracts } = require('../electron/ailis-tool-contracts.cjs');
+
+test('spreadsheet tool contracts expose the current adapter and omit the retired reader', () => {
+    assert.equal(getToolContract('read_xlsx_workbook'), null);
+    assert.ok(getToolContract('artifact_tools'));
+    assert.ok(getToolContract('artifact_query'));
+    assert.equal(listToolContracts().some((contract) => contract.id === 'read_xlsx_workbook'), false);
+});
 
 test('the removed dual-actor main scheduler cannot be selected again', () => {
     assert.equal(AILISGateway.prototype.runTaskAgentControlledPersonaTurn, undefined);

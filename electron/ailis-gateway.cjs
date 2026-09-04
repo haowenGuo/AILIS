@@ -499,40 +499,6 @@ function normalizedSearchTokens(value = '') {
     )];
 }
 
-function looksLikeHistoricalWebStateQuestion(value = '') {
-    const text = normalizeString(value);
-    const hasPastAnchor =
-        /\b(?:as[- ]of|historical(?:ly)?|past state|at (?:the )?(?:time|end|start)|before|during)\b/i.test(text) ||
-        /\b(?:in|on|from)\s+(?:19|20)\d{2}\b/i.test(text) ||
-        /\b(?:19|20)\d{2}\s+(?:version|listing|record|result|state|catalog)\b/i.test(text);
-    const namesWebState =
-        /\b(?:website|webpage|site|database|catalog|registry|index|api|oai|search results?|listed|listing|record)\b/i.test(text);
-    return hasPastAnchor && namesWebState;
-}
-
-function historicalArchiveUrlFromQueries(queries = []) {
-    for (const query of Array.isArray(queries) ? queries : []) {
-        const text = normalizeString(query?.q);
-        const directUrl = text.match(/https?:\/\/[^\s"'<>]+/i)?.[0]
-            ?.replace(/[),.;:!?]+$/, '');
-        if (directUrl) {
-            return directUrl;
-        }
-        const siteMatch = text.match(/\bsite:([a-z0-9.-]+)(\/[^\s"'<>]*)?/i);
-        if (siteMatch?.[1]) {
-            const pathPart = normalizeString(siteMatch[2]).replace(/[),.;:!?]+$/, '');
-            return `https://${siteMatch[1]}${pathPart || ''}`;
-        }
-        const domain = (Array.isArray(query?.domains) ? query.domains : [])
-            .map((entry) => normalizeString(entry))
-            .find(Boolean);
-        if (domain) {
-            return /^https?:\/\//i.test(domain) ? domain : `https://${domain}`;
-        }
-    }
-    return '';
-}
-
 function isEvaluationAnswerLeak(sourceQuestion = '', result = {}) {
     const questionTokens = normalizedSearchTokens(sourceQuestion);
     if (questionTokens.length < 5) {
@@ -3174,8 +3140,6 @@ class AILISGateway extends EventEmitter {
         this.commitPrivatePersonaResult(sessionId, rendered, finalRenderedText);
         return finalRenderedText;
     }
-
-
 
     async runUnifiedAgentTurn({ input, context, sessionId, runId, llmSettings, finalize = async (result) => result }) {
         const runner = this.ensureAgentRunner();

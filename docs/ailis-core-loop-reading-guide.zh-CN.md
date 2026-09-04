@@ -2,13 +2,15 @@
 
 本文只解释真正控制程序运转的主链，先跳过评测、安装器、离线运行包、兼容层和大量工具实现。
 
-## 先记住两个入口
+本文对应独立精简工作树中的未发布统一 Agent 代码，不代表旧版 1.4.1 标签。
+
+## 先记住三个入口
 
 - 最小生产 Agent Loop：`electron/agent-loop/core-loop.cjs`
 - Agent 公共入口：`electron/agent-loop/index.cjs`
 - 渲染：`src/rendering/index.js`
 
-旧文件 `electron/ailis-agent-runner.cjs` 和 `src/vrm-model-system.js` 只是兼容转发，不需要阅读。
+旧转发文件已删除，运行时和测试直接使用上述公共入口。
 
 ## Agent 请求执行流
 
@@ -24,15 +26,10 @@ Electron main
         ↓
 Gateway
   electron/ailis-gateway.cjs: runAgent()
-        ↓（当前聊天产品默认 taskAgentRoutingOwned=true）
-Persona / TaskAgent 外层编排
-  runTaskAgentControlledPersonaTurn()
-        ├─ Persona 草稿/呈现
-        │    └─ AILISAgentRunner.runMessage()
-        │
-        └─ TaskAgentHarness.dispatchTurn()
-             └─ executeTaskAgent()
-                  └─ AILISAgentRunner.runMessage()
+        ↓ 主对话
+  runUnifiedAgentTurn()
+        ↓ 同一个持久 Session
+  AILISAgentRunner.runMessage()
                               ↓
                     runLlmAgentLoop()
                               ↓
@@ -45,7 +42,7 @@ Persona / TaskAgent 外层编排
                       final / blocked
 ```
 
-这里最容易混淆的一点是：完整 AILIS 有“外层多角色编排”和“内层单 Agent Loop”两层。Persona 和 TaskAgent 的角色、Prompt、上下文和工具权限不同，但它们复用同一个 `runCoreAgentLoop()`。因此 `core-loop.cjs` 是真实公共内核，却不是 Gateway、TaskAgent 生命周期、工具系统、记忆系统和渲染系统的总和。
+主对话由同一个 Agent 理解请求、调用工具并输出最终回答；人格是配置，不再有主对话的 Persona 草稿、TaskAgent 接力和二次改写。显式任务 API、旧会话迁移仍保留。`core-loop.cjs` 是公共循环内核，Gateway、会话记忆、安全检查、工具和渲染仍各有职责。
 
 ### `runMessage()` 做什么
 
@@ -91,7 +88,7 @@ Persona / TaskAgent 外层编排
 ## 渲染系统执行流
 
 ```text
-app.js / pet-app.js
+src/pet-app.js / Test/app.js
         ↓ 从 rendering/index.js 导入
 new VRMModelSystem()
         ↓
@@ -134,7 +131,7 @@ requestAnimationFrame: animate()
 5. 阅读 `callLlmAgentDirectToolDecision()`，看模型请求和决策解析。
 6. 阅读 `ailis-tool-router.cjs` → `ailis-tool-executor.cjs`，看工具怎样落地。
 7. 阅读 `ailis-model-input-builder.cjs`，看 Observation 怎样进入下一轮。
-8. 再读 `ailis-gateway.cjs: runAgent()` 和 `runTaskAgentControlledPersonaTurn()`，补齐外层安全门及 Persona/TaskAgent 分流。
+8. 再读 `ailis-gateway.cjs: runAgent()` 和 `runUnifiedAgentTurn()`，补齐外层安全检查、Session 持久化和统一主对话入口。
 9. 渲染从 `src/rendering/vrm-model-system.js` 的构造函数和 `animate()` 开始，再进入 `character-runtime.js`。
 
 第一遍可以暂时不读：benchmark/evals、安装脚本、release、OpenClaw/Codex build cache、每个具体 MCP 工具、旧 rule-agent 分支。

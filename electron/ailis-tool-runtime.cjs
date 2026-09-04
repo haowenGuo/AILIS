@@ -36,10 +36,6 @@ function normalizeString(value, fallback = '') {
     return trimmed || fallback;
 }
 
-function normalizeAction(value, fallback = '') {
-    return normalizeString(value, fallback).toLowerCase().replace(/[-\s]+/g, '_');
-}
-
 function cloneJson(value) {
     try {
         return JSON.parse(JSON.stringify(value));

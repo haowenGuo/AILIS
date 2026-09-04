@@ -7,10 +7,10 @@ import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
 const ExcelJS = require('exceljs');
-const { executeReadXlsxWorkbookTool } = require('../electron/ailis-xlsx-workbook-tool.cjs');
+const { createDefaultArtifactToolsRuntime } = require('../electron/ailis-artifact-tools-runtime.cjs');
 const { AILISContextArtifactStore } = require('../electron/ailis-context-artifact-store.cjs');
 
-test('read_xlsx_workbook reads values, fills, formulas, and merged ranges', async () => {
+test('current XLSX adapter reads real workbooks and historical spreadsheet artifacts remain queryable', async () => {
     const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'ailis-xlsx-tool-'));
     const filePath = path.join(dir, 'colored-map.xlsx');
     const auditDir = path.join(dir, '.audit');
@@ -45,43 +45,62 @@ test('read_xlsx_workbook reads values, fills, formulas, and merged ranges', asyn
         sheet.getCell('D4').value = 'merged-note';
         await workbook.xlsx.writeFile(filePath);
 
-        const result = await executeReadXlsxWorkbookTool(
-            {
-                path: filePath,
-                sheet: 'Map',
-                maxRows: 6,
-                maxCols: 6,
-                includeStyles: true,
-                includeFormulas: true
-            },
-            {},
-            {
-                workspaceDir: dir,
-                workspaceRoot: dir,
-                projectRoot: dir,
-                auditDir,
-                contextArtifactStore
-            }
-        );
+        const runtime = createDefaultArtifactToolsRuntime();
+        const opened = await runtime.execute({ action: 'open_session', path: filePath });
+        assert.equal(opened.ok, true);
+        const inspected = await runtime.execute({
+            action: 'inspect', sessionId: opened.session.id, sheet: 'Map',
+            range: 'A1:F4', include: ['values', 'styles', 'formulas']
+        });
+        assert.equal(inspected.ok, true);
+        const rows = inspected.inspection.observation.matrixRows;
+        assert.equal(rows[0].values[0], 'START');
+        assert.equal(rows[0].fills[1], '0099FF');
+        assert.equal(rows[1].values[2], 'END');
+        const formulas = await runtime.execute({
+            action: 'search', sessionId: opened.session.id,
+            searchKind: 'formula', query: 'SUM'
+        });
+        assert.equal(formulas.ok, true);
+        assert.ok(formulas.search.matches.some((cell) => cell.ref === 'Map!F1'));
 
-        assert.equal(result.isError, false);
-        assert.match(result.content[0].text, /XLSX_WORKBOOK_READ_COMPLETE/);
-        assert.match(result.content[0].text, /fillColors=.*0099FF/);
-        assert.doesNotMatch(result.content[0].text, /fullJsonPath/);
-        assert.ok(result.structuredContent.artifact.artifactId);
-        assert.equal(result.details.artifactId, result.structuredContent.artifact.artifactId);
-        assert.equal(Object.hasOwn(result.structuredContent.observationContract, 'reasoning_ready'), false);
+        // Historical persisted payload contract: keep query/cache/compute coverage
+        // without retaining the unregistered legacy XLSX producer.
+        const legacyRecord = await contextArtifactStore.createArtifact({
+            kind: 'spreadsheet', type: 'xlsx_workbook', sourcePath: filePath,
+            summary: 'Historical Map worksheet', payload: { workbook: { sheets: [{
+                name: 'Map', dimensions: { inspectedRange: 'A1:F4', rowCount: 4, columnCount: 6 },
+                mergedRanges: ['D4:E4'],
+                cells: [{ address: 'F1', value: 3, formula: { formula: 'SUM(A2:A3)', result: 3 } }],
+                grids: {
+                    columns: ['A', 'B', 'C', 'D', 'E', 'F'], rowNumbers: [1, 2, 3, 4],
+                    display: [
+                        ['START', '', '', '', '', '3'],
+                        ['1', '', 'END', '', '', ''],
+                        ['2', '', '', '', '', ''],
+                        ['', '', '', 'merged-note', 'merged-note', '']
+                    ],
+                    fills: [
+                        ['', '0099FF', '', '', '', ''],
+                        ['', 'F478A7', '92D050', '', '', ''],
+                        ['', '', '', '', '', ''],
+                        ['', '', '', '', '', '']
+                    ]
+                }
+            }] } }
+        });
+        const artifactId = legacyRecord.id;
 
         const summary = await contextArtifactStore.execute({
             action: 'summary',
-            artifactId: result.details.artifactId
+            artifactId: artifactId
         });
         assert.equal(summary.isError, false);
         assert.match(summary.content[0].text, /artifact_query actions/);
 
         const range = await contextArtifactStore.execute({
             action: 'range',
-            artifactId: result.details.artifactId,
+            artifactId: artifactId,
             sheet: 'Map',
             range: 'A1:F4'
         });
@@ -95,7 +114,7 @@ test('read_xlsx_workbook reads values, fills, formulas, and merged ranges', asyn
 
         const coveredRange = await contextArtifactStore.execute({
             action: 'range',
-            artifactId: result.details.artifactId,
+            artifactId: artifactId,
             sheet: 'Map',
             range: 'B1:C2'
         });
@@ -106,7 +125,7 @@ test('read_xlsx_workbook reads values, fills, formulas, and merged ranges', asyn
 
         const profile = await contextArtifactStore.compute({
             action: 'profile',
-            artifactId: result.details.artifactId,
+            artifactId: artifactId,
             sheet: 'Map'
         });
         assert.equal(profile.isError, false);
@@ -115,7 +134,7 @@ test('read_xlsx_workbook reads values, fills, formulas, and merged ranges', asyn
 
         const pathResult = await contextArtifactStore.compute({
             action: 'find_path',
-            artifactId: result.details.artifactId,
+            artifactId: artifactId,
             sheet: 'Map',
             startValue: 'START',
             endValue: 'END',
@@ -135,7 +154,7 @@ test('read_xlsx_workbook reads values, fills, formulas, and merged ranges', asyn
 
         const nestedPathResult = await contextArtifactStore.compute({
             action: 'find_path',
-            artifactId: result.details.artifactId,
+            artifactId: artifactId,
             params: {
                 start_cell: 'START',
                 end_cell: 'END',
@@ -152,7 +171,7 @@ test('read_xlsx_workbook reads values, fills, formulas, and merged ranges', asyn
 
         const ruleTextPathResult = await contextArtifactStore.compute({
             action: 'find_path',
-            artifactId: result.details.artifactId,
+            artifactId: artifactId,
             params: {
                 start_cell: 'A1',
                 end_cell: 'C2',
@@ -168,13 +187,13 @@ test('read_xlsx_workbook reads values, fills, formulas, and merged ranges', asyn
 
         const search = await contextArtifactStore.execute({
             action: 'search',
-            artifactId: result.details.artifactId,
+            artifactId: artifactId,
             query: 'SUM'
         });
         assert.equal(search.isError, false);
         assert.equal(search.details.matchCount, 1);
 
-        const record = await contextArtifactStore.getRecord(result.details.artifactId);
+        const record = await contextArtifactStore.getRecord(artifactId);
         assert.ok(record.metadata.pinnedCoverage.some((entry) =>
             entry.coverageId === range.details.cachedCoverage.coverageId &&
             entry.coverage?.range === 'A1:F4'

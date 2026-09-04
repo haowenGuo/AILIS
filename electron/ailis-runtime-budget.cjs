@@ -95,32 +95,6 @@ function stripModelGuidance(value, options = {}) {
     return out;
 }
 
-function shouldStripJsonTextGuidance(value) {
-    if (!value || typeof value !== 'object' || Array.isArray(value)) {
-        return false;
-    }
-    const schema = normalizeString(value.schema);
-    return schema.startsWith('ailis.artifact_tools.') ||
-        schema.startsWith('ailis.active_artifact_observation.') ||
-        value?.protocol?.tool === 'artifact_tools';
-}
-
-function stripGuidanceFromModelText(text = '') {
-    const source = normalizeString(text);
-    if (!/^\s*[\[{]/.test(source)) {
-        return source;
-    }
-    try {
-        const parsed = JSON.parse(source);
-        if (!shouldStripJsonTextGuidance(parsed)) {
-            return source;
-        }
-        return JSON.stringify(stripModelGuidance(parsed), null, 2);
-    } catch {
-        return source;
-    }
-}
-
 function approxTokenCount(value = '') {
     const text = typeof value === 'string' ? value : JSON.stringify(value || '');
     return Math.ceil(Buffer.byteLength(text || '', 'utf8') / 4);
@@ -349,18 +323,6 @@ function buildContextBudgetReport(parts = {}, config = {}) {
                     ? 'continue_while_monitoring_absolute_context_budget'
                     : 'continue'
     };
-}
-
-function buildModelVisibleTruncationNotice({
-    originalTextChars = 0,
-    visibleTextChars = 0
-} = {}) {
-    const omittedApproxTokens = Math.max(1, Math.ceil(Math.max(0, Number(originalTextChars) - Number(visibleTextChars)) / 4));
-    return [
-        'MODEL_VISIBLE_CONTENT_TRUNCATED:',
-        `<truncated omitted_approx_tokens="${omittedApproxTokens}" />`,
-        `originalTextChars=${Number(originalTextChars) || 'unknown'}; visibleTextChars<=${Number(visibleTextChars) || 'unknown'}; truncationScope=model_visible_tool_result_text;`
-    ].join('\n');
 }
 
 function stripSchemaDescriptions(value) {

@@ -152,19 +152,6 @@ function createEntry({
     };
 }
 
-function createSachiEntry(fileName) {
-    const token = normalizeToken(fileName);
-    return createEntry({
-        id: `sachi_${token}`,
-        displayName: `Sachi ${stripExtension(fileName)}`,
-        localPath: `Resources/MotionIntake/candidates/sachi-vrma-1/extracted/SachiVRMA1/capture_vrma/${fileName}`,
-        source: 'sachi-vrma-1',
-        license: 'CC0 according to BOOTH item description; verify archive terms if re-downloaded',
-        token,
-        notes: 'Imported from local SachiVRMA1.zip. Archive extraction reached VRMA files but failed later on bundled Blender source, so keep this as candidate-only until visual and archive review.'
-    });
-}
-
 function createFumiEntry(fileName) {
     const token = normalizeToken(fileName);
     return createEntry({
