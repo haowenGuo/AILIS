@@ -1,82 +1,34 @@
-# TaskAgent Runtime
+# Unified Agent runtime
 
-[Documentation](README.md) · [简体中文](taskagent.zh-CN.md) · [Architecture](architecture.md) · [A7 Baseline](ailis-a7-taskagent-context-baseline.md)
+[Index](README.md) · [中文](taskagent.zh-CN.md) · [Architecture](architecture.md)
 
-TaskAgent is AILIS's task-execution lane. It shares the product Session with the Persona, but owns its own persistent Thread, canonical model history, tool calls, checkpoints, and optional long-running Goal.
-
-## Why It Is Separate
-
-The Persona is responsible for natural conversation and presentation. TaskAgent is responsible for doing the work. This boundary keeps task execution focused while allowing AILIS to report progress and results in a consistent character voice.
-
-TaskAgent is not a new disposable Agent for every message. One product Session keeps one persistent TaskAgent Thread; each request creates a new Turn or steers the active Turn.
+The filename is a legacy link. The main conversation no longer uses a Persona-to-TaskAgent-to-Persona pipeline.
 
 ## Lifecycle
 
-```text
-Session
-  -> persistent TaskAgent Thread
-       -> Turn A: user task
-       -> Turn B: follow-up or a different task
-       -> Turn C: continuation of an active Goal
-```
+1. Resolve the Session and acquire its exclusive writer.
+2. Restore its canonical checkpoint; migrate one legacy history only if none exists.
+3. Run the model and tools through [AgentRunner](../electron/agent-loop/runner.cjs).
+4. Record paired calls/results in the same history. Save checkpoints before model decisions and at finalization.
+5. Apply the final output gate and return the model's answer without a second actor rewriting it.
+6. Release Session ownership.
 
-The Harness follows these rules:
+Text submitted during a running turn can steer its input queue. Attachments, approval packets and inputs that cannot safely enter that queue wait for the writer. An accepted steer can return `deferAssistantCommit`; this is not the former background Persona answer pipeline.
 
-1. If the Thread is idle, a new user request creates a new Turn.
-2. If a Turn is active, new input is queued and steers that exact Turn.
-3. A completed Turn stays in canonical history but does not remain the active goal.
-4. An optional Goal can span Turns and can be updated, blocked, completed, or cleared.
-5. Tool approvals are linked to the exact Turn and action; natural-language input does not silently approve an unrelated command.
+## Tools
 
-## One Agent Iteration
+Normal direct exposure is `exec` / `exec_wait`; nested tool definitions are carried in the code-mode profile. Some protocol tools, such as enabled `task_verify`, remain direct. A missing top-level `read` function therefore does not mean file reading was removed.
 
-The production loop is implemented in [`electron/agent-loop/core-loop.cjs`](../electron/agent-loop/core-loop.cjs). Each iteration performs the same five-stage flow:
+Permissions, action validation, tool output references and call/result pairing remain enforced. A tool error, missing evidence or an unresolved in-flight call is not proof of successful work.
 
-```text
-Context
-  -> Model decision
-  -> Action or completion
-  -> Tool execution
-  -> Observation recorded into canonical history
-```
+## Checkpoints and compatibility
 
-The model can emit multiple function calls. The runtime preserves every call, executes calls according to tool safety metadata, and records outputs with their original `call_id` before the next model request.
+[SessionContextStore](../electron/ailis-session-context-store.cjs) uses atomic checkpoint replacement and exclusive locks. First-use migration prefers the legacy execution checkpoint, then Persona history; it never concatenates the two. The main path does not write new turns back to both old stores.
 
-## Canonical Context
+Explicit TaskAgent APIs still retain Thread/Turn/Goal semantics. They are compatibility or explicit job interfaces, not an automatic second actor for every chat.
 
-`ContextManager` owns ordered model-visible items instead of regenerating a bespoke transcript format on every step. It stores:
+## Verification
 
-- developer and user messages;
-- assistant response items;
-- function, custom-tool, and tool-search calls;
-- call-linked outputs;
-- user-approved images;
-- semantic compaction checkpoints;
-- token usage and context-budget metadata.
+[Unified tests](../tests/ailis-unified-agent.test.mjs) cover recovery, steering, gates, migration and tool execution against a local fake model. [Hosted tests](../tests/ailis-hosted-runtime.test.mjs) verify direct delivery, restart memory and shared Session history. [Consolidation tests](../tests/ailis-code-consolidation.test.mjs) guard against reintroducing the removed scheduler and losing the address-direction policy.
 
-The historical A7 baseline keeps bounded tool output in canonical history and starts semantic compaction only when the effective context budget reaches hard pressure. It does not replace the final Turn with a separate four-step summary prompt. The v1.4.1 context/tool-runtime changes and their claim boundaries are described in the [release notes](releases/v1.4.1.md); fallback compaction now preserves both developer-role and legacy user-role attachment context envelopes.
-
-## Checkpoint And Recovery
-
-At Turn completion, the Harness stores the next `ContextManager` checkpoint on the persistent Thread. Recovery restores the same item order, call pairing, reference context, and token metadata. A checkpoint records execution state; it does not decide what the user wants next.
-
-Transport failures may retry from the latest canonical state. Tool or model failures are recorded as observations so the model can change strategy without losing completed work.
-
-## Completion
-
-TaskAgent ends naturally when the model returns a final response with no pending tool calls or inputs. The runtime still has a configurable step budget and loop protection for safety, but there is no extra finalization conversation that discards prior history.
-
-The result packet returned to Persona contains the task status, answer, evidence and artifact references, verification state, progress summary, and the current Thread/Turn identity. Persona uses that packet to produce the user-facing response.
-
-## Main Source Files
-
-| File | Responsibility |
-| --- | --- |
-| `electron/ailis-task-agent-harness.cjs` | Thread, Turn, Goal, steering, checkpoints, result packet |
-| `electron/agent-loop/core-loop.cjs` | minimal production loop control |
-| `electron/agent-loop/runner.cjs` | context, model calls, tools, observations, recovery, results |
-| `electron/ailis-context-manager.cjs` | canonical history, budgets, compaction, checkpoint format |
-| `electron/ailis-model-input-builder.cjs` | canonical items and provider-facing request projection |
-| `electron/ailis-response-model.cjs` | response item constructors and normalization |
-
-For measured context behavior and frozen regression evidence, see [TaskAgent A7 Context Baseline](ailis-a7-taskagent-context-baseline.md).
+Budget and compaction components exist, but the unified semantic-compaction trigger is an open audit item. Cache hit rate and end-to-end latency require real traces after an explicitly deployed build.

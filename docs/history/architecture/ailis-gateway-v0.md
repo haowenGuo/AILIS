@@ -1,5 +1,8 @@
 # AILIS Gateway v0
 
+> Archived historical design/implementation; not the current runtime contract. See the [current documentation](../../README.md). Original location: `docs/ailis-gateway-v0.md`.
+
+
 AILIS Gateway v0 is a thin local HTTP gateway for the personal Claw build. It does not reimplement OpenClaw tools. It provides one stable entrypoint for the frontend and future agent loop.
 
 Default URL when the Electron app is running:

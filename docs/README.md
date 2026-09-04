@@ -1,68 +1,31 @@
-# AILIS Documentation
+# AILIS documentation
 
-<p align="center">
-  <strong>Build, understand, and evaluate the AILIS desktop embodied Agent.</strong>
-</p>
+[中文](README.zh-CN.md) · [Project](../README.md)
 
-<p align="center">
-  <a href="../README.md">Project Home</a> ·
-  <a href="README.zh-CN.md">简体中文</a> ·
-  <a href="getting-started.md">Quick Start</a> ·
-  <a href="evaluation.md">Benchmarks</a>
-</p>
+## Version boundary
 
-The current product is `v1.4.1`, with context and tool-runtime changes built on source `07c1e85`. Start with the [v1.4.1 release notes](releases/v1.4.1.md) for the current changes. A7 documentation and scores describe a historical frozen baseline, not a new evaluation of this release. Design studies and experiment logs remain for traceability.
+These core guides describe the **unreleased unified-agent working source** being consolidated on `codex/code-consolidation-20260904`. Its pre-cleanup snapshot is `1442cc5`. The package version remains `1.4.1`; that number alone does not identify the architecture. The public tag at `659bf61` and [release notes](releases/v1.4.1.md) describe an earlier split-agent implementation. This worktree has not replaced the installed app.
 
-## Start Here
+## Current implementation
 
-| | Guide | What it covers |
-| :---: | --- | --- |
-| 01 | **[Getting Started](getting-started.md)** | Install dependencies, run the desktop app, prepare voice, validate, and package. |
-| 02 | **[System Architecture](architecture.md)** | Desktop experience, Gateway, Persona, TaskAgent, Agent Loop, tools, memory, and model relay. |
-| 03 | **[TaskAgent Runtime](taskagent.md)** | Thread/Turn lifecycle, canonical context, tools, approvals, checkpoints, and completion. |
-| 04 | **[Memory System](memory.md)** | Persistent memory lanes, BM25/MMR retrieval, prompt projection, privacy, and limits. |
-| 05 | **[Tool Runtime](tools.md)** | Built-in tools, contracts, deferred discovery, execution policy, artifacts, and audit events. |
-| 06 | **[Evaluation](evaluation.md)** | GAIA, Terminal-Bench, ToolSandbox, long-memory results, Codex comparisons, and evidence. |
+One main Agent owns a durable Session, tools, and the final reply. Personality and relationship preferences are context, not a second reply-writing model.
 
-## Current Runtime At A Glance
+| Guide | Scope |
+| --- | --- |
+| [Architecture](architecture.md) | Entry points, execution, ownership, compatibility |
+| [Agent runtime](taskagent.md) | Unified lifecycle, tool protocol, checkpoint recovery |
+| [Memory](memory.md) | Session history versus long-term memory |
+| [Tools](tools.md) | Tool reference; verify individual adapters against source |
+| [Getting started](getting-started.md) | Build/start reference; runtime packs are separate |
+| [Evaluation](evaluation.md) | Historical measurements, not scores for this cleanup |
 
-```text
-Desktop UI and embodied character
-        |
-        v
-AILIS Gateway  ->  approvals, events, audit, model relay
-        |
-        +------> Persona runtime  -> conversation and presentation
-        |
-        +------> TaskAgent Harness
-                    |
-                    v
-              Agent Loop + ContextManager
-                    |
-                    v
-              Tool runtime and platform adapters
+The `taskagent.md` URL is retained so existing links work; its title and content now describe the main unified runtime.
 
-Memory runtime and persistent state support both Persona and TaskAgent lanes.
-```
+## History and evidence
 
-The production Agent Loop lives in [`electron/agent-loop/`](../electron/agent-loop/). The previous `electron/ailis-agent-runner.cjs` path is now a compatibility entry point, not the implementation.
+- [Archived architecture](history/architecture/README.md): former v0/V1/V2 and dual-agent designs.
+- [Unified-session implementation note](unified-agent-session.md): original migration and test record.
+- [A7 context baseline](ailis-a7-taskagent-context-baseline.md) and [evaluation scorecard](ailis-evaluation-master-scorecard-20260817.md): frozen evidence.
+- [Release history](releases/): preserve the behavior of each published version.
 
-## Engineering References
-
-These pages are useful when changing the runtime or reproducing measurements:
-
-- [TaskAgent A7 Context Baseline](ailis-a7-taskagent-context-baseline.md)
-- [Core Loop Reading Guide](ailis-core-loop-reading-guide.zh-CN.md)
-- [Full Evaluation Scorecard](ailis-evaluation-master-scorecard-20260817.md)
-- [Memory Retrieval Baseline](ailis-memory-bm25-mmr-baseline.md)
-- [Release Build System](ailis-release-build-system.md)
-- [v1.4.0 Launch Kit](launch/README.md)
-- [Version and Experiment Registry](ailis-version-registry.md)
-- [Harness Architecture Audit](ailis-harness-architecture-audit-roadmap.md)
-- [Codebase Refactor Audit](ailis-codebase-refactor-audit.md)
-
-## Documentation Status
-
-Only pages linked under **Start Here** are maintained as the public description of the current runtime. Files with names such as `v0`, `plan`, `research`, `migration`, `analysis`, or a dated benchmark run are engineering records. They may describe rejected ideas, earlier implementations, or frozen experiments.
-
-Release history is available under [`docs/releases/`](releases/) and on [GitHub Releases](https://github.com/haowenGuo/AILIS/releases).
+Only the architecture, runtime, memory and index pages in both languages were rewritten in this consolidation batch. Other research, module and operational guides are not automatically current merely because they are present in this directory.

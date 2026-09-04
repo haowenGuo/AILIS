@@ -1,5 +1,8 @@
 # AILIS Memory Architecture V1
 
+> Archived historical design/implementation; not the current runtime contract. See the [current documentation](../../README.md). Original location: `docs/ailis-memory-architecture-v1.md`.
+
+
 ## Goal
 
 AILIS 的记忆系统不是工具数据库，而是人物理解层。它要让 AILIS 随着使用时间变长，更了解用户、更懂项目、更自然地调整语气，同时保留工程级可恢复、可审计、可删除的稳定性。

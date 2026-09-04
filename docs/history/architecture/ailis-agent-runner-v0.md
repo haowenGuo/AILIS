@@ -1,5 +1,8 @@
 # AILIS Agent Runner v0
 
+> Archived historical design/implementation; not the current runtime contract. See the [current documentation](../../README.md). Original location: `docs/ailis-agent-runner-v0.md`.
+
+
 AILIS Agent Runner v0 是 AILIS 对话系统和 Gateway 工具面的统一中间层。所有用户输入都会先进入 Agent Loop 做识别：如果是情感/日常对话，转回 AILIS 原对话系统；如果是任务执行，才进入 AILIS 任务执行 Agent。
 
 ## Runtime Path

@@ -1,6 +1,9 @@
 # AILIS System TaskAgent Architecture
 
-> **Historical implementation snapshot.** Read [TaskAgent Runtime](taskagent.md) for the maintained Thread/Turn, context, checkpoint, and completion contract.
+> Archived historical design/implementation; not the current runtime contract. See the [current documentation](../../README.md). Original location: `docs/ailis-system-taskagent-architecture.md`.
+
+
+> **Historical implementation snapshot.** Read [TaskAgent Runtime](../../taskagent.md) for the maintained Thread/Turn, context, checkpoint, and completion contract.
 
 Last verified against: `fbf2454dbf32562d995b221386ce95d996b9fcb9`
 
@@ -231,4 +234,4 @@ must preserve checkpoint and unresolved state rather than fabricate completion.
 - A7 checkpoint replay preserves the configured full-history tool-output mode.
 
 For the source-level audit, performance evidence, and next architecture phases,
-see [Harness Architecture Audit and Roadmap](ailis-harness-architecture-audit-roadmap.md).
+see [Harness Architecture Audit and Roadmap](../../ailis-harness-architecture-audit-roadmap.md).

@@ -1,66 +1,31 @@
 # AILIS 文档中心
 
-<p align="center">
-  <strong>构建、理解并评测 AILIS 桌面具身 Agent。</strong>
-</p>
+[English](README.md) · [项目首页](../README.zh-CN.md)
 
-<p align="center">
-  <a href="../README.zh-CN.md">项目首页</a> ·
-  <a href="README.md">English</a> ·
-  <a href="getting-started.zh-CN.md">快速开始</a> ·
-  <a href="evaluation.zh-CN.md">评测成绩</a>
-</p>
+## 先确认你读的是哪个版本
 
-当前产品为 `v1.4.1`，整合基于源码 `07c1e85` 的上下文与工具运行时改进。请先看 [v1.4.1 版本说明](releases/v1.4.1.md)。A7 文档与成绩描述历史冻结基线，不代表本版已经重新评测。仓库保留设计研究与实验记录以便追溯。
+这组核心文档描述 `codex/code-consolidation-20260904` 工作树中的**未发布统一 Agent 源码**，精简前基线为 `1442cc5`。包版本仍是 `1.4.1`，不能只靠这个版本号判断架构。公开标签 `659bf61` 及其[发布说明](releases/v1.4.1.md)描述较早的双链实现。本工作树尚未替换已安装应用。
 
-## 从这里开始
+## 当前主链
 
-| | 文档 | 内容 |
-| :---: | --- | --- |
-| 01 | **[快速开始](getting-started.zh-CN.md)** | 安装依赖、启动桌面端、准备语音、验证与打包。 |
-| 02 | **[系统架构](architecture.zh-CN.md)** | 桌面体验、Gateway、Persona、TaskAgent、Agent Loop、工具、记忆与模型服务。 |
-| 03 | **[TaskAgent Runtime](taskagent.zh-CN.md)** | Thread/Turn 生命周期、规范上下文、工具、审批、检查点与自然结束。 |
-| 04 | **[记忆系统](memory.zh-CN.md)** | 持久记忆分层、BM25/MMR 检索、上下文投影、隐私与边界。 |
-| 05 | **[工具运行时](tools.zh-CN.md)** | 内置工具、契约、按需发现、执行策略、工件与审计事件。 |
-| 06 | **[评测成绩](evaluation.zh-CN.md)** | GAIA、Terminal-Bench、ToolSandbox、长期记忆与 Codex 同模型对照。 |
+一个主 Agent 持有一个持久 Session，负责对话、工具执行和最终答复。人物风格与关系偏好是上下文配置，不是另一个改写答案的模型。
 
-## 当前执行链
+| 文档 | 内容 |
+| --- | --- |
+| [系统架构](architecture.zh-CN.md) | 真实入口、执行链、状态所有权、兼容边界 |
+| [Agent 运行时](taskagent.zh-CN.md) | 统一生命周期、工具协议、检查点恢复 |
+| [记忆系统](memory.zh-CN.md) | 会话执行历史与长期记忆的区别 |
+| [工具参考](tools.zh-CN.md) | 工具契约；具体适配器仍需对照源码 |
+| [快速开始](getting-started.zh-CN.md) | 构建和启动参考；运行时资源包另行准备 |
+| [评测记录](evaluation.zh-CN.md) | 历史测量，不是本轮精简后的新成绩 |
 
-```text
-桌面 UI 与具身角色
-        |
-        v
-AILIS Gateway  ->  审批、事件、审计、模型中继
-        |
-        +------> Persona Runtime  -> 对话与人物表现
-        |
-        +------> TaskAgent Harness
-                    |
-                    v
-              Agent Loop + ContextManager
-                    |
-                    v
-              工具运行时与平台适配器
+保留 `taskagent.md` 系列文件名是为了兼容旧链接，内容已改为统一主 Agent。
 
-Memory Runtime 与持久状态同时支持 Persona 和 TaskAgent 两条链路。
-```
+## 历史与证据
 
-生产 Agent Loop 位于 [`electron/agent-loop/`](../electron/agent-loop/)。旧路径 `electron/ailis-agent-runner.cjs` 现在只是兼容入口，不再承载实现。
+- [历史架构目录](history/architecture/README.md)：旧 v0/V1/V2 与双角色设计。
+- [统一 Session 实施记录](unified-agent-session.md)：原始迁移、测试及当时的边界。
+- [A7 上下文基线](ailis-a7-taskagent-context-baseline.md)、[评测总表](ailis-evaluation-master-scorecard-20260817.md)：冻结实验。
+- [发布历史](releases/)：保留每个已发布版本当时的事实。
 
-## 工程参考
-
-- [TaskAgent A7 上下文基线](ailis-a7-taskagent-context-baseline.md)
-- [核心 Loop 阅读指南](ailis-core-loop-reading-guide.zh-CN.md)
-- [完整评测数据总表](ailis-evaluation-master-scorecard-20260817.md)
-- [记忆检索基线](ailis-memory-bm25-mmr-baseline.md)
-- [发布构建系统](ailis-release-build-system.md)
-- [v1.4.0 发布素材与内测](launch/README.md)
-- [版本与实验登记](ailis-version-registry.md)
-- [Harness 架构审计](ailis-harness-architecture-audit-roadmap.md)
-- [代码重构审计](ailis-codebase-refactor-audit.md)
-
-## 文档状态
-
-只有“从这里开始”中的页面作为当前实现的公开说明持续维护。文件名中包含 `v0`、`plan`、`research`、`migration`、`analysis` 或具体实验日期的页面属于工程记录，可能描述旧实现、被否决方案或冻结实验。
-
-版本历史见 [`docs/releases/`](releases/) 与 [GitHub Releases](https://github.com/haowenGuo/AILIS/releases)。
+本批重写的是中英文索引、架构、运行时、记忆共 8 页。其他研究、模块和运维文档不能仅因仍在仓库里就视为最新契约。

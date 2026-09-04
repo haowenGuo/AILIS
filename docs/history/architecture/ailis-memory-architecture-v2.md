@@ -1,6 +1,9 @@
 # AILIS Memory Architecture V2
 
-> **Historical design record.** Read [AILIS Memory System](memory.md) for the maintained implementation, retrieval, privacy, and current-limit description.
+> Archived historical design/implementation; not the current runtime contract. See the [current documentation](../../README.md). Original location: `docs/ailis-memory-architecture-v2.md`.
+
+
+> **Historical design record.** Read [AILIS Memory System](../../memory.md) for the maintained implementation, retrieval, privacy, and current-limit description.
 
 ## 0. 设计结论
 

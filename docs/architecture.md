@@ -1,66 +1,38 @@
-# AILIS System Architecture
+# AILIS architecture: one main Agent
 
-[Documentation](README.md) · [简体中文](architecture.zh-CN.md) · [TaskAgent](taskagent.md) · [Tools](tools.md)
+[Index](README.md) · [中文](architecture.zh-CN.md)
 
-AILIS combines a visible desktop companion with a general Agent runtime. The character, conversation, memory, and task execution are one product, but they are separated into explicit runtime lanes so that personality does not weaken execution and tool internals do not leak into the user experience.
+Scope: the unreleased unified worktree, not the earlier public 1.4.1 tag.
 
-## Runtime Layers
-
-| Layer | Responsibility | Primary code |
-| --- | --- | --- |
-| Desktop experience | VRM rendering, chat, control panel, voice, expressions, motion, and user approvals | `src/`, `electron/main.cjs`, `electron/preload.cjs` |
-| Gateway | Sessions, model access, tool registry, policy, events, audit, and platform adapters | `electron/ailis-gateway.cjs` |
-| Persona runtime | Natural conversation, relationship context, and user-facing presentation | `electron/agent-loop/runner.cjs`, character and persona renderers |
-| TaskAgent Harness | Persistent Thread/Turn state, steering, goals, checkpoints, and compact task results | `electron/ailis-task-agent-harness.cjs` |
-| Agent Loop | Context projection, model decisions, tool calls, observations, recovery, and completion | `electron/agent-loop/` |
-| Context and protocol | Canonical ResponseItems, token budgets, compaction, call/result pairing, and checkpoints | `electron/ailis-context-manager.cjs`, `electron/ailis-model-input-builder.cjs` |
-| Tool runtime | Contracts, discovery, validation, execution, approvals, and normalized outputs | `electron/ailis-tool-contracts.cjs`, `electron/ailis-tool-executor.cjs` |
-| Memory runtime | Persona blocks, events, project context, relationship state, retrieval, and prompt projection | `electron/ailis-memory-store.cjs`, `electron/ailis-context-compiler.cjs` |
-
-## One User Request
+## Execution and ownership
 
 ```text
-User input
-  -> Desktop forwards the current Session and approved context
-  -> Gateway opens or steers a Turn
-  -> Persona handles conversation or delegates the exact task
-  -> TaskAgent restores the Thread checkpoint
-  -> Agent Loop builds canonical model input
-  -> Model responds, calls tools, or completes
-  -> Tool results return through the same call_id-linked history
-  -> TaskAgent persists the new checkpoint and returns a compact result
-  -> Persona presents the result with voice, expression, and motion
+Desktop chat / hosted tenant
+    -> Gateway.runAgent
+    -> runUnifiedAgentTurn: acquire Session writer, restore checkpoint
+    -> AgentRunner: context -> model -> tools -> observations
+    -> final gate -> one visible answer and memory recording
+    -> save Session checkpoint, release writer
 ```
 
-The Persona does not execute a hidden second version of the request. The TaskAgent receives an immutable task envelope and returns evidence, artifacts, status, and a result packet to the same outer conversation.
+The model decides meaning, tool use and final content. The harness enforces schema, permissions, budgets, lifecycle and evidence preservation. Avatar, speech and expression handling are presentation, not a second language-model rewrite.
 
-## State Model
+| Boundary | Implementation |
+| --- | --- |
+| Desktop chat | [ailis-chat-service.js](../src/ailis-chat-service.js) |
+| Tenant isolation | [ailis-hosted-runtime.cjs](../electron/ailis-hosted-runtime.cjs) |
+| Main scheduling and gates | [ailis-gateway.cjs](../electron/ailis-gateway.cjs) |
+| Execution loop | [agent-loop/](../electron/agent-loop/) |
+| Durable Session owner | [ailis-session-context-store.cjs](../electron/ailis-session-context-store.cjs) |
+| Context and memory projection | [context manager](../electron/ailis-context-manager.cjs), [compiler](../electron/ailis-context-compiler.cjs) |
+| Tool dispatch and code-mode worker | [tool runtime](../electron/ailis-tool-runtime.cjs), [code-mode runtime](../electron/ailis-code-mode-runtime.cjs) |
 
-- **Session** is the long-lived relationship and conversation boundary.
-- **Thread** is the persistent TaskAgent execution history inside a Session.
-- **Turn** is one user request or one explicit continuation of active work.
-- **Goal** is optional durable work that can span Turns; it is not the first prompt and can be replaced or completed.
-- **Checkpoint** is a replayable execution snapshot, not a goal or an approval.
-- **Approval** is attached to a concrete tool action and Turn.
+## Compatibility is not the main chain
 
-This separation prevents a completed task from locking future messages to its original objective.
+The main path does not automatically call `task_route`, `handoff_task` or a Persona draft/render model. Explicit compatibility handoffs, task harness APIs and legacy checkpoint readers still exist. Their consumers must be migrated before deleting those modules. Browser/demo fallback without a Gateway is not equivalent to the full execution Agent.
 
-## Context Model
+The obsolete `runTaskAgentControlledPersonaTurn` scheduler and private draft helper were removed. Unconnected Kokoro/VITS JavaScript adapters and the unused character-lab prototype were also removed; active ElevenLabs/CosyVoice3 and character modules remain.
 
-AILIS stores model-visible history as canonical response items: role messages, function calls, function outputs, tool-search events, images, and compacted history items. Old items keep their order and call pairing. Context compaction is budget-driven and occurs near the effective model limit; it is not a separate forced-final-answer prompt.
+## Limits
 
-The v1.4.1 runtime builds on stable append-only history, separate Persona context, and governed code-mode tools; attachment envelopes survive fallback compaction. See the [current release notes](releases/v1.4.1.md). The [A7 Context Baseline](ailis-a7-taskagent-context-baseline.md) documents the historical, scored mechanism, not a new evaluation of this release.
-
-## Model And Local Execution
-
-The current public release connects to the model through AILIS Cloud. The desktop still owns Persona orchestration, TaskAgent state, local memory, approvals, and computer, file, code, and artifact execution. Only model-visible context needed for the active request is relayed to the model service.
-
-## Reliability Boundaries
-
-- Consequential tools pass through explicit policy and approval checks.
-- Tool calls and results are normalized and linked by call ID.
-- TaskAgent checkpoints preserve replayable history across recovery.
-- Progress, tool events, and outcomes are emitted through the Gateway event stream.
-- Benchmark runners and product runtime share the Agent implementation, while adapters only provide environment-specific transport.
-
-Continue with [TaskAgent Runtime](taskagent.md), [Memory System](memory.md), or [Tool Runtime](tools.md).
+Offline regression tests do not measure answer quality, provider caching or installed-app behavior. The current unified context mode still needs a separate audit of the semantic-compaction trigger; do not assume old A7 compaction results apply here. Legacy scripts and adapters may have independent entry points outside this main flow.
