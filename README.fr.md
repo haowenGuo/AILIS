@@ -1,5 +1,7 @@
 # AILIS
 
+Ce manuel décrit la branche source actuelle, avec l’Agent unifié. Les [installateurs v1.4.1 existants](https://github.com/haowenGuo/AILIS/releases/tag/v1.4.1) proviennent de `659bf61` et n’incluent pas ces changements ultérieurs. Lancez la branche source actuelle pour les essayer.
+
 AILIS est une application de bureau proposant des échanges texte et voix, des tâches avec outils, un contexte persistant et un avatar VRM.
 
 ## Démarrer

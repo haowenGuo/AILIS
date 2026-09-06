@@ -1,5 +1,7 @@
 # 开发工作流
 
+更新文档或移动源码后，运行 `node scripts/verify-documentation.mjs` 检查手册、模块说明、网页文档入口及 pnpm 命令；`node --test tests/ailis-documentation.test.mjs` 同时验证检查器。GitHub 的 Documentation consistency 工作流会在 PR 和 main 提交上执行这项检查。它不替代运行时回归或外部网页检查。
+
 开发工作以可定位的入口、明确的数据契约和可复现的验证为单位。先确定功能属于桌面、Hosted、Python 服务还是浏览器页面，再沿调用关系修改。
 
 ## 建立工作环境

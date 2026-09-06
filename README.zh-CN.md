@@ -1,5 +1,7 @@
 # AILIS
 
+本手册对应当前源码分支，包含统一 Agent。已有 [v1.4.1 安装包](https://github.com/haowenGuo/AILIS/releases/tag/v1.4.1) 来自 `659bf61`，不包含之后的这些改动；体验新实现请从当前源码启动。历史 Release 保持不变。
+
 AILIS 是一个桌面交互应用，提供文本与语音聊天、工具任务、持久上下文和 VRM 角色。
 
 ## 开始使用

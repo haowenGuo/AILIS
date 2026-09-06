@@ -1,5 +1,7 @@
 # AILIS
 
+This manual describes the current source branch, including the unified Agent. The existing [v1.4.1 installers](https://github.com/haowenGuo/AILIS/releases/tag/v1.4.1) were built from `659bf61` and do not include these later changes. Use this source branch to try them; historical releases remain available.
+
 AILIS is a desktop application for text and voice interaction, tool-assisted tasks, persistent context, and a VRM avatar.
 
 ## Run from source
