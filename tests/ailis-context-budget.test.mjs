@@ -91,14 +91,15 @@ test('buildContextBudgetReport honors absolute soft, hard, and stop token limits
     assert.equal(hard.thresholdSources.stop, 'absolute_tokens');
 });
 
-test('normalizeAilisToolOutput turns large text into a model-visible preview with output ref metadata', () => {
+test('normalizeAilisToolOutput honors explicit text budget and preserves structured output refs', () => {
     const result = normalizeAilisToolOutput({
         content: [{
             type: 'text',
             text: `outputId=fetch-123\nHEAD\n${'body\n'.repeat(2200)}TAIL`
         }],
         details: {
-            status: 'completed'
+            status: 'completed',
+            outputRef: { outputId: 'fetch-123' }
         }
     }, {
         toolId: 'web_fetch',
@@ -106,10 +107,11 @@ test('normalizeAilisToolOutput turns large text into a model-visible preview wit
     });
 
     assert.equal(result.modelBudget.truncated, true);
-    assert.ok(result.modelBudget.omittedApproxTokens > 0);
+    assert.equal(result.modelBudget.truncationScope, 'explicit_tool_text_budget');
     assert.equal(result.details.outputRef.outputId, 'fetch-123');
     assert.ok(result.content[0].text.length <= 1800);
-    assert.match(result.content[0].text, /<truncated omitted_approx_tokens="\d+" \/>/);
+    assert.match(result.content[0].text, /middle omitted for model budget/);
+    assert.equal(result.details.observationContract.complete, false);
     const deprecatedPreviewFields = new RegExp([
         ['output', 'Complete'].join(''),
         ['output', 'TruncatedForModel'].join('')

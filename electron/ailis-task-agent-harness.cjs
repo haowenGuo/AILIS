@@ -627,45 +627,6 @@ class AILISSystemTaskAgentHarness {
         return turn;
     }
 
-    getSessionProjection(sessionId = '') {
-        const thread = this.getThread(sessionId);
-        if (!thread) {
-            return null;
-        }
-        const activeTurn = thread.turns.find((turn) => turn.turnId === thread.activeTurnId) || null;
-        return {
-            schema: 'ailis.session_ledger_projection.v1',
-            session_id: thread.sessionId,
-            thread_id: thread.threadId,
-            active_goal: thread.activeGoal ? cloneJson(thread.activeGoal) : null,
-            active_turn: activeTurn ? {
-                turn_id: activeTurn.turnId,
-                request: activeTurn.request,
-                latest_request: activeTurn.latestRequest,
-                inputs: activeTurn.inputs.map((input) => input.message)
-            } : null,
-            unresolved_fields: [...thread.unresolvedFields],
-            completed_turns: thread.turns
-                .filter((turn) => turn.turnId !== thread.activeTurnId)
-                .slice(-40)
-                .map((turn) => ({
-                    turn_id: turn.turnId,
-                    request: turn.request,
-                    latest_request: turn.latestRequest,
-                    status: turn.resultStatus || turn.status,
-                    final_answer: turn.finalAnswer,
-                    completed_at: turn.completedAt
-                })),
-            visible_history: activeTurn?.envelope?.visibleHistory || [],
-            authority: {
-                current_user_turn: 1,
-                active_goal: 2,
-                unresolved_task_state: 3,
-                verified_results: 4,
-                persona_output: 'display_only'
-            }
-        };
-    }
 
     recordPersonaOutput(sessionId = '', turnId = '', text = '', kind = 'chat') {
         const thread = this.getThread(sessionId);

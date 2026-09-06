@@ -60,7 +60,7 @@ function truncateByCompleteLines(value = '', maxChars = 4000) {
 class MemoryContext {
     constructor({ contextMode = 'persona', sections = [], budgets = {}, diagnostics = {} } = {}) {
         this.schema = MEMORY_CONTEXT_SCHEMA;
-        this.contextMode = contextMode === 'task_agent' ? 'task_agent' : 'persona';
+        this.contextMode = ['task_agent', 'unified'].includes(contextMode) ? contextMode : 'persona';
         this.sections = sections.filter((section) => normalizeText(section?.text));
         this.budgets = { ...budgets };
         this.diagnostics = { ...diagnostics };
@@ -120,7 +120,7 @@ class AILISContextCompiler {
         sectionBudgets = {},
         maxChars = 0
     } = {}) {
-        const contextMode = agentMode === 'task_agent' ? 'task_agent' : 'persona';
+        const contextMode = ['task_agent', 'unified'].includes(agentMode) ? agentMode : 'persona';
         const sources = this.memoryRuntime?.getContextSources?.({
             sessionId,
             message: currentUserMessage,
@@ -165,14 +165,14 @@ class AILISContextCompiler {
             });
         };
 
-        if (contextMode === 'persona') {
+        if (contextMode !== 'task_agent') {
             addSection('persona', 'Persona', sources.personaText, sources.personaRefs);
         }
         addSection('user', 'User', [
             sources.userText,
-            contextMode === 'persona' ? normalizeText(interactionPreferences) : ''
+            contextMode !== 'task_agent' ? normalizeText(interactionPreferences) : ''
         ].filter(Boolean).join('\n\n'), sources.userRefs);
-        if (contextMode === 'persona') {
+        if (contextMode !== 'task_agent') {
             addSection('relationship', 'Relationship', [
                 sources.relationshipText,
                 sources.affinityText

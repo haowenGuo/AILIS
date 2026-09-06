@@ -325,7 +325,7 @@ test('MToon render profile controller can disable outline for lower render cost'
 });
 
 test('VRM model system exposes a safe default scene mood before model load', async () => {
-    const { VRMModelSystem } = await import('../src/vrm-model-system.js');
+    const { VRMModelSystem } = await import('../src/rendering/index.js');
     const vrmSystem = new VRMModelSystem();
     const mood = vrmSystem.getDefaultSceneMood();
 
@@ -335,7 +335,7 @@ test('VRM model system exposes a safe default scene mood before model load', asy
 });
 
 test('VRM model system ignores resize events when the drawable area is unchanged', async () => {
-    const { VRMModelSystem } = await import('../src/vrm-model-system.js');
+    const { VRMModelSystem } = await import('../src/rendering/index.js');
     const vrmSystem = new VRMModelSystem();
     let projectionUpdates = 0;
     const rendererSizes = [];

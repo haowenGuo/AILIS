@@ -1,7 +1,6 @@
 const fs = require('fs/promises');
 const path = require('path');
 const {
-    ARTIFACT_CAPABILITIES,
     buildArtifactToolsSchema,
     cloneJson,
     createAdapterManifest,
@@ -14,7 +13,6 @@ const {
     normalizeCapabilities,
     normalizeFormat,
     normalizeString,
-    uniqueStrings
 } = require('./ailis-artifact-tools-model.cjs');
 const {
     IMPLEMENTED_ADAPTER_IDS,

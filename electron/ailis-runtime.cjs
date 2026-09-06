@@ -16,11 +16,9 @@ const {
     createAILISToolRuntimeRegistry,
     parseDirectMcpToolId
 } = require('./ailis-tool-runtime.cjs');
-const {
-    compactJsonForModel,
-    compactToolResultForModel
-} = require('./ailis-runtime-budget.cjs');
-const { collectStructuredToolActionKeys } = require('./ailis-tool-result.cjs');
+const { makeHeadTailPreview } = require('./ailis-runtime-budget.cjs');
+const { normalizeAilisToolOutput } = require('./ailis-tool-result.cjs');
+const { TOOL_INLINE_MEDIA_BYTES, toolInlineByteLimit } = require('./ailis-tool-output-limits.cjs');
 const {
     RolloutItem
 } = require('./ailis-prompt-model.cjs');
@@ -29,7 +27,6 @@ const {
     InputQueue
 } = require('./ailis-agent-control.cjs');
 
-const DEFAULT_MAX_RESULT_TEXT_CHARS = 6000;
 const DEFAULT_MAX_TRANSCRIPT_ITEMS = 500;
 const DEFAULT_SUBAGENT_RUN_TIMEOUT_MS = 15 * 60 * 1000;
 
@@ -301,25 +298,6 @@ function cloneJson(value) {
     } catch {
         return { value: String(value) };
     }
-}
-
-function buildModelVisibleTruncationNotice({
-    filePath = '',
-    originalTextChars = 0,
-    visibleChars = 0,
-    maxTextChars = DEFAULT_MAX_RESULT_TEXT_CHARS
-} = {}) {
-    const normalizedPath = normalizeString(filePath);
-    const omittedApproxTokens = Math.max(1, Math.ceil(Math.max(0, Number(originalTextChars) - Number(visibleChars || maxTextChars)) / 4));
-    const lines = [
-        'MODEL_VISIBLE_CONTENT_TRUNCATED:',
-        `<truncated omitted_approx_tokens="${omittedApproxTokens}" />`,
-        `originalTextChars=${originalTextChars || 'unknown'}; visibleTextChars<=${visibleChars || maxTextChars}; truncationScope=model_visible_tool_result_text;`
-    ];
-    if (normalizedPath) {
-        lines.push(`sourcePath=${normalizedPath}`);
-    }
-    return `${lines.join('\n')}\n\n`;
 }
 
 function normalizeMcpContent(result) {
@@ -1150,98 +1128,94 @@ class AILISRuntime {
         };
     }
 
-    guardToolResult(result, { toolId = '', callId = '', maxTextChars = DEFAULT_MAX_RESULT_TEXT_CHARS } = {}) {
-        const guarded = cloneJson(result || {});
-        if (!Array.isArray(guarded.content)) {
-            guarded.content = [];
+    async boundToolOutput(result, { toolId = '', callId = '' } = {}) {
+        const limit = toolInlineByteLimit(toolId);
+        if (limit === null) return result;
+        const serialized = JSON.stringify(result);
+        if (!serialized || Buffer.byteLength(serialized, 'utf8') <= limit) return result;
+
+        // Store the complete redacted response before replacing its inline view.
+        // Keep the original tool success/failure; delivery overflow isn't a reason
+        // to execute a potentially side-effecting tool a second time.
+        const safeResult = redactObject(cloneJson(result));
+        const storedText = JSON.stringify(safeResult);
+        let stored = null;
+        try {
+            const capture = await this.outputStore.createCapture({
+                metadata: { tool: toolId, callId, kind: 'tool_response', inlineLimitBytes: limit }
+            });
+            capture.append('stdout', storedText);
+            stored = await capture.finalize({ status: 'completed' });
+            // Capture append errors can be swallowed by the existing log store.
+            // Never advertise a complete archive without verifying its byte count.
+            if ((await fsp.stat(stored.path)).size !== Buffer.byteLength(storedText, 'utf8')) {
+                stored = null;
+            }
+        } catch {
+            stored = null;
         }
-        let modelVisibleTruncation = null;
-        guarded.content = guarded.content.map((part) => {
-            if (!part || typeof part !== 'object') {
-                return { type: 'text', text: summarize(part, maxTextChars) };
+        const content = Array.isArray(safeResult.content) ? safeResult.content : [];
+        const text = content.filter((item) => typeof item?.text === 'string')
+            .map((item) => item.text).join('\n\n');
+        const preview = makeHeadTailPreview(text || 'Structured response saved as JSON.', 8000);
+        let mediaBytes = 0;
+        let archivedMediaBlocks = 0;
+        const media = content.filter((item) => item && item.type !== 'text').filter((item) => {
+            const bytes = Buffer.byteLength(JSON.stringify(item), 'utf8');
+            if (mediaBytes + bytes > TOOL_INLINE_MEDIA_BYTES) {
+                archivedMediaBlocks += 1;
+                return false;
             }
-            const next = redactObject(part);
-            if (typeof next.text === 'string' && next.text.length > maxTextChars) {
-                const originalTextChars = Number.isFinite(Number(next.originalTextChars))
-                    ? Number(next.originalTextChars)
-                    : next.text.length;
-                const notice = buildModelVisibleTruncationNotice({
-                    filePath: guarded.details?.path,
-                    originalTextChars,
-                    visibleChars: maxTextChars,
-                    maxTextChars
-                });
-                const sliceBudget = Math.max(128, maxTextChars - notice.length - 3);
-                next.text = `${notice}${next.text.slice(0, sliceBudget)}...`;
-                next.truncated = true;
-                next.modelVisibleTruncated = true;
-                modelVisibleTruncation = {
-                    status: 'model_visible_truncated',
-                    tool: toolId,
-                    callId,
-                    reason: 'model_budget_guard',
-                    maxTextChars,
-                    originalTextChars,
-                    visibleTextChars: Math.min(maxTextChars, next.text.length),
-                    filePath: normalizeString(guarded.details?.path),
-                    fullFileReadTruncated: Boolean(guarded.details?.truncated),
-                    semantics: {
-                        contentTruncated: true,
-                        detailsTruncatedMeansToolLevelTruncation: true,
-                        contentTruncatedMeansModelVisibleProjectionTruncation: true
-                    }
-                };
-            }
-            return next;
+            mediaBytes += bytes;
+            return true;
         });
-        if (!guarded.content.length && guarded.details) {
-            guarded.content.push({
+        const reference = {
+            schema: 'ailis.tool_output_reference.v1',
+            status: safeResult.details?.status || (safeResult.isError ? 'error' : 'completed'),
+            tool: toolId,
+            outputDelivery: stored ? 'artifact' : 'archive_failed',
+            truncated: true,
+            originalBytes: Buffer.byteLength(storedText, 'utf8'),
+            inlineLimitBytes: limit,
+            ...(archivedMediaBlocks ? { omittedMediaBlocks: archivedMediaBlocks, inlineMediaLimitBytes: TOOL_INLINE_MEDIA_BYTES } : {}),
+            ...(stored ? {
+                outputId: stored.outputId,
+                outputRef: {
+                    outputId: stored.outputId,
+                    read: { tool: 'output_read', args: { outputId: stored.outputId, offset: 0, limit: 6000 } },
+                    search: { tool: 'output_search', args: { outputId: stored.outputId, query: '<text>' } }
+                }
+            } : { outputDeliveryError: 'tool_output_archive_failed', fullOutputAvailable: false })
+        };
+        const bounded = {
+            isError: safeResult.isError === true,
+            content: [{
                 type: 'text',
-                text: summarize(guarded.details, Math.min(maxTextChars, 1600))
-            });
-        }
-        guarded.details = guarded.details && typeof guarded.details === 'object'
-            ? redactObject(guarded.details)
-            : guarded.details;
-        if (!guarded.details || typeof guarded.details !== 'object') {
-            guarded.details = {};
-        }
-        guarded.details = compactJsonForModel(guarded.details, {
-            maxStringChars: 1200,
-            maxArrayItems: 24,
-            maxObjectKeys: 80,
-            maxDepth: 5
+                text: `${stored
+                    ? 'TOOL_OUTPUT_STORED: full response saved; this is only a preview.'
+                    : 'TOOL_OUTPUT_ARCHIVE_FAILED: only a preview is available. The tool already executed; this delivery error does not mean the action failed.'}\n${JSON.stringify(reference)}\n\n${preview.text}`,
+                truncated: true
+            }, ...media],
+            details: reference,
+            structuredContent: { ...reference }
+        };
+        return bounded;
+    }
+
+    guardToolResult(result, { toolId = '', callId = '', maxTextChars } = {}) {
+        // Permissions/EMBER remain at their existing call boundaries. Keep
+        // field redaction here, but do not re-budget or trim tool-owned data.
+        const guarded = normalizeAilisToolOutput(redactObject(cloneJson(result)), {
+            toolId,
+            maxTextChars
         });
-        if (guarded.structuredContent && typeof guarded.structuredContent === 'object') {
-            guarded.structuredContent = compactJsonForModel(redactObject(guarded.structuredContent), {
-                maxStringChars: 1200,
-                maxArrayItems: 24,
-                maxObjectKeys: 80,
-                maxDepth: 5
-            });
-        }
         guarded.details.guard = {
             status: 'guarded',
             tool: toolId,
             callId,
-            maxTextChars
+            ...(maxTextChars !== undefined ? { maxTextChars } : {})
         };
-        if (modelVisibleTruncation) {
-            guarded.details.modelVisibleContent = modelVisibleTruncation;
-        }
-        const structuredToolActionKeys = collectStructuredToolActionKeys(guarded);
-        return compactToolResultForModel(guarded, {
-            maxTextChars,
-            maxStructuredStringChars: 1200,
-            preserveGuidanceKeys: [
-                ...((
-                    guarded.isError === true ||
-                    guarded.details?.ok === false ||
-                    !['completed', 'success'].includes(normalizeString(guarded.details?.status).toLowerCase())
-                ) ? ['suggestedNext', 'suggested_next'] : []),
-                ...structuredToolActionKeys
-            ]
-        });
+        return guarded;
     }
 
     classifyToolCall({ toolId, args = {} } = {}) {

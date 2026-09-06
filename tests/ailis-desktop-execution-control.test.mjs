@@ -22,7 +22,7 @@ const {
 const {
     buildAgentTaskState,
     validateAgentToolLoopGuard
-} = require('../electron/ailis-agent-runner.cjs');
+} = require('../electron/agent-loop/index.cjs');
 
 function desktopStep({ action = 'mouse_click', x = 10, hash = 'screen-a', streak = 0, applications = ['app-a'] } = {}) {
     return {

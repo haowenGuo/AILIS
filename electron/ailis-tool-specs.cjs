@@ -26,19 +26,7 @@ function isExperimentalOutputStoreToolsEnabled() {
     );
 }
 
-function normalizeToolSurfaceMode() {
-    return String(process.env.AILIS_TOOL_SURFACE_MODE || 'codex')
-        .trim()
-        .toLowerCase();
-}
 
-function isExtendedAilisToolSurfaceEnabled() {
-    const mode = normalizeToolSurfaceMode();
-    return (
-        process.env.AILIS_ENABLE_EXTENDED_TOOLS === '1' ||
-        ['ailis', 'extended', 'full', 'legacy'].includes(mode)
-    );
-}
 
 const OUTPUT_STORE_TOOL_EXPOSURE = isExperimentalOutputStoreToolsEnabled()
     ? AILIS_TOOL_EXPOSURE.DIRECT
@@ -388,6 +376,4 @@ module.exports = {
     AILIS_TOOL_EXPOSURE,
     AILIS_TOOL_KIND,
     createAilisFunctionToolSpec,
-    isExtendedAilisToolSurfaceEnabled,
-    normalizeToolSurfaceMode
 };

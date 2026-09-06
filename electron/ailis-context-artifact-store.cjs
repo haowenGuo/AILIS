@@ -1164,8 +1164,6 @@ function profileSpreadsheetArtifact(record = {}, payload = {}, args = {}) {
 function buildSpreadsheetCellMatrix(sheet = {}, args = {}) {
     const rows = sheet.grids?.display || [];
     const fills = sheet.grids?.fills || [];
-    const rowNumbers = sheet.grids?.rowNumbers || [];
-    const columns = sheet.grids?.columns || [];
     const stored = getSpreadsheetStoredBounds(sheet);
     const parsedRange = parseRange(args.range || args.addressRange || args.address_range || '');
     const startRow = parsedRange ? Math.max(parsedRange.startRow, stored.firstRow) : stored.firstRow;
@@ -1288,7 +1286,7 @@ function computeSpreadsheetPath(record = {}, payload = {}, args = {}) {
             availableSheets: (payload.workbook?.sheets || []).map((entry) => entry.name)
         });
     }
-    const { matrix, cells, bounds, storedRange } = buildSpreadsheetCellMatrix(sheet, args);
+    const { cells, bounds, storedRange } = buildSpreadsheetCellMatrix(sheet, args);
     if (!cells.length) {
         return createErrorResult('empty_grid', 'artifact_compute find_path has no cells in the requested range.', {
             action: 'find_path',

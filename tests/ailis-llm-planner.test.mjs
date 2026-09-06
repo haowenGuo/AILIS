@@ -12,7 +12,7 @@ const { AILISPlatformAdapter } = require('../electron/ailis-platform-adapter.cjs
 const {
     resolveAgentDecisionTimeoutMs,
     resolveAgentPromptProfile
-} = require('../electron/ailis-agent-runner.cjs');
+} = require('../electron/agent-loop/index.cjs');
 const { buildObservationLedgerPromptObject } = require('../electron/ailis-turn-items.cjs');
 const { ContextManager } = require('../electron/ailis-context-manager.cjs');
 const {

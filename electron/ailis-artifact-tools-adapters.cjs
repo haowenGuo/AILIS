@@ -47,11 +47,6 @@ function toAbsolutePath(sourcePath = '', repoRoot = process.cwd()) {
     return path.isAbsolute(sourcePath) ? sourcePath : path.resolve(repoRoot, sourcePath);
 }
 
-function toPortablePath(sourcePath = '', repoRoot = process.cwd()) {
-    const absolute = toAbsolutePath(sourcePath, repoRoot);
-    return path.relative(repoRoot, absolute).replace(/\\/g, '/');
-}
-
 function normalizeHex(value = '') {
     const raw = String(value || '').replace(/^#/, '').trim().toUpperCase();
     if (!raw) {
@@ -158,15 +153,6 @@ function parseWorkbookTarget(target = '', fallbackSheetName = '') {
         }
     }
     return { sheetName, rangeRef };
-}
-
-function normalizeSheetName(value = '') {
-    return String(value || '').replace(/^'|'$/g, '').replace(/''/g, "'");
-}
-
-function quoteSheetName(sheetName = '') {
-    const raw = String(sheetName || '');
-    return /^[A-Za-z_][A-Za-z0-9_]*$/.test(raw) ? raw : `'${raw.replace(/'/g, "''")}'`;
 }
 
 function normalizeZipPath(value = '') {
@@ -2820,50 +2806,6 @@ async function inspectCsvArtifact(input = {}) {
     };
 }
 
-function decodePdfString(value = '') {
-    return String(value)
-        .replace(/\\n/g, '\n')
-        .replace(/\\r/g, '\r')
-        .replace(/\\t/g, '\t')
-        .replace(/\\\(/g, '(')
-        .replace(/\\\)/g, ')')
-        .replace(/\\\\/g, '\\');
-}
-
-function extractPdfText(raw) {
-    const spans = [];
-    const regex = /\(((?:\\.|[^\\()])*)\)\s*Tj/g;
-    let match = regex.exec(raw);
-    while (match) {
-        spans.push(decodePdfString(match[1]));
-        match = regex.exec(raw);
-    }
-    return spans.join('\n');
-}
-
-async function inspectPdfArtifact(input = {}) {
-    const sourcePath = toAbsolutePath(input.sourcePath || input.path, input.repoRoot);
-    const raw = await fsp.readFile(sourcePath, 'latin1');
-    const text = extractPdfText(raw);
-    const pageCount = (raw.match(/\/Type\s*\/Page\b/g) || []).length;
-    return {
-        format: 'pdf',
-        adapterId: 'pdf',
-        sourcePath,
-        structure: {
-            pageCount,
-            textSpanCount: text ? text.split('\n').filter(Boolean).length : 0,
-            hasTextLayer: Boolean(text.trim())
-        },
-        text,
-        diagnostics: text.trim() ? [] : [createDiagnostic(
-            'pdf_text_layer_missing',
-            'warning',
-            'PDF text-layer extraction returned no text; OCR/render fallback may be needed.'
-        )]
-    };
-}
-
 async function readZipEntries(sourcePath, patterns) {
     const python = process.env.AILIS_ARTIFACT_PYTHON || process.env.PYTHON || 'python';
     const script = [
@@ -2882,71 +2824,6 @@ async function readZipEntries(sourcePath, patterns) {
         maxBuffer: 8 * 1024 * 1024
     });
     return JSON.parse(stdout);
-}
-
-function extractXmlText(xml = '') {
-    const texts = [];
-    const regex = /<(?:\w+:)?t\b[^>]*>([\s\S]*?)<\/(?:\w+:)?t>/g;
-    let match = regex.exec(xml);
-    while (match) {
-        texts.push(decodeXmlText(match[1]));
-        match = regex.exec(xml);
-    }
-    return texts;
-}
-
-async function inspectDocxArtifact(input = {}) {
-    const sourcePath = toAbsolutePath(input.sourcePath || input.path, input.repoRoot);
-    const archive = await readZipEntries(sourcePath, ['^word/document\\.xml$']);
-    const documentXml = archive.entries['word/document.xml'] || '';
-    const textRuns = extractXmlText(documentXml);
-    const tableCount = (documentXml.match(/<w:tbl\b/g) || []).length;
-    const paragraphCount = (documentXml.match(/<w:p\b/g) || []).length;
-    return {
-        format: 'docx',
-        adapterId: 'docx',
-        sourcePath,
-        structure: {
-            partCount: archive.names.length,
-            paragraphCount,
-            tableCount,
-            textRunCount: textRuns.length
-        },
-        text: textRuns.join('\n'),
-        diagnostics: documentXml ? [] : [createDiagnostic(
-            'docx_document_part_missing',
-            'error',
-            'DOCX archive does not contain word/document.xml.'
-        )]
-    };
-}
-
-async function inspectPptxArtifact(input = {}) {
-    const sourcePath = toAbsolutePath(input.sourcePath || input.path, input.repoRoot);
-    const archive = await readZipEntries(sourcePath, ['^ppt/slides/slide\\d+\\.xml$']);
-    const slides = Object.entries(archive.entries)
-        .sort(([left], [right]) => left.localeCompare(right, undefined, { numeric: true }))
-        .map(([name, xml], index) => ({
-            index: index + 1,
-            name,
-            texts: extractXmlText(xml)
-        }));
-    return {
-        format: 'pptx',
-        adapterId: 'pptx',
-        sourcePath,
-        structure: {
-            partCount: archive.names.length,
-            slideCount: slides.length,
-            slides
-        },
-        text: slides.flatMap((slide) => slide.texts).join('\n'),
-        diagnostics: slides.length ? [] : [createDiagnostic(
-            'pptx_slides_missing',
-            'error',
-            'PPTX archive does not contain ppt/slides/slide*.xml parts.'
-        )]
-    };
 }
 
 async function inspectArtifact(input = {}) {
@@ -3270,36 +3147,6 @@ function validateAgainstExpected(inspection, expected = {}) {
     };
 }
 
-function workbookToSvg(inspection) {
-    const sheet = inspection.structure.sheets[0] || { cells: [] };
-    const filledCells = sheet.cells.filter((cell) => cell.fillRgb);
-    const maxRow = Math.max(1, ...filledCells.map((cell) => cell.row));
-    const maxCol = Math.max(1, ...filledCells.map((cell) => cell.col));
-    const cellWidth = 54;
-    const cellHeight = 30;
-    const width = maxCol * cellWidth + 24;
-    const height = maxRow * cellHeight + 48;
-    const byRef = new Map(sheet.cells.map((cell) => [cell.ref, cell]));
-    const rects = [];
-    for (let row = 1; row <= maxRow; row += 1) {
-        for (let col = 1; col <= maxCol; col += 1) {
-            const cell = byRef.get(cellRef(row, col)) || {};
-            const x = 12 + (col - 1) * cellWidth;
-            const y = 36 + (row - 1) * cellHeight;
-            const fill = cell.fillRgb ? `#${cell.fillRgb}` : '#FFFFFF';
-            rects.push(`<rect x="${x}" y="${y}" width="${cellWidth}" height="${cellHeight}" fill="${fill}" stroke="#475569" stroke-width="1"/>`);
-            if (cell.text) {
-                rects.push(`<text x="${x + cellWidth / 2}" y="${y + 19}" text-anchor="middle" font-family="Arial" font-size="10" fill="#111827">${escapeXml(cell.text)}</text>`);
-            }
-        }
-    }
-    return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
-<rect width="100%" height="100%" fill="#F8FAFC"/>
-<text x="12" y="22" font-family="Arial" font-size="13" font-weight="700" fill="#0F172A">${escapeXml(sheet.name || 'Workbook')}</text>
-${rects.join('\n')}
-</svg>`;
-}
-
 function tableToSvg(title, rows) {
     const maxCols = Math.max(1, ...rows.map((row) => row.length));
     const shownRows = rows.slice(0, 10);
@@ -3335,33 +3182,6 @@ function textToSvg(title, lines) {
     ];
     shownLines.forEach((line, index) => {
         parts.push(`<text x="18" y="${58 + index * 24}" font-family="Arial" font-size="12" fill="#111827">${escapeXml(line).slice(0, 140)}</text>`);
-    });
-    parts.push('</svg>');
-    return parts.join('\n');
-}
-
-function presentationToSvg(inspection) {
-    const slides = inspection.structure.slides || [];
-    const width = 760;
-    const slideWidth = 330;
-    const slideHeight = 185;
-    const gap = 24;
-    const height = Math.max(260, Math.ceil(slides.length / 2) * (slideHeight + gap) + 56);
-    const parts = [
-        `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">`,
-        '<rect width="100%" height="100%" fill="#F8FAFC"/>',
-        '<text x="18" y="26" font-family="Arial" font-size="14" font-weight="700" fill="#0F172A">PPTX Contact Sheet</text>'
-    ];
-    slides.forEach((slide, index) => {
-        const col = index % 2;
-        const row = Math.floor(index / 2);
-        const x = 18 + col * (slideWidth + gap);
-        const y = 48 + row * (slideHeight + gap);
-        parts.push(`<rect x="${x}" y="${y}" width="${slideWidth}" height="${slideHeight}" rx="6" fill="#FFFFFF" stroke="#CBD5E1"/>`);
-        parts.push(`<text x="${x + 12}" y="${y + 24}" font-family="Arial" font-size="12" font-weight="700" fill="#0F172A">Slide ${slide.index}</text>`);
-        slide.texts.slice(0, 5).forEach((text, textIndex) => {
-            parts.push(`<text x="${x + 12}" y="${y + 54 + textIndex * 22}" font-family="Arial" font-size="12" fill="#111827">${escapeXml(text).slice(0, 42)}</text>`);
-        });
     });
     parts.push('</svg>');
     return parts.join('\n');

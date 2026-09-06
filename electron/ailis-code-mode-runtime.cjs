@@ -1,6 +1,7 @@
 'use strict';
 
 const path = require('node:path');
+const fs = require('node:fs');
 const { fork } = require('node:child_process');
 const { randomUUID } = require('node:crypto');
 
@@ -15,6 +16,24 @@ const {
 
 const MAX_LIVE_CELLS = 16;
 const MAX_CELL_LIFETIME_MS = 30 * 60 * 1000;
+
+function resolveCodeModeWorkerLaunch({ moduleDir = __dirname, electron = process.versions.electron, env = process.env } = {}) {
+    // ASAR directories are virtual: neither OS cwd nor the isolated Node
+    // permission allowlist can use them. The build unpacks this worker.
+    const workerPath = path.join(moduleDir, 'ailis-code-mode-worker.cjs')
+        .replace(/\.asar([\\/])/g, '.asar.unpacked$1');
+    if (!fs.statSync(workerPath).isFile()) throw new Error(`exec worker is not a file: ${workerPath}`);
+    return {
+        workerPath,
+        options: {
+            cwd: path.dirname(workerPath),
+            execArgv: ['--permission', '--experimental-vm-modules', `--allow-fs-read=${workerPath}`],
+            env: electron ? { ...env, ELECTRON_RUN_AS_NODE: '1' } : { ...env },
+            stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
+            windowsHide: true
+        }
+    };
+}
 
 function normalizeString(value, fallback = '') {
     const text = typeof value === 'string' ? value.trim() : '';
@@ -127,8 +146,10 @@ function compactUnifiedExecResult(value, { envelope = null, mapSessionId = null 
 }
 
 class AILISCodeModeRuntime {
-    constructor({ dispatchTool }) {
+    constructor({ dispatchTool, workerModuleDir = __dirname, forkWorker = fork }) {
         this.dispatchTool = dispatchTool;
+        this.workerModuleDir = workerModuleDir;
+        this.forkWorker = forkWorker;
         this.cells = new Map();
         this.stores = new Map();
         this.unifiedExecSessions = new Map();
@@ -220,17 +241,8 @@ class AILISCodeModeRuntime {
         if (!specs.length) throw new Error('exec nested-tool profile is missing or expired');
         const definitions = toolDefinitions(specs);
         const allowed = new Map(definitions.map((tool) => [tool.name, tool]));
-        const workerPath = path.join(__dirname, 'ailis-code-mode-worker.cjs');
-        const child = fork(workerPath, [], {
-            cwd: __dirname,
-            execArgv: [
-                '--permission',
-                '--experimental-vm-modules',
-                `--allow-fs-read=${workerPath}`
-            ],
-            stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
-            windowsHide: true
-        });
+        const { workerPath, options } = resolveCodeModeWorkerLaunch({ moduleDir: this.workerModuleDir });
+        const child = this.forkWorker(workerPath, [], options);
         const cellId = `cell-${randomUUID()}`;
         const cell = {
             id: cellId,
@@ -252,9 +264,7 @@ class AILISCodeModeRuntime {
         child.stderr?.on('data', (chunk) => { cell.stderr = `${cell.stderr}${chunk}`.slice(-8000); });
         child.on('message', (message) => void this.handleWorkerMessage(cell, message));
         child.on('error', (error) => {
-            cell.completed = true;
-            cell.error = error?.message || String(error);
-            this.signal(cell, 'complete');
+            this.failCell(cell, error, 'process');
         });
         child.on('exit', (codeValue, signal) => {
             if (!cell.completed && !cell.terminated) {
@@ -263,17 +273,40 @@ class AILISCodeModeRuntime {
             }
             this.signal(cell, 'complete');
         });
-        child.send({
+        // Do not send into an IPC pipe until OS process creation succeeded.
+        child.once('spawn', () => this.sendToWorker(cell, {
             type: 'start',
             source: code,
             tools: definitions,
             store: cloneJson(this.sessionStore(context)) || {}
-        });
+        }));
         return cell;
+    }
+
+    failCell(cell, error, phase) {
+        if (cell.completed || cell.terminated) return;
+        cell.completed = true;
+        // Preserve the first cause; a later closed-pipe error is secondary.
+        cell.error = `exec worker ${phase} failed: ${error?.code ? `${error.code}: ` : ''}${error?.message || String(error)}`;
+        cell.child.kill();
+        this.signal(cell, 'complete');
+    }
+
+    sendToWorker(cell, message, { terminating = false } = {}) {
+        if (cell.completed || (cell.terminated && !terminating)) return;
+        try {
+            if (!cell.child.connected) throw new Error('exec worker IPC channel is disconnected');
+            cell.child.send(message, (error) => {
+                if (error) this.failCell(cell, error, 'IPC');
+            });
+        } catch (error) {
+            this.failCell(cell, error, 'IPC');
+        }
     }
 
     async handleWorkerMessage(cell, message = {}) {
         if (!message || typeof message !== 'object') return;
+        if (cell.completed || cell.terminated) return;
         if (message.type === 'output' && message.item) {
             cell.outputs.push(cloneJson(message.item) || message.item);
             return;
@@ -303,7 +336,7 @@ class AILISCodeModeRuntime {
         if (message.type !== 'tool_call') return;
         const definition = cell.allowed.get(normalizeString(message.name));
         if (!definition) {
-            cell.child.send({ type: 'tool_result', id: message.id, error: `tool \`${message.name || ''}\` is not enabled for this exec cell` });
+            this.sendToWorker(cell, { type: 'tool_result', id: message.id, error: `tool \`${message.name || ''}\` is not enabled for this exec cell` });
             return;
         }
         try {
@@ -326,9 +359,9 @@ class AILISCodeModeRuntime {
                 }
             });
             const projected = this.projectNestedToolResult(definition.name, result, cell.context);
-            cell.child.send({ type: 'tool_result', id: message.id, result: cloneJson(projected) || projected });
+            this.sendToWorker(cell, { type: 'tool_result', id: message.id, result: cloneJson(projected) || projected });
         } catch (error) {
-            cell.child.send({ type: 'tool_result', id: message.id, error: error?.message || String(error) });
+            this.sendToWorker(cell, { type: 'tool_result', id: message.id, error: error?.message || String(error) });
         }
     }
 
@@ -401,7 +434,7 @@ class AILISCodeModeRuntime {
         }
         if (terminate && !cell.completed && !cell.terminated) {
             cell.terminated = true;
-            cell.child.send({ type: 'terminate' });
+            this.sendToWorker(cell, { type: 'terminate' }, { terminating: true });
             setTimeout(() => cell.child.kill(), 250).unref?.();
         } else if (!cell.completed && !cell.terminated) {
             await this.waitForSignal(cell, Math.max(0, Number(yieldTimeMs) || DEFAULT_WAIT_YIELD_TIME_MS));
@@ -412,6 +445,7 @@ class AILISCodeModeRuntime {
 
 module.exports = {
     AILISCodeModeRuntime,
+    resolveCodeModeWorkerLaunch,
     compactUnifiedExecResult,
     textFromToolResult,
     toolDefinitions,

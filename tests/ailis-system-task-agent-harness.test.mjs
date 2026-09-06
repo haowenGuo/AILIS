@@ -10,7 +10,8 @@ const {
     AILISSystemTaskAgentHarness,
     TASK_RESULT_SCHEMA
 } = require('../electron/ailis-task-agent-harness.cjs');
-const { buildAgentDirectToolSpecs } = require('../electron/ailis-agent-runner.cjs');
+const { buildAgentDirectToolSpecs } = require('../electron/agent-loop/index.cjs');
+const { getCodeModeProfile } = require('../electron/codex-code-mode-protocol.cjs');
 const { getToolContract, validateToolContract } = require('../electron/ailis-tool-contracts.cjs');
 
 function completedResult({ runId, answer, checkpoint, sourceUrl = '', cost = null }) {
@@ -875,7 +876,7 @@ test('Turn steer requires the currently active Turn id and never opens a replace
     );
 });
 
-test('Persona and TaskAgent receive disjoint orchestration tool surfaces', () => {
+test('explicit compatibility Persona and TaskAgent keep disjoint code-mode tool surfaces', () => {
     const specs = {
         handoff_task: {
             name: 'handoff_task',
@@ -942,7 +943,11 @@ test('Persona and TaskAgent receive disjoint orchestration tool surfaces', () =>
         requestContext: { agentRole: 'persona_orchestrator' }
     });
     assert.deepEqual(personaAfterHandoff, []);
-    assert.deepEqual(taskAgent.map((spec) => spec.name), ['read']);
-    assert.deepEqual(standaloneTaskAgent.map((spec) => spec.name), ['read']);
-    assert.deepEqual(persistentGoalTaskAgent.map((spec) => spec.name), ['task_goal', 'read']);
+    for (const surface of [taskAgent, standaloneTaskAgent, persistentGoalTaskAgent]) {
+        assert.deepEqual(surface.map((spec) => spec.name), ['exec', 'exec_wait']);
+    }
+    const nestedNames = (surface) => getCodeModeProfile(surface[0].x_ailis_code_mode_profile).map((spec) => spec.name);
+    assert.deepEqual(nestedNames(taskAgent), ['read']);
+    assert.deepEqual(nestedNames(standaloneTaskAgent), ['read']);
+    assert.deepEqual(nestedNames(persistentGoalTaskAgent), ['task_goal', 'read']);
 });

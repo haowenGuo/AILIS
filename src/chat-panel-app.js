@@ -210,14 +210,6 @@ window.addEventListener('DOMContentLoaded', () => {
         };
     }
 
-    function normalizeVisionAttachments(attachments = []) {
-        if (!Array.isArray(attachments)) {
-            return [];
-        }
-        return attachments
-            .map(normalizeVisionAttachment)
-            .filter(Boolean);
-    }
 
     function getVisionTargetLabel(target) {
         if (target === 'region') {

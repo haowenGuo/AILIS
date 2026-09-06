@@ -12,7 +12,6 @@ const { buildTextPreview } = require('./ailis-output-store.cjs');
 
 const COMPUTER_TOOL_ID = 'computer';
 const DEFAULT_MAX_BYTES = 128 * 1024;
-const DEFAULT_TEXT_ARTIFACT_BYTES = 128 * 1024;
 const DEFAULT_MAX_ARTIFACT_SOURCE_BYTES = 50 * 1024 * 1024;
 const DEFAULT_SEARCH_LIMIT = 200;
 const DEFAULT_TREE_LIMIT = 500;

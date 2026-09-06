@@ -69,9 +69,6 @@ export class ChatVRMAmicaMotionController {
         this.oneShotActionName = '';
     }
 
-    getAvailableActionNames() {
-        return Object.keys(this.actionMap || {});
-    }
 
     getActionNameByInstance(actionInstance) {
         return Object.keys(this.actionMap || {}).find((name) => this.actionMap[name] === actionInstance) || '';
@@ -85,9 +82,6 @@ export class ChatVRMAmicaMotionController {
         return this.idleActions.includes(actionName);
     }
 
-    isDanceActionName(actionName) {
-        return this.danceActions.includes(actionName);
-    }
 
     prepareAction(actionName, action) {
         if (!action) {

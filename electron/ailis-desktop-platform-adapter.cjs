@@ -6,21 +6,6 @@ function normalizeString(value, fallback = '') {
     return trimmed || fallback;
 }
 
-function normalizeBoolean(value, fallback = false) {
-    if (typeof value === 'boolean') {
-        return value;
-    }
-    if (typeof value === 'string') {
-        if (/^(true|1|yes|on)$/i.test(value.trim())) {
-            return true;
-        }
-        if (/^(false|0|no|off)$/i.test(value.trim())) {
-            return false;
-        }
-    }
-    return fallback;
-}
-
 function isUsableWindow(window) {
     return Boolean(window && typeof window.isDestroyed === 'function' && !window.isDestroyed());
 }

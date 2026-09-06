@@ -238,13 +238,7 @@ class AILISPlatformAdapter {
         return this.hostPlatform === 'darwin';
     }
 
-    isHostLinux() {
-        return this.hostPlatform === 'linux';
-    }
 
-    isMobileTarget() {
-        return isMobileTargetPlatform(this.platform);
-    }
 
     androidAdbExecutable() {
         return normalizeString(this.env.AILIS_ANDROID_ADB || this.env.ANDROID_ADB || this.env.ADB, 'adb');

@@ -1,47 +1,17 @@
-# AILIS Screen Understanding Evaluation
+# 截图理解评测
 
-This is a read-only evaluation of AILIS's ability to understand what a user is
-doing from a desktop screenshot. It deliberately does not evaluate pointing,
-clicking, action planning, or task completion.
+该驱动从保存的截图评估应用、活动和界面状态理解，并可调用评审模型分析结果。
 
-The default sample source is the repository's existing OSWorld-Verified run.
-Only stored screenshots and their task metadata are read; OSWorld is not
-started and no desktop action is performed.
-
-The visual model returns five fields:
-
-- `application`
-- `activity`
-- `state`
-- `visible_issue`
-- `confidence`
-
-The saved AILIS main model semantically judges whether the description is
-consistent with the source task and visible step context. Scores are reported
-for application recognition, broad activity understanding, state plausibility,
-usability, hallucination rate, and latency.
-
-Run a three-sample smoke test:
+在仓库根查看参数：
 
 ```powershell
-node scripts/run-ailis-screen-understanding-eval.mjs --limit 3 --concurrency 1
+node scripts/run-ailis-screen-understanding-eval.mjs --help
 ```
 
-Run the default 20-sample baseline:
+运行前指定 --source-run、--output-dir 和 --state-path。--use-configured-vision 使用配置的视觉模型；--no-judge 关闭评审。默认 limit=20、concurrency=2、maxAttempts=2，并发范围为 1–4，尝试范围为 1–2。
 
-```powershell
-node scripts/run-ailis-screen-understanding-eval.mjs
-```
+执行会读取截图、请求模型并写报告，需准备数据与服务额度。结果包含样本记录、report.json 和 summary.json。
 
-Retry one named sample after a transient infrastructure failure:
+它测量截图理解，不执行点击或完整电脑任务。报告应区分模型请求失败、数据缺失和有效评审。
 
-```powershell
-node scripts/run-ailis-screen-understanding-eval.mjs --only-id <sample-id> --concurrency 1
-```
-
-Each visual request has at most two infrastructure attempts. Semantic failures
-and invalid outputs are not repeatedly retried.
-
-By default the evaluator uses the repository's evaluation-only Codex model
-bridge as the auxiliary visual model. Add `--use-configured-vision` to evaluate
-the independent visual model saved in the AILIS desktop control panel instead.
+实现：[驱动](../../scripts/run-ailis-screen-understanding-eval.mjs)。评估口径：[运行观测](../../docs/engineering/measurement.md)。

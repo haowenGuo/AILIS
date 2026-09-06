@@ -1,40 +1,21 @@
-# Contributing to AILIS
+# 贡献约定
 
-Thanks for helping build a capable, understandable desktop AI companion.
+欢迎提交功能、修复、测试和文档改进。开始前阅读 [AGENTS.md](AGENTS.md)，确定修改所属的产品入口和模块。
 
-## Start Here
+## 一个变更的完整内容
 
-1. Read the [Getting Started guide](docs/getting-started.md).
-2. Search existing [issues](https://github.com/haowenGuo/AILIS/issues) before opening a new one.
-3. For a code change, create a focused branch and keep one behavioral objective per pull request.
+- 目标：要改变的行为、使用场景和验收条件。
+- 实现：生产调用点、参数与结果契约、权限和资源生命周期。
+- 数据：持久格式变化、迁移与恢复策略。
+- 验证：运行过的测试、结果、已知失败与未覆盖部分。
+- 文档：更新该功能的唯一对应章节。
 
-```bash
-pnpm install
-pnpm desktop:dev
-```
+主 Agent 的语义决策由模型承担，运行层管理上下文、契约、权限和生命周期。新工具应同时具备定义、handler、错误处理和测试；新增动态资源应进入产品清单。
 
-Run the tests closest to your change. Runtime and Harness changes should also run:
+## 工作方式
 
-```bash
-pnpm ailis:validate-harness
-```
+较大修改使用独立分支和工作树。保留已有改动，使用隔离的测试目录和状态。先运行相关单元与契约测试，再按风险增加构建、包验证和实际功能测试。
 
-## Project Principles
+不提交密钥、用户历史、私有附件、下载模型、依赖目录和构建包。资源变更保留来源与许可。
 
-- Improve general Agent capability, context, tools, memory, reliability, or user experience.
-- Do not add benchmark-task answers, site-specific routes, or hidden behavior that only raises one score.
-- Preserve approval and audit boundaries for consequential actions.
-- Keep model-visible context and tool contracts explicit and testable.
-- Include correctness, latency, token, cache, and regression evidence for Harness changes.
-
-## Pull Requests
-
-A useful pull request includes:
-
-- the problem and intended behavior;
-- the smallest relevant implementation;
-- tests or reproducible validation;
-- screenshots for visible UI changes;
-- benchmark evidence only when the protocol and source are fixed.
-
-Please do not commit credentials, user memory, chat transcripts, generated evaluation outputs, or third-party assets without a compatible license.
+操作指南：[开发](docs/engineering/development.md)、[发布](docs/engineering/distribution.md)、[观测](docs/engineering/measurement.md)。

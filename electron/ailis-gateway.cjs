@@ -42,6 +42,7 @@ const { AILISPreferenceState } = require('./ailis-preference-state.cjs');
 const { AILISTaskResultCapsuleStore } = require('./ailis-task-result-capsules.cjs');
 const { AILISSystemTaskAgentHarness } = require('./ailis-task-agent-harness.cjs');
 const { AILISPersonaContextStore } = require('./ailis-persona-context-store.cjs');
+const { AILISSessionContextStore } = require('./ailis-session-context-store.cjs');
 const { AilisSelfEvolutionRuntime } = require('./ailis-self-evolution-runtime.cjs');
 const { AILISEmberHarness } = require('./ailis-ember-harness.cjs');
 const { AILISSensitiveWordClassifier } = require('./ailis-sensitive-word-classifier.cjs');
@@ -96,28 +97,7 @@ const PERSONA_TASK_PROGRESS_MIN_INTERVAL_MS = Math.max(
     15000,
     Number(process.env.AILIS_PERSONA_TASK_PROGRESS_MIN_INTERVAL_MS || 45000) || 45000
 );
-const PERSONA_STREAM_FLUSH_INTERVAL_MS = Math.max(
-    16,
-    Number(process.env.AILIS_PERSONA_STREAM_FLUSH_INTERVAL_MS || 40) || 40
-);
 const PERSONA_CONTEXT_META = Symbol('ailis.persona_context_meta');
-const PERSONA_DRAFT_DEVELOPER_PACKET = [
-    'Prepare one private candidate FinalAnswer for this user Turn while TaskAgent independently decides whether the Turn is conversation or execution.',
-    'Your candidate is published only if TaskAgent chooses chat. Do not acknowledge, promise, or narrate task execution, because TaskAgent owns Commentary and task results.',
-    'Answer ordinary conversation naturally and completely from the visible Session context.',
-    'The latest user message and visible Session history are authoritative, including any correction or steer that replaced an earlier instruction in the same Turn.',
-    'Do not describe the internal actors, routing, event channel, or orchestration.'
-].join('\n');
-const PERSONA_ACTIVE_TASK_INTERACTION_DEVELOPER_PACKET = [
-    'Reply now to the latest user message while an earlier background task remains active.',
-    'The latest user message is also being delivered unchanged to the active task, so do not decide or explain how the task runtime will interpret it.',
-    'Respond naturally to the conversational meaning of the latest message. You may acknowledge a correction, added information, urgency cue, status question, or unrelated question.',
-    'The supplied active-task snapshot is the sole factual authority for the currently running task.',
-    'Conversation history is provided only to understand what the user means. It may contain results from older runs; never present those results as progress or evidence from the current run.',
-    'If finalResultAvailable is false, do not state or imply that the current task answer has been confirmed. Report only latestProgress, or simply acknowledge that the task is still running when latestProgress contains no concrete evidence.',
-    'This reply is a live interaction, not the background task FinalAnswer. The task may later publish separate progress and result messages.',
-    'Do not mention TaskAgent, routing, handoff, internal actors, or protocol details.'
-].join('\n');
 const TASK_AGENT_PUBLIC_EVENT_TYPES = new Set([
     'task_agent.route.decided',
     'agent.progress.note'
@@ -517,40 +497,6 @@ function normalizedSearchTokens(value = '') {
             .toLowerCase()
             .match(/[\p{L}\p{N}]{2,}/gu) || []
     )];
-}
-
-function looksLikeHistoricalWebStateQuestion(value = '') {
-    const text = normalizeString(value);
-    const hasPastAnchor =
-        /\b(?:as[- ]of|historical(?:ly)?|past state|at (?:the )?(?:time|end|start)|before|during)\b/i.test(text) ||
-        /\b(?:in|on|from)\s+(?:19|20)\d{2}\b/i.test(text) ||
-        /\b(?:19|20)\d{2}\s+(?:version|listing|record|result|state|catalog)\b/i.test(text);
-    const namesWebState =
-        /\b(?:website|webpage|site|database|catalog|registry|index|api|oai|search results?|listed|listing|record)\b/i.test(text);
-    return hasPastAnchor && namesWebState;
-}
-
-function historicalArchiveUrlFromQueries(queries = []) {
-    for (const query of Array.isArray(queries) ? queries : []) {
-        const text = normalizeString(query?.q);
-        const directUrl = text.match(/https?:\/\/[^\s"'<>]+/i)?.[0]
-            ?.replace(/[),.;:!?]+$/, '');
-        if (directUrl) {
-            return directUrl;
-        }
-        const siteMatch = text.match(/\bsite:([a-z0-9.-]+)(\/[^\s"'<>]*)?/i);
-        if (siteMatch?.[1]) {
-            const pathPart = normalizeString(siteMatch[2]).replace(/[),.;:!?]+$/, '');
-            return `https://${siteMatch[1]}${pathPart || ''}`;
-        }
-        const domain = (Array.isArray(query?.domains) ? query.domains : [])
-            .map((entry) => normalizeString(entry))
-            .find(Boolean);
-        if (domain) {
-            return /^https?:\/\//i.test(domain) ? domain : `https://${domain}`;
-        }
-    }
-    return '';
 }
 
 function isEvaluationAnswerLeak(sourceQuestion = '', result = {}) {
@@ -1266,10 +1212,13 @@ class AILISGateway extends EventEmitter {
         this.eventLog = [];
         this.privateRunIds = new Set();
         this.backgroundTaskRuns = new Set();
-        this.activePersonaTurns = new Map();
         this.personaContextStore = options.personaContextStore || new AILISPersonaContextStore({
             rootDir: path.join(this.auditDir, 'persona-context')
         });
+        this.sessionContextStore = options.sessionContextStore || new AILISSessionContextStore({
+            rootDir: path.join(this.auditDir, 'session-context')
+        });
+        this.activeUnifiedTurns = new Map();
         this.eventLogLimit = Math.max(
             100,
             Math.min(Number(options.eventLogLimit || DEFAULT_EVENT_REPLAY_LIMIT), MAX_EVENT_REPLAY_LIMIT)
@@ -1647,7 +1596,6 @@ class AILISGateway extends EventEmitter {
 
     async stop() {
         this.stopProfileCurationScheduler();
-        this.activePersonaTurns.clear();
         for (const client of this.sseClients) {
             try {
                 client.res?.end?.();
@@ -1838,6 +1786,11 @@ class AILISGateway extends EventEmitter {
             interactionPreferences: this.preferenceState?.getStatus?.() || null,
             taskResultCapsules: this.taskResultCapsules?.getStatus?.() || null,
             taskAgentHarness: this.taskAgentHarness?.getStatus?.() || null,
+            mainAgent: {
+                mode: 'unified-agent',
+                activeSessions: this.activeUnifiedTurns.size,
+                contextStore: this.sessionContextStore.getStatus()
+            },
             taskResultBackfill: this.taskResultBackfill,
             userProfileCuration: this.userProfileCurator?.getStatus?.() || null,
             userProfileCurationScheduler: {
@@ -2006,6 +1959,12 @@ class AILISGateway extends EventEmitter {
         const eventRunId = normalizeString(
             payload.runId || payload.childRunId || payload.payload?.runId
         );
+        // Deliver a main-agent final only at the post-safety-gate boundary.
+        const unifiedTurn = this.activeUnifiedTurns?.get(payload.sessionId);
+        if (unifiedTurn?.runId === eventRunId && payload.source !== 'unified_agent' &&
+            ['agent.run.finished', 'agent.message.completed', 'persona.surface'].includes(type)) {
+            return;
+        }
         if (eventRunId && this.privateRunIds.has(eventRunId)) {
             this.emit('private-event', { type, payload });
             return;
@@ -3182,728 +3141,98 @@ class AILISGateway extends EventEmitter {
         return finalRenderedText;
     }
 
-    startPrivatePersonaDraft({
-        input = {},
-        context = {},
-        sessionId = 'main',
-        outerRunId = '',
-        revision = 0,
-        turnEnvelope = {},
-        llmSettings = null,
-        onTextDelta = null,
-        onTextStreamEvent = null
-    } = {}) {
-        const revisionSuffix = revision > 0 ? `_r${revision}` : '';
-        return this.runPrivatePersonaTurn({
-            input: {
-                ...input,
-                runId: `persona_actor_${outerRunId}${revisionSuffix}`,
-                ...(llmSettings ? { llmSettings } : {})
-            },
-            context: { ...context, turnEnvelope },
-            sessionId,
-            runId: `persona_actor_${outerRunId}${revisionSuffix}`,
-            purpose: 'draft',
-            developerPacket: PERSONA_DRAFT_DEVELOPER_PACKET,
-            onTextDelta,
-            onTextStreamEvent
-        }).catch(() => null);
-    }
-
-    async runTaskAgentControlledPersonaTurn({
-        input = {},
-        context = {},
-        sessionId = 'main',
-        runId = '',
-        llmSettings = null
-    } = {}) {
-        const message = normalizeString(input.message || input.prompt || input.task);
-        const activePersonaTurn = this.activePersonaTurns.get(sessionId);
-        const activeThread = this.taskAgentHarness?.getThread?.(sessionId);
-        const activeTurnId = activeThread
-            ? normalizeString(activeThread.activeTurnId || activeThread.active_turn_id)
-            : normalizeString(activePersonaTurn?.turnId);
-
-        if (activePersonaTurn && activeTurnId) {
-            const steerTurnEnvelope = Object.freeze({
-                sessionId,
-                turnId: activeTurnId,
-                userMessage: message,
-                attachments: Object.freeze(Array.isArray(input.attachments) ? cloneJson(input.attachments) || [] : []),
-                visibleHistory: Object.freeze((Array.isArray(input.messageHistory) ? input.messageHistory : [])
-                    .filter((entry) => entry && ['user', 'assistant'].includes(entry.role))
-                    .map((entry) => Object.freeze({ role: entry.role, content: normalizeString(entry.content) }))
-                    .filter((entry) => entry.content)
-                    .slice(-120)),
-                createdAt: new Date().toISOString()
-            });
-            activePersonaTurn.revision = Math.max(0, Number(activePersonaTurn.revision) || 0) + 1;
-            activePersonaTurn.latestInput = input;
-            activePersonaTurn.latestContext = context;
-            activePersonaTurn.latestMessage = message;
-            activePersonaTurn.latestTurnEnvelope = steerTurnEnvelope;
-            let livePersonaPromise = null;
-            if (activePersonaTurn.taskRoute !== 'execute') {
-                const draftRequest = {
-                    input,
-                    context,
-                    sessionId,
-                    outerRunId: activePersonaTurn.runId,
-                    revision: activePersonaTurn.revision,
-                    turnEnvelope: steerTurnEnvelope,
-                    llmSettings
-                };
-                activePersonaTurn.personaPromise = typeof activePersonaTurn.startPersonaDraft === 'function'
-                    ? activePersonaTurn.startPersonaDraft(draftRequest)
-                    : this.startPrivatePersonaDraft(draftRequest);
-            } else {
-                const visibleHistory = Array.from(steerTurnEnvelope.visibleHistory || []);
-                let activeHistoryStart = -1;
-                for (let index = visibleHistory.length - 1; index >= 0; index -= 1) {
-                    const entry = visibleHistory[index];
-                    if (
-                        entry?.role === 'user' &&
-                        normalizeString(entry.content) === normalizeString(activePersonaTurn.initialMessage)
-                    ) {
-                        activeHistoryStart = index;
-                        break;
-                    }
-                }
-                const activeTaskHistory = activeHistoryStart >= 0
-                    ? visibleHistory.slice(activeHistoryStart)
-                    : [
-                          { role: 'user', content: normalizeString(activePersonaTurn.initialMessage) },
-                          { role: 'user', content: message }
-                      ].filter((entry) => entry.content);
-                const activeTaskSnapshot = {
-                    status: 'running',
-                    startedAt: activePersonaTurn.startedAt,
-                    currentRequest: normalizeString(
-                        activeThread?.turns?.find?.((turn) => turn.turnId === activeTurnId)?.request,
-                        activePersonaTurn.initialMessage
-                    ),
-                    latestProgress: normalizeString(activePersonaTurn.latestProgressText),
-                    finalResultAvailable: false
-                };
-                livePersonaPromise = this.runPrivatePersonaTurn({
-                    input: {
-                        ...input,
-                        runId: `persona_interaction_${activePersonaTurn.runId}_${activePersonaTurn.revision}`,
-                        messageHistory: activeTaskHistory,
-                        ...(llmSettings ? { llmSettings } : {})
-                    },
-                    context: {
-                        ...context,
-                        turnEnvelope: steerTurnEnvelope,
-                        activeTaskSnapshot
-                    },
-                    sessionId,
-                    runId: `persona_interaction_${activePersonaTurn.runId}_${activePersonaTurn.revision}`,
-                    purpose: 'active_task_interaction',
-                    personaRenderOnly: false,
-                    memoryPolicy: 'disabled',
-                    developerPacket: [
-                        PERSONA_ACTIVE_TASK_INTERACTION_DEVELOPER_PACKET,
-                        'Active-task snapshot:',
-                        JSON.stringify(activeTaskSnapshot)
-                    ].join('\n')
-                }).catch(() => null);
+    async runUnifiedAgentTurn({ input, context, sessionId, runId, llmSettings, finalize = async (result) => result }) {
+        const runner = this.ensureAgentRunner();
+        const active = this.activeUnifiedTurns.get(sessionId);
+        if (active) {
+            // Attachments and proactive packets must not be silently lost in the
+            // text-only steering queue. Serialize those turns after the writer.
+            const hasAttachments = [input.attachments, input.fileAttachments, input.modelImageAttachments,
+                context.attachments, context.fileAttachments,
+                input.messageHistory?.at?.(-1)?.attachments]
+                .some((items) => Array.isArray(items) && items.length);
+            if (!active.finalizing && !hasAttachments && !input.suppressCurrentUserMessage &&
+                !context.suppressCurrentUserMessage && !input.ephemeralDeveloperMessage &&
+                !context.ephemeralDeveloperMessage && !input.approvalId && !context.approvalId &&
+                !input.debugSessionId && !context.debugSessionId && runner.enqueueRunInput?.({
+                    runId: active.runId, sessionId,
+                    message: input.message || input.prompt || input.task
+                })) {
+                return { ok: true, status: 'running', runId: active.runId, sessionId,
+                    mode: 'unified-agent', steerAccepted: true, deferAssistantCommit: true,
+                    displayText: '', speechText: '' };
             }
-            const steerPromise = this.taskAgentHarness.dispatchTurn({
-                ...context,
-                runId: normalizeString(runId, `steer_${randomUUID()}`),
-                parentRunId: activePersonaTurn.runId,
-                sessionId,
-                sessionKey: sessionId,
-                currentUserMessage: message,
-                expectedTaskAgentTurnId: activeTurnId,
-                turnEnvelope: steerTurnEnvelope,
-                attachments: Array.isArray(input.attachments) ? cloneJson(input.attachments) || [] : [],
-                fileAttachments: Array.isArray(input.attachments) ? cloneJson(input.attachments) || [] : [],
-                llmSettings: llmSettings || context.llmSettings || null,
-                returnAfterSteer: true
-            });
-            const [steered, livePersona] = await Promise.all([
-                steerPromise,
-                livePersonaPromise || Promise.resolve(null)
-            ]);
-            const livePersonaText = normalizeString(
-                livePersona?.displayText || livePersona?.finalAnswer || livePersona?.speechText
-            );
-            if (livePersonaText) {
-                this.commitPrivatePersonaResult(sessionId, livePersona, livePersonaText);
-                this.taskAgentHarness.recordPersonaOutput?.(
-                    sessionId,
-                    activeTurnId,
-                    livePersonaText,
-                    'interaction'
-                );
-                this.ensureAgentRunner().recordMemoryTurn?.({
-                    request: {
-                        ...input,
-                        context: { ...context, memoryPolicy: 'read_write' },
-                        memoryPolicy: 'read_write'
-                    },
-                    result: {
-                        ok: livePersona?.ok !== false,
-                        status: normalizeString(livePersona?.status, 'completed'),
-                        displayText: livePersonaText,
-                        speechText: livePersonaText
-                    },
-                    message,
-                    sessionId,
-                    source: 'persona_live_task_interaction'
-                });
-            }
-            this.emitGatewayEvent('agent.turn.steered', {
-                runId: activePersonaTurn.runId,
-                sessionId,
-                turnId: activeTurnId,
-                status: 'accepted',
-                source: 'user_input'
-            });
-            return {
-                ok: true,
-                status: 'running',
-                mode: 'persistent-task-agent-turn',
-                intent: 'turn_steered',
-                runId: activePersonaTurn.runId,
-                sessionId,
-                turnId: activeTurnId,
-                taskRoute: 'execute',
-                displayText: livePersonaText,
-                speechText: livePersonaText,
-                deferAssistantCommit: !livePersonaText,
-                messagePhase: 'commentary',
-                steerAccepted: steered?.steer_accepted === true,
-                backgroundTask: {
-                    runId: activePersonaTurn.runId,
-                    sessionId,
-                    turnId: activeTurnId,
-                    status: 'running'
-                }
-            };
+            await active.promise.catch(() => {});
+            return this.runUnifiedAgentTurn({ input, context, sessionId, runId, llmSettings, finalize });
         }
 
-        const outerRunId = normalizeString(runId, randomUUID());
-        const turnEnvelope = Object.freeze({
-            sessionId,
-            turnId: '',
-            userMessage: message,
-            attachments: Object.freeze(Array.isArray(input.attachments) ? cloneJson(input.attachments) || [] : []),
-            visibleHistory: Object.freeze((Array.isArray(input.messageHistory) ? input.messageHistory : [])
-                .filter((entry) => entry && ['user', 'assistant'].includes(entry.role))
-                .map((entry) => Object.freeze({ role: entry.role, content: normalizeString(entry.content) }))
-                .filter((entry) => entry.content)
-                .slice(-120)),
-            createdAt: new Date().toISOString()
-        });
-        this.emitGatewayEvent('agent.run.started', {
-            runId: outerRunId,
-            sessionId,
-            status: 'running',
-            mode: 'persistent-task-agent-turn',
-            source: 'task_agent'
-        });
-        const activeState = {
-            runId: outerRunId,
-            sessionId,
-            turnId: '',
-            startedAt: Date.now(),
-            revision: 0,
-            taskRoute: 'pending',
-            latestInput: input,
-            latestContext: context,
-            latestMessage: message,
-            initialMessage: message,
-            latestTurnEnvelope: turnEnvelope,
-            latestProgressText: '',
-            personaPromise: null,
-            personaStream: null,
-            startPersonaDraft: null,
-            openPersonaStream: null,
-            discardPersonaStream: null
-        };
-        const requestedPersonaTextDelta = typeof input.onTextDelta === 'function'
-            ? input.onTextDelta
-            : null;
-        const requestedPersonaStreamEvent = typeof input.onTextStreamEvent === 'function'
-            ? input.onTextStreamEvent
-            : null;
-        const publishPersonaStreamEvent = (stream, streamState, deltaText = '', reason = '') => {
-            if (!stream || activeState.personaStream !== stream) {
-                return;
-            }
-            if (streamState === 'started') {
-                if (stream.publishedStarted) {
-                    return;
-                }
-                stream.publishedStarted = true;
-            } else if (streamState === 'delta') {
-                if (!deltaText) {
-                    return;
-                }
-            } else if (streamState === 'committed') {
-                if (stream.publishedCommitted) {
-                    return;
-                }
-                stream.publishedCommitted = true;
-            } else if (streamState === 'discarded') {
-                if (stream.publishedDiscarded || !stream.publishedStarted) {
-                    return;
-                }
-                stream.publishedDiscarded = true;
-            }
-            const eventType = `response.output_text.${streamState}`;
-            const eventPayload = {
-                runId: outerRunId,
-                sessionId,
-                turnId: activeState.turnId,
-                status: streamState === 'discarded' ? 'cancelled' : 'streaming',
-                text: streamState === 'discarded' ? '' : stream.text,
-                speechText: '',
-                deltaText: streamState === 'delta' ? deltaText : '',
-                kind: 'stream',
-                phase: 'final_answer_stream',
-                messagePhase: 'final_answer_stream',
-                streamState,
-                streamId: stream.streamId,
-                revision: stream.revision,
-                source: 'persona_actor',
-                ...(reason ? { reason } : {})
-            };
-            this.emitGatewayEvent('persona.background.message', eventPayload);
-            try {
-                if (streamState === 'delta') {
-                    const pending = requestedPersonaTextDelta?.(deltaText, {
-                        runId: outerRunId,
-                        sessionId,
-                        streamId: stream.streamId,
-                        phase: 'final_answer_stream',
-                        source: 'persona_actor'
+        const releaseSession = this.sessionContextStore.acquireSession(sessionId);
+        let checkpoint;
+        try {
+            checkpoint = this.sessionContextStore.getCheckpoint(sessionId);
+            if (!checkpoint) {
+                // Import one execution history, not two independently rewritten
+                // histories. Old stores remain intact as read-only migration sources.
+                const legacyTask = this.taskAgentHarness?.getThread?.(sessionId);
+                checkpoint = legacyTask?.contextCheckpoint || this.getPersonaContextCheckpoint(sessionId);
+                if (checkpoint) {
+                    this.sessionContextStore.commitCheckpoint(sessionId, checkpoint, {
+                        migratedFrom: legacyTask?.contextCheckpoint ? 'task-agent-harness' : 'persona-context'
                     });
-                    pending?.catch?.(() => {});
-                } else {
-                    const pending = requestedPersonaStreamEvent?.({
-                        type: eventType,
-                        runId: outerRunId,
-                        sessionId,
-                        streamId: stream.streamId,
-                        phase: 'final_answer_stream',
-                        source: 'persona_actor',
-                        ...(reason ? { reason } : {})
-                    });
-                    pending?.catch?.(() => {});
                 }
-            } catch {}
+            }
+        } catch (error) {
+            releaseSession();
+            throw error;
+        }
+        const effectiveRunId = normalizeString(runId, `agent_${randomUUID()}`);
+        const effectiveContext = {
+            ...context,
+            runId: effectiveRunId, sessionId, sessionKey: sessionId,
+            agentRole: 'unified_agent', contextMode: 'unified', unifiedAgent: true,
+            agentLoop: 'llm', planner: 'llm',
+            unifiedGatewayOwnsFinalization: true,
+            taskAgentRoutingOwned: false, taskAgentRoutePending: false,
+            personaRenderOnly: false, personaDraft: false,
+            initialContextManagerCheckpoint: checkpoint
         };
-        const flushPersonaStreamDelta = (stream) => {
-            if (!stream) {
-                return;
-            }
-            if (stream.flushTimer) {
-                clearTimeout(stream.flushTimer);
-                stream.flushTimer = null;
-            }
-            const deltaText = stream.pendingDelta;
-            stream.pendingDelta = '';
-            if (deltaText && stream.opened) {
-                publishPersonaStreamEvent(stream, 'delta', deltaText);
-            }
-        };
-        const schedulePersonaStreamDelta = (stream, deltaText) => {
-            if (!stream || !deltaText || !stream.opened) {
-                return;
-            }
-            stream.pendingDelta += deltaText;
-            if (stream.flushTimer) {
-                return;
-            }
-            stream.flushTimer = setTimeout(() => {
-                flushPersonaStreamDelta(stream);
-            }, PERSONA_STREAM_FLUSH_INTERVAL_MS);
-            stream.flushTimer.unref?.();
-        };
-        activeState.openPersonaStream = () => {
-            const stream = activeState.personaStream;
-            if (!stream || stream.opened || activeState.taskRoute !== 'chat') {
-                return;
-            }
-            stream.opened = true;
-            publishPersonaStreamEvent(stream, 'started');
-            if (stream.text) {
-                publishPersonaStreamEvent(stream, 'delta', stream.text);
-            }
-            if (stream.sourceState === 'committed') {
-                publishPersonaStreamEvent(stream, 'committed');
-            } else if (stream.sourceState === 'discarded') {
-                publishPersonaStreamEvent(stream, 'discarded', '', 'persona_source_discarded');
-            }
-        };
-        activeState.discardPersonaStream = (reason = 'persona_stream_discarded') => {
-            const stream = activeState.personaStream;
-            if (!stream) {
-                return;
-            }
-            if (stream.flushTimer) {
-                clearTimeout(stream.flushTimer);
-                stream.flushTimer = null;
-            }
-            stream.pendingDelta = '';
-            stream.opened = false;
-            publishPersonaStreamEvent(stream, 'discarded', '', reason);
-        };
-        activeState.startPersonaDraft = (draftRequest = {}) => {
-            activeState.discardPersonaStream?.('persona_revision_superseded');
-            const revision = Math.max(0, Number(draftRequest.revision) || 0);
-            const stream = {
-                revision,
-                streamId: `${outerRunId}:persona:${revision}`,
-                text: '',
-                sourceState: 'pending',
-                opened: false,
-                publishedStarted: false,
-                publishedCommitted: false,
-                publishedDiscarded: false,
-                pendingDelta: '',
-                flushTimer: null
-            };
-            activeState.personaStream = stream;
-            return this.startPrivatePersonaDraft({
-                ...draftRequest,
-                onTextDelta: (delta) => {
-                    if (activeState.personaStream !== stream || typeof delta !== 'string' || !delta) {
-                        return;
-                    }
-                    stream.text += delta;
-                    if (stream.opened) {
-                        schedulePersonaStreamDelta(stream, delta);
-                    }
+        const record = { runId: effectiveRunId, promise: null, finalizing: false };
+        // Publish ownership before starting asynchronous model work.
+        this.activeUnifiedTurns.set(sessionId, record);
+        record.promise = Promise.resolve().then(async () => {
+            const result = await runner.runMessage({
+                ...input,
+                runId: effectiveRunId, sessionId,
+                agentRole: 'unified_agent',
+                agentLoop: 'llm', planner: 'llm',
+                personaRenderOnly: false, personaDraft: false,
+                taskAgentRoutingOwned: false, taskAgentRoutePending: false,
+                ...(llmSettings ? { llmSettings } : {}),
+                initialContextManagerCheckpoint: checkpoint,
+                onModelInputContextCheckpoint: async (next, metadata) => {
+                    this.sessionContextStore.commitCheckpoint(sessionId, next, { runId: effectiveRunId });
+                    await input.onModelInputContextCheckpoint?.(next, metadata);
                 },
-                onTextStreamEvent: (event = {}) => {
-                    if (activeState.personaStream !== stream) {
-                        return;
-                    }
-                    const type = normalizeString(event.type);
-                    if (type === 'response.output_text.started') {
-                        stream.sourceState = 'started';
-                        if (stream.opened) {
-                            publishPersonaStreamEvent(stream, 'started');
-                        }
-                        return;
-                    }
-                    if (type === 'response.output_text.committed') {
-                        stream.sourceState = 'committed';
-                        if (stream.opened) {
-                            flushPersonaStreamDelta(stream);
-                            publishPersonaStreamEvent(stream, 'committed');
-                        }
-                        return;
-                    }
-                    if (type === 'response.output_text.discarded') {
-                        stream.sourceState = 'discarded';
-                        if (stream.opened) {
-                            if (stream.flushTimer) {
-                                clearTimeout(stream.flushTimer);
-                                stream.flushTimer = null;
-                            }
-                            stream.pendingDelta = '';
-                            publishPersonaStreamEvent(stream, 'discarded', '', 'persona_source_discarded');
-                        }
-                    }
+                context: effectiveContext
+            });
+            record.finalizing = true;
+            const delivered = await finalize(result);
+            const finalCheckpoint = this.extractPersonaResultCheckpoint(result);
+            if (finalCheckpoint) {
+                if (delivered?.status === 'blocked' && result?.status !== 'blocked') {
+                    finalCheckpoint.items.push({ type: 'message', role: 'developer', content: [{
+                        type: 'input_text', text: 'The preceding final response was blocked by the output safety gate and was not delivered. Do not treat it as a successful answer or repeat it.'
+                    }] });
                 }
-            });
-        };
-        activeState.personaPromise = activeState.startPersonaDraft({
-            input,
-            context,
-            sessionId,
-            outerRunId,
-            revision: activeState.revision,
-            turnEnvelope,
-            llmSettings
-        });
-        this.activePersonaTurns.set(sessionId, activeState);
-
-        let lastProgressPublishAt = 0;
-        const onTaskEvent = (event = {}) => {
-            const type = normalizeString(event.type);
-            const messageText = normalizeString(event.message || event.payload?.text || event.payload?.summary);
-            const eventTurnId = normalizeString(event.turnId || event.turn_id);
-            if (eventTurnId) {
-                activeState.turnId = eventTurnId;
+                this.sessionContextStore.commitCheckpoint(sessionId, finalCheckpoint, { runId: effectiveRunId });
             }
-            if (type === 'task_agent.route.decided') {
-                activeState.taskRoute = normalizeString(event.payload?.mode, activeState.taskRoute).toLowerCase();
-                try {
-                    const pending = input.onTaskRoute?.(activeState.taskRoute, {
-                        runId: outerRunId,
-                        sessionId,
-                        turnId: activeState.turnId
-                    });
-                    pending?.catch?.(() => {});
-                } catch {}
-                if (activeState.taskRoute === 'chat') {
-                    activeState.openPersonaStream?.();
-                } else if (activeState.taskRoute === 'execute') {
-                    activeState.discardPersonaStream?.('task_agent_route_execute');
-                }
-            }
-            const isProgress = type === 'agent.progress.note' && messageText;
-            if (isProgress) {
-                activeState.latestProgressText = messageText;
-            }
-            const now = Date.now();
-            if (
-                !isProgress ||
-                now - lastProgressPublishAt < PERSONA_TASK_PROGRESS_MIN_INTERVAL_MS
-            ) {
-                return;
-            }
-            lastProgressPublishAt = now;
-            this.emitGatewayEvent('persona.background.message', {
-                runId: outerRunId,
-                sessionId,
-                turnId: activeState.turnId,
-                status: normalizeString(event.status, 'running'),
-                text: messageText,
-                speechText: messageText,
-                kind: 'progress',
-                phase: 'task_progress',
-                messagePhase: 'commentary',
-                source: 'task_event_persona_actor'
-            });
-        };
-
-        let backgroundTaskStatus = 'completed';
-        const commitFinalAnswer = (
-            displayText,
-            taskResult = null,
-            source = 'task_result_persona_actor',
-            personaResult = null
-        ) => {
-            const finalText = normalizeString(displayText);
-            if (!finalText) {
-                return;
-            }
-            if (personaResult) {
-                this.commitPrivatePersonaResult(sessionId, personaResult, finalText);
-            }
-            const turnId = normalizeString(taskResult?.turn_id || activeState.turnId);
-            this.taskAgentHarness.recordPersonaOutput?.(
-                sessionId,
-                turnId,
-                finalText,
-                taskResult?.route === 'chat' ? 'chat' : 'result'
-            );
-            this.ensureAgentRunner().recordMemoryTurn?.({
-                request: {
-                    ...(activeState.latestInput || input),
-                    context: { ...(activeState.latestContext || context), memoryPolicy: 'read_write' },
-                    memoryPolicy: 'read_write'
-                },
-                result: {
-                    ok: taskResult?.ok !== false,
-                    status: normalizeString(taskResult?.status, 'completed'),
-                    displayText: finalText,
-                    speechText: finalText
-                },
-                message: activeState.latestMessage || message,
-                sessionId,
-                source: 'persona_final_answer_committed'
-            });
-            this.emitGatewayEvent('persona.background.message', {
-                runId: outerRunId,
-                sessionId,
-                turnId,
-                status: normalizeString(taskResult?.status, 'completed'),
-                text: finalText,
-                speechText: finalText,
-                kind: 'result',
-                phase: 'final_answer',
-                messagePhase: 'final_answer',
-                source,
-                ...(activeState.personaStream?.streamId
-                    ? { streamId: activeState.personaStream.streamId, streamState: 'committed' }
-                    : {}),
-                ...(taskResult ? { taskResult } : {})
-            });
-            this.emitGatewayEvent('agent.message.completed', {
-                runId: outerRunId,
-                sessionId,
-                turnId,
-                status: normalizeString(taskResult?.status, 'completed'),
-                ok: taskResult?.ok !== false,
-                text: finalText,
-                speechText: finalText,
-                phase: 'final_answer',
-                messagePhase: 'final_answer',
-                delivery: 'background',
-                source
-            });
-        };
-        const taskPromise = (async () => {
-            this.emitGatewayEvent('task.background.started', {
-                runId: outerRunId,
-                sessionId,
-                status: 'running',
-                currentRequest: message,
-                source: 'task_agent_actor'
-            });
-            let taskResult;
-            try {
-                taskResult = await this.taskAgentHarness.dispatchTurn({
-                    ...context,
-                    runId: `task_${outerRunId}`,
-                    parentRunId: outerRunId,
-                    sessionId,
-                    sessionKey: sessionId,
-                    currentUserMessage: message,
-                    turnEnvelope,
-                    attachments: turnEnvelope.attachments,
-                    fileAttachments: turnEnvelope.attachments,
-                    llmSettings: llmSettings || context.llmSettings || null,
-                    returnAfterSteer: true,
-                    onTaskEvent
-                });
-            } catch (error) {
-                backgroundTaskStatus = 'failed';
-                activeState.discardPersonaStream?.('task_agent_failed');
-                const failurePacket = {
-                    type: 'task.failed',
-                    status: 'failed',
-                    error: error?.message || String(error),
-                    current_request: message
-                };
-                const displayText = await this.renderTaskPacket({
-                    input: activeState.latestInput || input,
-                    context: activeState.latestContext || context,
-                    sessionId,
-                    outerRunId,
-                    turnEnvelope: activeState.latestTurnEnvelope || turnEnvelope,
-                    packet: failurePacket,
-                    purpose: 'failure'
-                });
-                commitFinalAnswer(displayText, failurePacket);
-                return failurePacket;
-            }
-
-            activeState.turnId = normalizeString(taskResult?.turn_id, activeState.turnId);
-            activeState.taskRoute = normalizeString(taskResult?.route, activeState.taskRoute).toLowerCase();
-            if (activeState.taskRoute === 'chat') {
-                activeState.openPersonaStream?.();
-            } else {
-                activeState.discardPersonaStream?.('task_agent_route_not_chat');
-            }
-            const taskStatus = normalizeString(taskResult?.status, 'completed').toLowerCase();
-            if (!['completed', 'completed_with_warnings', 'success', 'succeeded'].includes(taskStatus)) {
-                backgroundTaskStatus = taskStatus || 'failed';
-            }
-
-            if (taskResult?.route === 'chat') {
-                let persona = null;
-                while (true) {
-                    const revision = activeState.revision;
-                    const currentPersonaPromise = activeState.personaPromise;
-                    persona = await currentPersonaPromise;
-                    if (
-                        revision === activeState.revision &&
-                        currentPersonaPromise === activeState.personaPromise
-                    ) {
-                        break;
-                    }
-                }
-                const personaText = normalizeString(
-                    persona?.displayText || persona?.finalAnswer || persona?.speechText
-                );
-                if (personaText) {
-                    commitFinalAnswer(personaText, taskResult, 'persona_actor', persona);
-                } else {
-                    backgroundTaskStatus = 'failed';
-                    activeState.discardPersonaStream?.('persona_final_unavailable');
-                    this.emitGatewayEvent('agent.system.notice', {
-                        runId: outerRunId,
-                        sessionId,
-                        turnId: activeState.turnId,
-                        status: 'failed',
-                        level: 'error',
-                        code: 'persona_final_unavailable',
-                        message: '对话渲染暂时不可用，请重试这一轮。',
-                        source: 'persona_actor'
-                    });
-                }
-                return taskResult;
-            }
-
-            if (taskResult?.steer_accepted === true) {
-                return taskResult;
-            }
-
-            const displayText = await this.renderTaskPacket({
-                input: activeState.latestInput || input,
-                context: activeState.latestContext || context,
-                sessionId,
-                outerRunId,
-                turnEnvelope: activeState.latestTurnEnvelope || turnEnvelope,
-                packet: taskResult,
-                purpose: 'result'
-            });
-            commitFinalAnswer(displayText, taskResult);
-            return taskResult;
-        })();
-        let trackedTaskPromise;
-        trackedTaskPromise = taskPromise.catch((error) => {
-            backgroundTaskStatus = 'failed';
-            this.emitGatewayEvent('agent.system.notice', {
-                runId: outerRunId,
-                sessionId,
-                status: 'failed',
-                level: 'error',
-                code: 'task_turn_failed',
-                message: error?.message || String(error),
-                source: 'task_agent_runtime'
-            });
+            // No Persona model, TaskResult rewrite, or second visible answer.
+            return delivered;
         }).finally(() => {
-            this.backgroundTaskRuns.delete(trackedTaskPromise);
-            if (this.activePersonaTurns.get(sessionId)?.runId === outerRunId) {
-                this.activePersonaTurns.delete(sessionId);
-            }
-            this.emitGatewayEvent('task.background.finished', {
-                runId: outerRunId,
-                sessionId,
-                turnId: activeState.turnId,
-                status: backgroundTaskStatus,
-                source: 'task_agent_actor'
-            });
-            this.emitGatewayEvent('agent.run.finished', {
-                runId: outerRunId,
-                sessionId,
-                turnId: activeState.turnId,
-                status: backgroundTaskStatus,
-                ok: backgroundTaskStatus !== 'failed',
-                phase: 'final_answer',
-                source: 'task_agent'
-            });
+            if (this.activeUnifiedTurns.get(sessionId) === record) this.activeUnifiedTurns.delete(sessionId);
+            releaseSession();
         });
-        this.backgroundTaskRuns.add(trackedTaskPromise);
-        return {
-            ok: true,
-            runId: outerRunId,
-            sessionId,
-            status: 'running',
-            mode: 'persistent-task-agent-turn',
-            intent: 'turn_started',
-            taskRoute: 'pending',
-            displayText: '',
-            speechText: '',
-            deferAssistantCommit: true,
-            messagePhase: 'commentary',
-            backgroundTask: {
-                runId: outerRunId,
-                sessionId,
-                status: 'running'
-            }
-        };
+        return record.promise;
     }
 
     async runAgent(request = {}) {
@@ -3948,10 +3277,10 @@ class AILISGateway extends EventEmitter {
             };
         }
         const agentRole = normalizeString(input.agentRole || context.agentRole).toLowerCase();
-        const taskAgentOwnsTurn = context.taskAgentRoutingOwned === true &&
-            !['task', 'task_agent', 'worker', 'subagent', 'child_agent'].includes(agentRole) &&
-            context.personaRenderOnly !== true &&
-            input.personaRenderOnly !== true;
+        const explicitChildRole = ['task', 'task_agent', 'worker', 'subagent', 'child_agent'].includes(agentRole);
+        const unifiedOwnsTurn = !explicitChildRole && (agentRole === 'unified_agent' || context.unifiedAgent === true ||
+            ['persona', 'main', 'ailis', 'ailis_main', 'persona_orchestrator', 'main_agent'].includes(agentRole) ||
+            context.taskAgentRoutingOwned === true);
         const streamedDuringRun = streamBeforeFinalGate;
         const effectiveLlmSettings = (
             input.llmSettings && typeof input.llmSettings === 'object' ? input.llmSettings :
@@ -3960,106 +3289,119 @@ class AILISGateway extends EventEmitter {
             context.llm && typeof context.llm === 'object' ? context.llm :
             null
         );
-        const result = taskAgentOwnsTurn
-            ? await this.runTaskAgentControlledPersonaTurn({
-                  input: {
-                      ...input,
-                      onTextDelta: streamBeforeFinalGate ? input.onTextDelta : undefined,
-                      onTextStreamEvent: streamBeforeFinalGate ? input.onTextStreamEvent : undefined
-                  },
-                  context,
-                  sessionId,
-                  runId,
-                  llmSettings: effectiveLlmSettings
-              })
-            : await this.ensureAgentRunner().runMessage({
-                  ...input,
-                  onTextDelta: streamedDuringRun ? requestedTextDelta : undefined,
-                  context
-              });
-        const emitControlledRunFinished = (payload = {}) => {
-            if (!taskAgentOwnsTurn || result?.deferAssistantCommit === true) {
-                return;
+        const finalize = async (result) => {
+            const emitControlledRunFinished = (payload = {}) => {
+                if (!unifiedOwnsTurn || result?.deferAssistantCommit === true) {
+                    return;
+                }
+                this.emitGatewayEvent('agent.run.finished', {
+                    runId: normalizeString(payload.runId || result?.runId || runId),
+                    sessionId: normalizeString(payload.sessionId || result?.sessionId || sessionId, sessionId),
+                    status: normalizeString(payload.status || result?.status, 'completed'),
+                    ok: payload.ok === true,
+                    displayText: normalizeString(payload.displayText || payload.text),
+                    speechText: normalizeString(payload.speechText),
+                    source: 'unified_agent'
+                });
+            };
+            const finalText = normalizeString(
+                result?.displayText ||
+                result?.speechText ||
+                result?.finalAnswer ||
+                result?.answer ||
+                result?.message
+            );
+            if (!finalText) {
+                emitControlledRunFinished(result || {});
+                return {
+                    ...result,
+                    emberHarness: {
+                        input: summarizeEmberHarnessRecord(inputGate)
+                    }
+                };
             }
-            this.emitGatewayEvent('agent.run.finished', {
-                runId: normalizeString(payload.runId || result?.runId || runId),
-                sessionId: normalizeString(payload.sessionId || result?.sessionId || sessionId, sessionId),
-                status: normalizeString(payload.status || result?.status, 'completed'),
-                ok: payload.ok === true,
-                displayText: normalizeString(payload.displayText || payload.text),
-                speechText: normalizeString(payload.speechText),
-                source: 'persona_actor'
+            const finalGate = await this.runEmberHarnessCheck({
+                stage: 'final_output',
+                boundary: 'final_output_before_user',
+                text: finalText,
+                context,
+                runId: result?.runId || runId,
+                sessionId: result?.sessionId || sessionId,
+                metadata: {
+                    source: 'agent.run',
+                    status: result?.status,
+                    ok: result?.ok === true
+                }
             });
-        };
-        const finalText = normalizeString(
-            result?.displayText ||
-            result?.speechText ||
-            result?.finalAnswer ||
-            result?.answer ||
-            result?.message
-        );
-        if (!finalText) {
-            emitControlledRunFinished(result || {});
+            if (finalGate.blocked) {
+                const blockedResult = {
+                    ok: false,
+                    status: 'blocked',
+                    runId: result?.runId,
+                    sessionId: result?.sessionId || sessionId,
+                    displayText: '最终回答已被 EMBER-Harness 阶段门控阻断，系统已回退到最近稳定阶段快照。',
+                    speechText: '最终回答已被安全门控阻断。'
+                };
+                emitControlledRunFinished(blockedResult);
+                return {
+                    ...blockedResult,
+                    mode: result?.mode || 'agent',
+                    intent: 'blocked_by_ember_harness',
+                    durationMs: result?.durationMs,
+                    emberHarness: {
+                        input: summarizeEmberHarnessRecord(inputGate),
+                        final: summarizeEmberHarnessRecord(finalGate)
+                    }
+                };
+            }
+            if (requestedTextDelta && !streamedDuringRun) {
+                await requestedTextDelta(finalText, {
+                    runId: result?.runId || runId,
+                    sessionId: result?.sessionId || sessionId,
+                    bufferedBy: 'ember_final_output_gate'
+                });
+            }
+            if (unifiedOwnsTurn) {
+                this.ensureAgentRunner().recordMemoryTurn?.({
+                    request: { ...input, context: { ...context, agentRole: 'unified_agent',
+                        unifiedAgent: true, personaRenderOnly: false, personaDraft: false,
+                        unifiedGatewayOwnsFinalization: false } },
+                    result, message: input.suppressCurrentUserMessage || context.suppressCurrentUserMessage
+                        ? '' : input.message || input.prompt || input.task || '', sessionId,
+                    source: 'unified_agent'
+                });
+                this.emitGatewayEvent('agent.message.completed', {
+                    runId: result?.runId || runId, sessionId, status: result?.status,
+                    ok: result?.ok === true, text: finalText, speechText: result?.speechText || finalText,
+                    source: 'unified_agent'
+                });
+                if (result?.surface) this.emitGatewayEvent('persona.surface', {
+                    runId: result?.runId || runId, sessionId, surface: result.surface, source: 'unified_agent'
+                });
+            }
+            emitControlledRunFinished({
+                ...result,
+                displayText: finalText,
+                speechText: result?.speechText || finalText
+            });
             return {
                 ...result,
-                emberHarness: {
-                    input: summarizeEmberHarnessRecord(inputGate)
-                }
-            };
-        }
-        const finalGate = await this.runEmberHarnessCheck({
-            stage: 'final_output',
-            boundary: 'final_output_before_user',
-            text: finalText,
-            context,
-            runId: result?.runId || runId,
-            sessionId: result?.sessionId || sessionId,
-            metadata: {
-                source: 'agent.run',
-                status: result?.status,
-                ok: result?.ok === true
-            }
-        });
-        if (finalGate.blocked) {
-            const blockedResult = {
-                ok: false,
-                status: 'blocked',
-                runId: result?.runId,
-                sessionId: result?.sessionId || sessionId,
-                displayText: '最终回答已被 EMBER-Harness 阶段门控阻断，系统已回退到最近稳定阶段快照。',
-                speechText: '最终回答已被安全门控阻断。'
-            };
-            emitControlledRunFinished(blockedResult);
-            return {
-                ...blockedResult,
-                mode: result?.mode || 'agent',
-                intent: 'blocked_by_ember_harness',
-                durationMs: result?.durationMs,
                 emberHarness: {
                     input: summarizeEmberHarnessRecord(inputGate),
                     final: summarizeEmberHarnessRecord(finalGate)
                 }
             };
-        }
-        if (requestedTextDelta && !streamedDuringRun) {
-            await requestedTextDelta(finalText, {
-                runId: result?.runId || runId,
-                sessionId: result?.sessionId || sessionId,
-                bufferedBy: 'ember_final_output_gate'
-            });
-        }
-        emitControlledRunFinished({
-            ...result,
-            displayText: finalText,
-            speechText: result?.speechText || finalText
-        });
-        return {
-            ...result,
-            emberHarness: {
-                input: summarizeEmberHarnessRecord(inputGate),
-                final: summarizeEmberHarnessRecord(finalGate)
-            }
         };
+        return unifiedOwnsTurn
+            ? this.runUnifiedAgentTurn({
+                  input: { ...input,
+                      onTextDelta: streamBeforeFinalGate ? input.onTextDelta : undefined,
+                      onTextStreamEvent: streamBeforeFinalGate ? input.onTextStreamEvent : undefined },
+                  context, sessionId, runId, llmSettings: effectiveLlmSettings, finalize
+              })
+            : finalize(await this.ensureAgentRunner().runMessage({
+                  ...input, onTextDelta: streamedDuringRun ? requestedTextDelta : undefined, context
+              }));
     }
 
     async interruptAgentRun(request = {}) {
@@ -4149,6 +3491,8 @@ class AILISGateway extends EventEmitter {
             planner: 'llm',
             agentRole: 'task_agent',
             contextMode: 'task_agent',
+            unifiedAgent: false,
+            unifiedGatewayOwnsFinalization: false,
             cleanContext: inheritanceMode === 'clean',
             taskAgentInheritanceMode: inheritanceMode,
             initialContextManagerCheckpoint: inheritedCheckpoint,
@@ -4279,12 +3623,15 @@ class AILISGateway extends EventEmitter {
                 workspace: workspaceDir,
                 workspaceDir
             });
-            return makeExternalVirtualToolResult(result || {
+            const output = makeExternalVirtualToolResult(result || {
                 status: 'capability_manager_unavailable',
                 ok: false,
                 toolId,
                 message: 'Capability Manager is not available for external virtual tool execution.'
             }, { toolId });
+            return this.runtime?.boundToolOutput
+                ? await this.runtime.boundToolOutput(output, { toolId, callId })
+                : output;
         }
         if (this.gatewayToolRuntimeRegistry?.has(toolId)) {
             return await this.gatewayToolRuntimeRegistry.dispatch(toolId, args, {

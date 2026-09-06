@@ -1,14 +1,21 @@
-## What changed
+## 变更目标
 
-Describe the problem and the focused change.
+说明使用场景、预期行为和影响范围。
 
-## Validation
+## 实现与数据
 
-- [ ] Relevant automated tests pass
-- [ ] Visible changes include screenshots or recordings
-- [ ] No credentials, private memory, or generated evaluation outputs are included
-- [ ] Harness changes include regression and efficiency evidence
+说明入口、契约、权限、数据迁移及恢复方式。
 
-## Compatibility
+## 验证
 
-List any migration, packaging, provider, tool-contract, or memory-state impact.
+- 源码基线与环境：
+- 已运行测试及结果：
+- 失败、跳过或未测项：
+
+## 提交检查
+
+- [ ] 对应测试与文档已同步。
+- [ ] 动态资源和包内路径已核对，或说明不适用。
+- [ ] 未包含凭据、私人数据或无许可资源。
+
+参见[贡献约定](../CONTRIBUTING.md)。

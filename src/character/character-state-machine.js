@@ -204,13 +204,3 @@ export class CharacterStateMachine {
         return this.transition(surface, context);
     }
 }
-
-export function getRoleStateDefaults(stateName) {
-    return {
-        ...(STATE_DEFAULTS[normalizeStateName(stateName)] || STATE_DEFAULTS.idle)
-    };
-}
-
-export function listRoleStates() {
-    return [...ROLE_STATES];
-}

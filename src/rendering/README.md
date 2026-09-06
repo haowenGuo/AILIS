@@ -1,10 +1,7 @@
-# AILIS Rendering
+# 角色渲染模块
 
-这里是浏览器侧 3D 角色渲染的公共边界。
+[index.js](index.js)提供页面使用的公共接口：VRMModelSystem、对话气泡和桌宠鼠标命中测试。
 
-- `index.js`：页面入口唯一需要依赖的渲染 API。
-- `vrm-model-system.js`：Three.js 场景、VRM 加载、相机、灯光、动画混合和逐帧渲染。
-- `../character/`：角色状态机、动作调度、表情、MToon 配置和 Persona Surface 到角色行为的映射。
-- `../vrm-model-system.js`：旧路径兼容转发。
+[vrm-model-system.js](vrm-model-system.js)管理场景、模型、相机与绘制；[character](../character)组织角色状态、动作和表情；[pet-app.js](../pet-app.js)将它们接入桌宠页面。
 
-页面启动入口是 `../app.js` 和 `../pet-app.js`。完整阅读路线见 [`../../docs/ailis-core-loop-reading-guide.zh-CN.md`](../../docs/ailis-core-loop-reading-guide.zh-CN.md)。
+修改渲染时，先验证资源加载和状态变化，再检查实际画面中的动作、遮挡、穿模与帧率。文本、播报和动作数据的衔接见[媒体系统](../../docs/design/media.md)。

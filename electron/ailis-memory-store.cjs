@@ -15,7 +15,6 @@ const MAX_CONTEXT_CHARS = 20000;
 const MAX_STATE_EVENTS = 500;
 const MAX_AFFINITY_EVENTS = 200;
 const DEFAULT_RELEVANT_EVENT_LIMIT = 8;
-const DEFAULT_RECENT_SESSION_EVENT_LIMIT = 6;
 const MAX_PROMPT_EVENT_TEXT_CHARS = 260;
 const SECRET_PROTECTION = 'local-file-base64';
 const LEGACY_AUTO_LEARNED_BLOCK_KEYS = new Set(['user', 'relationship', 'project']);
@@ -52,17 +51,6 @@ function clampNumber(value, min, max, fallback) {
 
 function truncateText(value, maxChars = 1200) {
     const text = normalizeText(value);
-    if (!text || text.length <= maxChars) {
-        return text;
-    }
-    return `${text.slice(0, Math.max(0, maxChars - 1))}…`;
-}
-
-function truncateStructuredText(value, maxChars = 1200) {
-    const text = String(value || '')
-        .replace(/\r\n/g, '\n')
-        .replace(/[ \t]+$/gm, '')
-        .trim();
     if (!text || text.length <= maxChars) {
         return text;
     }
@@ -766,9 +754,6 @@ class AILISMemoryRuntime {
         };
     }
 
-    listMemories(options = {}) {
-        return this.getSnapshot(options);
-    }
 
     getContextSources({
         sessionId = 'main',
@@ -851,14 +836,6 @@ class AILISMemoryRuntime {
         }).asDeveloperInstruction();
     }
 
-    getRecentSessionEvents(sessionId = 'main', { limit = DEFAULT_RECENT_SESSION_EVENT_LIMIT } = {}) {
-        const normalizedSessionId = normalizeText(sessionId, 'main');
-        const boundedLimit = Math.max(1, Math.min(Number(limit) || DEFAULT_RECENT_SESSION_EVENT_LIMIT, 30));
-        return (this.state?.events || [])
-            .filter((event) => normalizeText(event.sessionId, 'main') === normalizedSessionId)
-            .slice(-boundedLimit)
-            .map((event) => ({ ...event }));
-    }
 
     searchMemory(query, { limit = 10 } = {}) {
         return rankMemoryEvents(this.state?.events || [], query, { limit });

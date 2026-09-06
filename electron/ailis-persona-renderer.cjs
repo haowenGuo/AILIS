@@ -211,11 +211,6 @@ function normalizeTaskState(value) {
     return 'failed';
 }
 
-function isSurfaceTaskState(value) {
-    const state = normalizeText(value).toLowerCase().replace(/[-\s]+/g, '_');
-    return ALLOWED_SURFACE_TASK_STATES.has(state);
-}
-
 function isSurfaceOnlyTaskState(value) {
     const state = normalizeText(value).toLowerCase().replace(/[-\s]+/g, '_');
     return ALLOWED_SURFACE_TASK_STATES.has(state) && !ALLOWED_TASK_STATES.has(state);
@@ -265,18 +260,6 @@ function summarizeBubbleText(value, fallback = '') {
     return `${singleLine.slice(0, 33)}...`;
 }
 
-function withControlTags(text, { action, expression } = {}) {
-    const tags = [];
-    const safeAction = normalizeAction(action);
-    const safeExpression = normalizeExpression(expression, '');
-    if (safeAction) {
-        tags.push(`[action:${safeAction}]`);
-    }
-    if (safeExpression) {
-        tags.push(`[expression:${safeExpression}]`);
-    }
-    return `${tags.join('')}${normalizeText(text, '我处理好了。')}`;
-}
 
 function getToolExperience(toolId) {
     return getToolContract(toolId)?.experience || {
@@ -732,6 +715,26 @@ function renderPersonaSurfaceGateway(input = {}) {
     });
 }
 
+function renderUnifiedAgentSurface(input = {}) {
+    // Reuse avatar metadata only. The unified agent owns the answer; legacy
+    // word substitutions, whitespace cleanup and failure prose must not touch it.
+    const surface = renderPersonaSurfaceGateway({
+        ...input,
+        text: '', displayText: '', fallback_text: '', fallbackText: '',
+        speech_text: '', speechText: '', bubble_text: '', bubbleText: ''
+    });
+    const text = typeof input.text === 'string' ? input.text : '';
+    return {
+        ...surface,
+        renderer: 'ailis-unified-surface',
+        text,
+        speechText: typeof input.speech_text === 'string' && input.speech_text
+            ? input.speech_text : text,
+        bubbleText: typeof input.bubble_text === 'string' && input.bubble_text
+            ? input.bubble_text : text
+    };
+}
+
 function attachPersonaSurface(result = {}, surface = null) {
     const personaSurface = surface || renderPersonaSurfaceGateway({
         task_state: result.ok ? 'completed' : (result.status || 'failed'),
@@ -874,44 +877,6 @@ function renderToolFailureSurface({
     });
 }
 
-function renderMaxStepsSurface({
-    maxSteps = 0,
-    stepCount = 0,
-    latestSummary = '',
-    mode = 'task'
-} = {}) {
-    const summary = sanitizeUserFacingText(latestSummary);
-    const text = [
-        stepCount > 0 ? `我已经做了 ${stepCount} 轮处理，` : '',
-        '但这一轮还没形成足够稳的结论，我先停住，避免越查越乱。',
-        summary ? `目前主要卡在：${summary}` : '',
-        mode === 'conversation'
-            ? '如果继续，我会把下一步压成一句人话再往下走。'
-            : '如果继续，我会从这个卡点接着查。'
-    ].filter(Boolean).join('\n');
-    return renderPersonaSurfaceGateway({
-        task_state: 'blocked',
-        approval_state: 'none',
-        error_code: 'max_steps_reached',
-        relationship_stage: 'trusted',
-        emotion_hint: 'neutral',
-        next_action: summary || '继续从当前卡点往下查',
-        text,
-        bubble_text: '我先停住，避免越跑越乱。',
-        text_is_persona_safe: true,
-        source: 'agent_max_steps',
-        experience: {
-            embodiedAction: 'pause_and_explain',
-            permissionStyle: 'none',
-            progressStyle: 'quiet',
-            successStyle: 'not_completed',
-            failureStyle: 'plain_explain',
-            userFacingVerb: '先停住',
-            userSafePreview: 'summary_only',
-            maxSteps: Number(maxSteps) || 0
-        }
-    });
-}
 
 module.exports = {
     RENDERER_VERSION,
@@ -919,9 +884,8 @@ module.exports = {
     createPersonaSurface,
     getToolExperience,
     renderApprovalSurface,
-    renderMaxStepsSurface,
     renderPersonaSurfaceGateway,
+    renderUnifiedAgentSurface,
     renderToolFailureSurface,
     renderStatusSurface,
-    withControlTags
 };

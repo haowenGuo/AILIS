@@ -991,21 +991,12 @@ function toolOutputToThreadItem(toolOutput = {}) {
     };
 }
 
-function makeRolloutItem(kind, payload = {}) {
-    return {
-        schema: 'ailis.rollout_item.v1',
-        type: kind,
-        payload: cloneJson(payload),
-        recordedAt: new Date().toISOString()
-    };
-}
 
 module.exports = {
     DEFAULT_THREAD_ITEM_PREVIEW_CHARS,
     DEFAULT_TOOL_OUTPUT_CHARS,
     extractText,
     collectSourceViewportLinks,
-    makeRolloutItem,
     normalizeToolOutput,
     sanitizeWebToolDetailsForModel,
     sanitizeWebToolTextForModel,

@@ -2,6 +2,10 @@ import { execFileSync } from 'node:child_process';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vite';
+import { createRequire } from 'node:module';
+
+const { readManifest } = createRequire(import.meta.url)('./scripts/production-closure.cjs');
+const products = readManifest().profiles;
 
 const workspaceRoot = fileURLToPath(new URL('.', import.meta.url));
 const buildRevision = (() => {
@@ -21,7 +25,7 @@ const buildRevision = (() => {
     }
 })();
 
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
     base: './',
     define: {
         __AILIS_BUILD_REVISION__: JSON.stringify(buildRevision)
@@ -49,15 +53,11 @@ export default defineConfig({
     },
     build: {
         rollupOptions: {
-            input: {
-                agentLab: resolve(workspaceRoot, 'agent-lab.html'),
-                control: resolve(workspaceRoot, 'control.html'),
-                index: resolve(workspaceRoot, 'index.html'),
-                pet: resolve(workspaceRoot, 'pet.html'),
-                chat: resolve(workspaceRoot, 'chat.html'),
-                test: resolve(workspaceRoot, 'Test/index.html'),
-                visionRegion: resolve(workspaceRoot, 'vision-region.html')
-            }
+            input: Object.fromEntries(Object.entries(mode === 'desktop'
+                ? products.desktop.pages
+                : { ...products.desktop.pages, ...products.website.pages,
+                    ...(mode === 'demo' ? products.demo.pages : {}) })
+                .map(([name, file]) => [name, resolve(workspaceRoot, file)]))
         }
     }
-});
+}));

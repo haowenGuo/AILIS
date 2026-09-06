@@ -59,12 +59,6 @@ function truncateFunctionOutputPayload(payload = '', maxChars = DEFAULT_TOOL_OUT
     );
 }
 
-function stripImagesFromContentItems(content = []) {
-    return (Array.isArray(content) ? content : [])
-        .filter((item) => item?.type !== 'input_image')
-        .map(cloneJson);
-}
-
 function stripImagesFromFunctionOutput(payload = '') {
     const normalized = FunctionCallOutputPayload.normalize(payload);
     if (normalized.body?.kind !== 'content_items') {
@@ -453,7 +447,7 @@ class ContextManager {
         const packageBefore = this.buildContextPackage(options);
         const contextMode = String(options.contextMode || 'task_agent').trim().toLowerCase();
         const personaMode = contextMode === 'persona';
-        const persistentTaskAgentSession = contextMode === 'task_agent_session';
+        const persistentTaskAgentSession = ['task_agent_session', 'unified_session'].includes(contextMode);
         const contextMessages = this.items
             .filter((item) => persistentTaskAgentSession
                 ? isRuntimeContextMessage(item) && !isSessionCheckpointMessage(item)
@@ -786,14 +780,6 @@ class ContextManager {
         });
     }
 
-    totalModelVisibleChars() {
-        return this.items.reduce((sum, item) => {
-            if (item?.type === 'function_call_output' || item?.type === 'custom_tool_call_output' || item?.type === 'tool_search_output') {
-                return sum + responseItemOutputToText(item).length;
-            }
-            return sum + JSON.stringify(item || {}).length;
-        }, 0);
-    }
 
     toCheckpoint() {
         return {

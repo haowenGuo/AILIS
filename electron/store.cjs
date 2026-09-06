@@ -12,7 +12,8 @@ const PET_SCALE_OPTIONS = [0.3, 0.4, 0.5, 0.6, 0.7, 0.85, 1, 1.15, 1.3];
 const DEFAULT_PET_SCALE = 0.85;
 const SPEECH_MODE_OPTIONS = ['off', 'server', 'cosyvoice3'];
 const RECOGNITION_MODE_OPTIONS = ['fast-vad', 'auto-vad', 'continuous', 'manual'];
-const CONVERSATION_MODE_OPTIONS = ['assistant', 'daily'];
+// Legacy daily preferences normalize to the single main-agent path.
+const CONVERSATION_MODE_OPTIONS = ['assistant'];
 const DEFAULT_CONVERSATION_MODE = 'assistant';
 const UI_LANGUAGE_OPTIONS = ['zh-CN', 'en', 'ja', 'ko'];
 const DEFAULT_UI_LANGUAGE = 'zh-CN';

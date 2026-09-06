@@ -21,7 +21,6 @@ const PROFILE_CATEGORIES = new Set([
     'project_memory',
     'relationship_tone'
 ]);
-const AFFINITY_DIMENSIONS = ['trust', 'familiarity', 'warmth', 'friction'];
 const PREFERENCE_OPERATIONS = new Set(['set', 'avoid', 'clear', 'observe']);
 const PREFERENCE_SCOPES = new Set(['turn', 'session', 'day', 'until_changed', 'persistent']);
 
@@ -1009,9 +1008,6 @@ class AILISUserProfileCurator {
         };
     }
 
-    buildEvidencePack(entries = [], options = {}) {
-        return this.buildEvidenceBatch(entries, options).evidence;
-    }
 
     async callExtractor(promptPayload, options = {}) {
         if (!this.llmClient) {

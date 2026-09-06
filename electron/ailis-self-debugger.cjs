@@ -1,4 +1,3 @@
-const fs = require('fs');
 const fsp = require('fs/promises');
 const path = require('path');
 const { randomUUID } = require('crypto');
@@ -41,18 +40,6 @@ function normalizeArray(value) {
         return [];
     }
     return Array.isArray(value) ? value : [value];
-}
-
-function isPlainObject(value) {
-    return Boolean(value && typeof value === 'object' && !Array.isArray(value));
-}
-
-function cloneJson(value) {
-    try {
-        return JSON.parse(JSON.stringify(value));
-    } catch {
-        return value;
-    }
 }
 
 function safeSegment(value, fallback = 'case') {

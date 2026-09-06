@@ -40,9 +40,6 @@ export class CharacterRuntime {
         this.nextIdleMotionMs = this.pickNextIdleMotionDelayMs();
     }
 
-    setDriver(driver) {
-        this.driver = driver;
-    }
 
     createSceneMoodSignature(roleState = this.currentRoleState, surface = this.currentSurface) {
         const activeSurface = surface || {};

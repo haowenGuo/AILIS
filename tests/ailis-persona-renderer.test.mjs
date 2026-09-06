@@ -7,7 +7,6 @@ const {
     attachPersonaSurface,
     getToolExperience,
     renderApprovalSurface,
-    renderMaxStepsSurface,
     renderPersonaSurfaceGateway,
     renderToolFailureSurface,
     renderStatusSurface
@@ -121,22 +120,6 @@ test('AILIS persona renderer reads tool experience metadata from contracts', () 
     assert.equal(email.userFacingVerb, '看看邮箱');
     assert.equal(email.userSafePreview, 'redacted_summary');
     assert.equal(computer.embodiedAction, 'check_local_state');
-});
-
-test('AILIS persona renderer compresses max-step fallback into human wording', () => {
-    const surface = renderMaxStepsSurface({
-        maxSteps: 50,
-        stepCount: 7,
-        latestSummary: '确认本地配置是否已保存',
-        mode: 'task'
-    });
-
-    assert.equal(surface.source, 'agent_max_steps');
-    assert.equal(surface.experience.maxSteps, 50);
-    assert.match(surface.text, /已经做了 7 轮处理/);
-    assert.match(surface.text, /目前主要卡在：确认本地配置是否已保存/);
-    assert.doesNotMatch(surface.text, /我已经做过这些步骤|tool_call|raw observation/);
-    assert.equal(surface.bubbleText, '我先停住，避免越跑越乱。');
 });
 
 test('AILIS persona renderer hides raw email config errors from user-facing failure text', () => {

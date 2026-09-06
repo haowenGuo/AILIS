@@ -30,7 +30,6 @@ const LEGACY_EXPRESSION_ALIASES = Object.freeze({
     embarrassed: 'blinkRight'
 });
 const LEGACY_ALLOWED_EXPRESSIONS = new Set(['happy', 'angry', 'sad', 'surprised', 'relaxed', 'blinkRight']);
-const VISION_LLM_TIMEOUT_MS = 90000;
 const PROACTIVE_LLM_TIMEOUT_MS = 30000;
 const PROGRESS_MIN_INTERVAL_MS = 1200;
 const EMBODIED_COMMAND_TASK_WORD_PATTERN = /写|代码|脚本|文件|邮件|查|搜索|整理|生成|测试|运行|打开|读取|分析|修复|优化|提交|commit|debug|report|文档/i;
@@ -140,7 +139,7 @@ function extractJsonObjectFromText(value) {
 export function buildProactiveOpportunitySystemPrompt() {
     return [
         '你是 AILIS 工作模式的反馈机会判断器，不是任务执行 Agent。',
-        '你只判断此刻是否值得让 AILIS 主动汇报、提醒或恢复共同任务；不要撰写最终用户可见回复，回复会由独立的 AILIS Persona 生成。',
+        '你只判断此刻是否值得让 AILIS 主动汇报、提醒或恢复共同任务；不要撰写最终用户可见回复，回复会在 AILIS 的同一主会话中生成。',
         '工作模式按较长周期检查，优先关注刚完成、暂停、遇到阻塞或值得恢复的共同任务；普通闲聊场景保持克制。',
         '优先根据 recentContext 判断：刚刚聊了什么、是否有自然延续、是否有未完成情绪或问题、任务是否刚结束。',
         'recentContext 中 source=proactive_companion 的内容是 AILIS 之前的主动消息。若用户没有回应，不要仅因时间经过而重复同类搭话。',
@@ -348,34 +347,6 @@ export function createGatewayProgressBridge({ gateway, sessionId, onProgress, on
     return typeof unsubscribe === 'function' ? unsubscribe : () => {};
 }
 
-function normalizeVisionAttachments(attachments = []) {
-    if (!Array.isArray(attachments)) {
-        return [];
-    }
-
-    return attachments
-        .filter((attachment) => {
-            if (!attachment?.dataUrl) {
-                return false;
-            }
-            const mimeType = String(attachment.mimeType || 'image/png');
-            return mimeType.startsWith('image/');
-        })
-        .map((attachment) => ({
-            type: 'vision',
-            id: String(attachment.id || ''),
-            source: String(attachment.source || ''),
-            label: String(attachment.label || '截图'),
-            dataUrl: String(attachment.dataUrl || ''),
-            thumbnailDataUrl: String(attachment.thumbnailDataUrl || attachment.dataUrl || ''),
-            mimeType: String(attachment.mimeType || 'image/png'),
-            width: Number(attachment.width) || 0,
-            height: Number(attachment.height) || 0,
-            createdAt: String(attachment.createdAt || '')
-        }))
-        .slice(0, 3);
-}
-
 function sanitizeMessageHistoryForGateway(messageHistory = []) {
     return messageHistory.map((message) => {
         if (!Array.isArray(message?.attachments) || !message.attachments.length) {
@@ -387,73 +358,6 @@ function sanitizeMessageHistoryForGateway(messageHistory = []) {
             attachments: summarizeChatAttachmentsForGateway(message.attachments)
         };
     });
-}
-
-function buildVisionSystemPrompt() {
-    return [
-        '你是 AILIS 的视觉理解能力，负责看用户给出的屏幕或窗口截图。',
-        '你只能基于截图和用户文字做理解、解释、归纳和建议，不要声称自己已经点击、输入、拖动或操作了屏幕。',
-        '回答要像正在陪用户一起看屏幕的角色，语气自然温和，不要写成工具报告。',
-        '优先说明你看到了什么、用户可能想解决什么、下一步可以怎么做；看不清或不确定时直接说明。'
-    ].join('\n');
-}
-
-function buildVisionUserContent(message, attachments) {
-    const labels = attachments.map((attachment) => attachment.label || '截图').join('、');
-    const text = [
-        `用户的话：${message || '请你看一下这张截图。'}`,
-        labels ? `截图来源：${labels}` : '',
-        '请结合截图回答用户，不要编造截图里没有的信息。'
-    ].filter(Boolean).join('\n');
-
-    return [
-        { type: 'text', text },
-        ...attachments.map((attachment) => ({
-            type: 'image_url',
-            image_url: {
-                url: attachment.dataUrl
-            }
-        }))
-    ];
-}
-
-function summarizeVisionAttachments(attachments) {
-    return attachments.map((attachment) => ({
-        type: attachment.type,
-        id: attachment.id,
-        source: attachment.source,
-        label: attachment.label,
-        mimeType: attachment.mimeType,
-        width: attachment.width,
-        height: attachment.height,
-        createdAt: attachment.createdAt
-    }));
-}
-
-function getVisionErrorText(result) {
-    if (result?.code === 'needs_config') {
-        return '我已经拿到截图了，不过还需要先在控制面板配置支持视觉输入的大模型 API，之后我就能直接看图回答。';
-    }
-    if (result?.code === 'timeout') {
-        return '我已经拿到截图了，但视觉模型这次看图超时了。可以先用矩形截图框小一点的区域，或者在控制面板把大模型超时时间调高后再试。';
-    }
-    if (result?.code === 'provider_error') {
-        return `截图已经准备好了，但当前模型接口没有成功理解这张图：${result.error || '接口返回错误'}。可以换成支持视觉的模型再试。`;
-    }
-    return `截图已经准备好了，但视觉理解暂时失败：${result?.error || '模型没有返回内容'}。`;
-}
-
-function getVisionCue(message) {
-    if (/报错|错误|异常|卡住|不对|问题/.test(message)) {
-        return {
-            action: 'thinking',
-            expression: 'surprised'
-        };
-    }
-    return {
-        action: 'thinking',
-        expression: 'relaxed'
-    };
 }
 
 function normalizeEmbodiedCommandText(value) {
@@ -504,50 +408,6 @@ export function createEmbodiedCommandPayload(message = '') {
         embodiedCommand: {
             type: 'dance',
             source: 'assistant_mode_short_command'
-        }
-    });
-}
-
-async function fetchVisionAssistantTurn(messageEntry, { sessionId = 'main', messageHistory = [] } = {}) {
-    if (typeof window.ailisDesktop?.llm?.chat !== 'function') {
-        throw new Error('当前桌面宿主不支持视觉大模型调用');
-    }
-
-    const message = normalizeText(messageEntry?.content);
-    const attachments = normalizeVisionAttachments(messageEntry?.attachments);
-    const result = await window.ailisDesktop.llm.chat({
-        includeAilisMemory: true,
-        memorySource: 'vision_direct_llm',
-        memoryUserMessage: message,
-        memoryAttachments: summarizeVisionAttachments(attachments),
-        sessionId,
-        messageHistory: sanitizeMessageHistoryForGateway(messageHistory),
-        messages: [
-            {
-                role: 'system',
-                content: buildVisionSystemPrompt()
-            },
-            {
-                role: 'user',
-                content: buildVisionUserContent(message, attachments)
-            }
-        ],
-        temperature: 0.45,
-        timeoutMs: VISION_LLM_TIMEOUT_MS
-    });
-    const cue = getVisionCue(message);
-    const replyText = result?.ok
-        ? (result.content || '我看到了截图，但模型没有给出更多内容。')
-        : getVisionErrorText(result);
-
-    return toAssistantPayload(replyText, {
-        ...cue,
-        desktopVision: {
-            ok: Boolean(result?.ok),
-            provider: result?.provider || '',
-            model: result?.model || '',
-            code: result?.code || '',
-            attachments: summarizeVisionAttachments(attachments)
         }
     });
 }
@@ -959,17 +819,6 @@ export class AILISDesktopChatService {
 
         const splitAttachments = splitChatAttachments(latestUserEntry?.attachments);
         const visionAttachments = splitAttachments.vision;
-        if (
-            this.runtimeKind === 'desktop' &&
-            visionAttachments.length &&
-            !splitAttachments.files.length
-        ) {
-            const payload = await fetchVisionAssistantTurn(latestUserEntry, {
-                sessionId,
-                messageHistory
-            });
-            return attachServerTtsIfRequested(payload, replyMode);
-        }
 
         const status = await this.ensureReady();
         let streamedAnswerText = '';
@@ -1007,18 +856,19 @@ export class AILISDesktopChatService {
                     message,
                     messageHistory: sanitizeMessageHistoryForGateway(messageHistory),
                     attachments: summarizeChatAttachmentsForGateway(latestUserEntry?.attachments),
+                    modelImageAttachments: visionAttachments.map((attachment) => ({
+                        image_url: attachment.dataUrl, detail: 'original'
+                    })),
                     agentLoop: 'llm',
                     directToolExecutor: true,
-                    maxAgentSteps: 4,
                     context: {
                         workspace: status.workspaceRoot,
                         runtimeKind: this.runtimeKind,
                         agentLoop: 'llm',
                         directToolExecutor: true,
-                        maxAgentSteps: 4,
-                        agentRole: 'persona_orchestrator',
-                        taskAgentRoutingOwned: true,
-                        deferTaskHandoff: false
+                        agentRole: 'unified_agent',
+                        unifiedAgent: true,
+                        taskAgentRoutingOwned: false
                     }
                 },
                 {
@@ -1252,100 +1102,36 @@ export class AILISDesktopChatService {
         mode = 'companion',
         decision = {}
     } = {}) {
-        const latestUser = [...messageHistory].reverse().find((message) => message?.role === 'user');
-        const isWorkMode = mode === 'cowork';
-        if (!isWorkMode) {
-            try {
-                const status = await this.ensureReady();
-                const latestUserText = normalizeText(latestUser?.content || latestUser?.text) || '日常陪伴';
-                const result = await this.gateway.runAgent({
-                    sessionId,
-                    message: latestUserText,
-                    messageHistory: sanitizeMessageHistoryForGateway(messageHistory),
+        const latestUser = [...messageHistory].reverse().find((entry) => entry?.role === 'user');
+        const turnContext = mode === 'cowork'
+            ? buildProactiveWorkReplySystemPrompt(decision)
+            : buildProactiveCompanionHeartbeatDeveloperMessage(messageHistory);
+        try {
+            const status = await this.ensureReady();
+            const result = await this.gateway.runAgent({
+                sessionId,
+                message: normalizeText(latestUser?.content || latestUser?.text) || '日常陪伴',
+                messageHistory: sanitizeMessageHistoryForGateway(messageHistory),
+                agentLoop: 'llm',
+                directToolExecutor: true,
+                suppressCurrentUserMessage: true,
+                ephemeralDeveloperMessage: turnContext,
+                context: {
+                    workspace: status.workspaceRoot,
                     agentLoop: 'llm',
                     directToolExecutor: true,
-                    maxAgentSteps: 1,
+                    agentRole: 'unified_agent',
+                    unifiedAgent: true,
                     suppressCurrentUserMessage: true,
-                    ephemeralDeveloperMessage: buildProactiveCompanionHeartbeatDeveloperMessage(messageHistory),
-                    context: {
-                        workspace: status.workspaceRoot,
-                        agentLoop: 'llm',
-                        directToolExecutor: true,
-                        maxAgentSteps: 1,
-                        agentRole: 'persona_orchestrator',
-                        suppressCurrentUserMessage: true,
-                        ephemeralDeveloperMessage: buildProactiveCompanionHeartbeatDeveloperMessage(messageHistory)
-                    }
-                });
-                const payload = toAILISPayload(result);
-                const text = normalizeMarkdownSource(payload.display_text || '');
-                if (!text) {
-                    return {
-                        ok: false,
-                        reasonType: 'empty_reply'
-                    };
+                    ephemeralDeveloperMessage: turnContext
                 }
-                return {
-                    ok: true,
-                    text,
-                    model: result?.model || result?.llm?.model || ''
-                };
-            } catch (error) {
-                return {
-                    ok: false,
-                    reasonType: error?.code || 'reply_generation_failed',
-                    error: error?.message || String(error)
-                };
-            }
+            });
+            const text = normalizeMarkdownSource(toAILISPayload(result).display_text || '');
+            if (!text) return { ok: false, reasonType: 'empty_reply' };
+            return { ok: result.ok !== false, text, model: result.model || result.llm?.model || '' };
+        } catch (error) {
+            return { ok: false, reasonType: error?.code || 'reply_generation_failed', error: error?.message || String(error) };
         }
-        const conversationMessages = messageHistory
-            .filter((message) => ['user', 'assistant'].includes(message?.role))
-            .map((message) => ({
-                role: message.role,
-                content: normalizeMarkdownSource(message.content || message.text || '')
-            }))
-            .filter((message) => message.content);
-        const result = await window.ailisDesktop.llm.chat({
-            includeAilisMemory: true,
-            recordMemory: false,
-            memorySource: 'proactive_work_reply',
-            memoryUserMessage: normalizeText(latestUser?.content || latestUser?.text) ||
-                '工作模式主动反馈',
-            messageHistory,
-            sessionId,
-            messages: [
-                {
-                    role: 'system',
-                    content: buildProactiveWorkReplySystemPrompt(decision)
-                },
-                ...conversationMessages
-            ],
-            jsonMode: false,
-            expectJson: false,
-            outputFormat: 'text',
-            temperature: 0.82,
-            maxTokens: 700,
-            timeoutMs: PROACTIVE_LLM_TIMEOUT_MS
-        });
-        if (!result?.ok) {
-            return {
-                ok: false,
-                reasonType: result?.code || 'reply_generation_failed',
-                error: result?.error || ''
-            };
-        }
-        const text = normalizeMarkdownSource(result.content || '');
-        if (!text) {
-            return {
-                ok: false,
-                reasonType: 'empty_reply'
-            };
-        }
-        return {
-            ok: true,
-            text,
-            model: result.model || ''
-        };
     }
 
     async abortCurrentTurn({ sessionId = '', reason = 'chat_user_interrupt' } = {}) {

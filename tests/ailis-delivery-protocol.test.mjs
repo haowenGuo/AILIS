@@ -15,8 +15,9 @@ const {
 const {
     buildAgentDirectToolSpecs,
     buildTaskRunHandoffPackage
-} = require('../electron/ailis-agent-runner.cjs');
+} = require('../electron/agent-loop/index.cjs');
 const { AILISGateway } = require('../electron/ailis-gateway.cjs');
+const { getCodeModeProfile } = require('../electron/codex-code-mode-protocol.cjs');
 const { buildTaskResultPacket } = require('../electron/ailis-task-agent-harness.cjs');
 
 const requiredPolicy = {
@@ -143,7 +144,8 @@ test('task_verify is exposed only when the host enables the delivery protocol', 
     const ordinary = buildAgentDirectToolSpecs(gateway, {
         requestContext: { agentRole: 'task_agent' }
     });
-    assert.deepEqual(ordinary.map((entry) => entry.name), ['read']);
+    assert.deepEqual(ordinary.map((entry) => entry.name), ['exec', 'exec_wait']);
+    assert.deepEqual(getCodeModeProfile(ordinary[0].x_ailis_code_mode_profile).map((entry) => entry.name), ['read']);
 
     const engineering = buildAgentDirectToolSpecs(gateway, {
         requestContext: {
@@ -151,7 +153,8 @@ test('task_verify is exposed only when the host enables the delivery protocol', 
             deliveryProtocol: requiredPolicy
         }
     });
-    assert.deepEqual(engineering.map((entry) => entry.name), ['task_verify', 'read']);
+    assert.deepEqual(engineering.map((entry) => entry.name), ['exec', 'exec_wait', 'task_verify']);
+    assert.deepEqual(getCodeModeProfile(engineering[0].x_ailis_code_mode_profile).map((entry) => entry.name), ['read']);
 });
 
 test('task_verify wraps command execution in structured pass and fail observations', async () => {
