@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "description": "Reviewed first-party product boundaries. Reachable means potentially needed, not observed executed. External runtimes remain separately installed requirements.",
+  "profiles": {
+    "desktop": {
+      "entries": ["electron/main.cjs"],
+      "pages": {"agentLab": "agent-lab.html", "control": "control.html", "pet": "pet.html", "chat": "chat.html", "visionRegion": "vision-region.html"},
+      "tests": ["tests/ailis-unified-agent.test.mjs", "tests/ailis-code-mode-packaging.test.mjs", "tests/ailis-runtime.test.mjs", "tests/ailis-production-closure.test.mjs"]
+    },
+    "hosted": {"entries": ["scripts/start-ailis-hosted-runtime.cjs"], "pages": {}, "tests": ["tests/ailis-hosted-runtime.test.mjs"]},
+    "website": {"entries": [], "pages": {"index": "index.html"}, "tests": []},
+    "demo": {"entries": [], "pages": {"test": "Test/index.html"}, "tests": ["tests/browser-speech-recognition.test.mjs"]}
+  },
+  "edges": [
+    {"from": "electron/main.cjs", "to": ["electron/preload.cjs", "installer/ailis-runtime-components.json"], "reason": "Electron preload boundary and runtime component installer manifest"},
+    {"from": "electron/ailis-code-mode-runtime.cjs", "to": ["electron/ailis-code-mode-worker.cjs"], "reason": "forked code-mode process; not a require/import"},
+    {"from": "electron/local-asr-manager.cjs", "to": ["electron/desktop_asr_worker.py"], "reason": "Python ASR process"},
+    {"from": "electron/desktop-cosyvoice3-tts.cjs", "to": ["electron/cosyvoice3_tts_worker.py"], "reason": "Python streaming TTS process"},
+    {"from": "electron/ailis-runtime.cjs", "to": ["scripts/mcp-ailis-research-server.cjs"], "reason": "built-in research MCP subprocess configured by file path"},
+    {"from": "scripts/mcp-ailis-research-server.cjs", "to": ["scripts/ailis-crawl4ai-worker.py", "scripts/ailis-python-search-worker.py"], "reason": "web research Python workers"},
+    {"from": "electron/ailis-artifact-import-tool.cjs", "to": ["scripts/ailis-ragflow-lite-worker.py"], "reason": "legacy stored-artifact table import is still registered"},
+    {"from": "scripts/ailis-ragflow-lite-worker.py", "to": ["vendor/ragflow-lite/upstream/common__constants.py", "vendor/ragflow-lite/upstream/deepdoc__parser__utils.py", "vendor/ragflow-lite/upstream/deepdoc__parser__excel_parser.py", "vendor/ragflow-lite/upstream/rag__app__table.py", "vendor/ragflow-lite/LICENSE.ragflow"], "reason": "four explicit load_module targets plus upstream license; Python dependencies installed separately"},
+    {"from": "electron/codex-native-instructions.cjs", "to": ["electron/prompts/codex-gpt-5.6.instructions.md"], "reason": "model instruction resource read from disk"},
+    {"from": "electron/ailis-gateway.cjs", "to": ["electron/ailis-web-run-description.md"], "reason": "web tool description read from disk"},
+    {"from": "electron/ailis-sensitive-word-classifier.cjs", "to": ["electron/safety/ember-sensitive-lexicon.json"], "reason": "current safety lexicon, not legacy ONNX classifier"},
+    {"from": "electron/ailis-skills.cjs", "directories": ["electron/skills"], "reason": "dynamic skill ID enumeration; preserve every bundled skill and its resources"}
+  ],
+  "externalLoads": [
+    {"from": "electron/ailis-gateway.cjs", "expression": "import(pathToFileURL(harnessPath).href)", "reason": "optional OpenClaw SDK agent-harness in separately prepared build-cache/openclaw-runtime; not bundled or validated by source closure"},
+    {"from": "electron/openclaw-runtime.cjs", "expression": "import(pathToFileURL(runtimePath).href)", "reason": "optional OpenClaw gateway SDK, selected from installed runtime candidates; no hermeticity claim for this path"}
+  ],
+  "runtimeRequirements": [
+    "Electron and production npm dependencies, including the selected Stockfish engine binary",
+    "Python dependencies for research, RAGFlow table import, ASR and TTS; the source subset does not install interpreters or model weights",
+    "Configured provider, external MCP servers and optional OpenClaw SDK are runtime integrations, not first-party source files",
+    "Renderer VRM/motion/public assets are emitted by the existing asset build; not inferred from JS imports alone"
+  ]
+}

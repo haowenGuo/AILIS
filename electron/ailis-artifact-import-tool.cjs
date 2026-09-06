@@ -191,7 +191,10 @@ async function executeArtifactImportTool(args = {}, context = {}, runtime = {}) 
     }
 
     const projectRoot = runtime.projectRoot || path.resolve(__dirname, '..');
-    const workerPath = path.join(projectRoot, 'scripts', 'ailis-ragflow-lite-worker.py');
+    // Python cannot read Electron's virtual ASAR filesystem. The worker and its
+    // relative vendor imports are packaged together in app.asar.unpacked.
+    const workerProjectRoot = projectRoot.replace(/([\\/])app\.asar(?=[\\/]|$)/, '$1app.asar.unpacked');
+    const workerPath = path.join(workerProjectRoot, 'scripts', 'ailis-ragflow-lite-worker.py');
     if (!fs.existsSync(workerPath)) {
         return createErrorResult('worker_not_found', `RAGFlow-lite worker not found: ${workerPath}`, { action, workerPath });
     }
@@ -200,8 +203,8 @@ async function executeArtifactImportTool(args = {}, context = {}, runtime = {}) 
     const language = normalizeString(args.language || args.lang, 'Chinese');
     const timeoutMs = normalizeNumber(args.timeoutMs || args.timeout_ms, DEFAULT_WORKER_TIMEOUT_MS, 1000, 10 * 60 * 1000);
     const python = normalizeString(args.python || process.env.AILIS_RAGFLOW_PYTHON || process.env.PYTHON, 'python');
-    const pydeps = path.join(projectRoot, 'vendor', 'ragflow-lite', 'python-deps');
-    const nltkData = path.join(projectRoot, 'vendor', 'ragflow-lite', 'nltk-data');
+    const pydeps = path.join(workerProjectRoot, 'vendor', 'ragflow-lite', 'python-deps');
+    const nltkData = path.join(workerProjectRoot, 'vendor', 'ragflow-lite', 'nltk-data');
     const workerArgs = [
         workerPath,
         'table',
@@ -217,7 +220,7 @@ async function executeArtifactImportTool(args = {}, context = {}, runtime = {}) 
     let stderr = '';
     try {
         const executed = await execFileAsync(python, workerArgs, {
-            cwd: projectRoot,
+            cwd: workerProjectRoot,
             timeout: timeoutMs,
             maxBuffer: 16 * 1024 * 1024,
             env: {

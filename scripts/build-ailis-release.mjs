@@ -193,7 +193,7 @@ function buildPlanForProfile(profileName, profile, options, componentManifest, o
         commands.push({
             label: 'Build frontend assets',
             cmd: 'pnpm',
-            args: ['build']
+            args: ['build:desktop']
         });
     }
     if (profile.buildRuntimePacks && !options.skipRuntimePacks && runtimeComponents.length) {
