@@ -184,7 +184,9 @@
     },
     {
       "file": "Resources/Emotes/ailis/happy.svg",
-      "sha256": "e589aba54cc472692451e3f0a86da47320ec9c727e594e6a0902b386293b31b9"
+      "sha256": "94baf0b03d96a3eeb5b0a2dde9ef009e902e419578f8f63846d641ec30c02cb1",
+      "beforeGitNormalizationSha256": "e589aba54cc472692451e3f0a86da47320ec9c727e594e6a0902b386293b31b9",
+      "transform": "CRLF to LF during initial Git staging; published blob hash is authoritative"
     },
     {
       "file": "Resources/Emotes/ailis/hug.png",
@@ -208,7 +210,9 @@
     },
     {
       "file": "Resources/Emotes/ailis/love.svg",
-      "sha256": "3ad729fbd536964f476b1a7b626728c530a78ca2447cb8769f53f3acbcc1d74f"
+      "sha256": "082046666e2af2f47951c05fdaceae66621135da411d8e369105b935662841ab",
+      "beforeGitNormalizationSha256": "3ad729fbd536964f476b1a7b626728c530a78ca2447cb8769f53f3acbcc1d74f",
+      "transform": "CRLF to LF during initial Git staging; published blob hash is authoritative"
     },
     {
       "file": "Resources/Emotes/ailis/neutral.png",
@@ -224,7 +228,9 @@
     },
     {
       "file": "Resources/Emotes/ailis/README.md",
-      "sha256": "8e242af26339a83f51053385441c4e6ac1c1bc2c4676d144ce1c88dbd24b1297"
+      "sha256": "e5c6f39f411bb313e248b17071bd62117b90b2300aaacc85b3b9f795506154be",
+      "beforeGitNormalizationSha256": "8e242af26339a83f51053385441c4e6ac1c1bc2c4676d144ce1c88dbd24b1297",
+      "transform": "CRLF to LF during initial Git staging; published blob hash is authoritative"
     },
     {
       "file": "Resources/Emotes/ailis/sad.png",
@@ -232,7 +238,9 @@
     },
     {
       "file": "Resources/Emotes/ailis/sad.svg",
-      "sha256": "a628c5bdc1cf0ac783ed1e742f0ab86f1f16493d226be69c79c755887df60a93"
+      "sha256": "4fdf9cf77e1ae448500d7414a0cc09deb87ecf8c93ac2095970e7ce5a480c3ca",
+      "beforeGitNormalizationSha256": "a628c5bdc1cf0ac783ed1e742f0ab86f1f16493d226be69c79c755887df60a93",
+      "transform": "CRLF to LF during initial Git staging; published blob hash is authoritative"
     },
     {
       "file": "Resources/Emotes/ailis/shy.png",
@@ -240,7 +248,9 @@
     },
     {
       "file": "Resources/Emotes/ailis/shy.svg",
-      "sha256": "26f5e7c54a4e70de66242f29184d676714e3526a0073e4c3ad4ecfd9139eef85"
+      "sha256": "1857f0792159c71d67e526e8b7e0f355b93f536cf49eb565bf9a27199496c608",
+      "beforeGitNormalizationSha256": "26f5e7c54a4e70de66242f29184d676714e3526a0073e4c3ad4ecfd9139eef85",
+      "transform": "CRLF to LF during initial Git staging; published blob hash is authoritative"
     },
     {
       "file": "Resources/Emotes/ailis/sleepy.png",
@@ -252,7 +262,9 @@
     },
     {
       "file": "Resources/Emotes/ailis/sparkle.svg",
-      "sha256": "fe2e5854fc39c382fca5e39895d4db1d30fc7cd8bf056851677710f3ed18473f"
+      "sha256": "2331edaa2e2c3a1ba182b7215d30672775f5c5acb284121a3b96e71783d12782",
+      "beforeGitNormalizationSha256": "fe2e5854fc39c382fca5e39895d4db1d30fc7cd8bf056851677710f3ed18473f",
+      "transform": "CRLF to LF during initial Git staging; published blob hash is authoritative"
     },
     {
       "file": "Resources/Emotes/ailis/surprised.png",
@@ -260,7 +272,9 @@
     },
     {
       "file": "Resources/Emotes/ailis/surprised.svg",
-      "sha256": "abaf07d285f52fa0e956e11eaca209003fda1cbec1d82fb996b7a140d72d42b0"
+      "sha256": "bab4d9707901b535a3a651a32e317d1bd8f63a8fda12cdd276bd159f35230f78",
+      "beforeGitNormalizationSha256": "abaf07d285f52fa0e956e11eaca209003fda1cbec1d82fb996b7a140d72d42b0",
+      "transform": "CRLF to LF during initial Git staging; published blob hash is authoritative"
     },
     {
       "file": "Resources/Emotes/ailis/sweat.png",
@@ -600,6 +614,7 @@
     "source/manual and binary release distinction",
     "historical benchmark attribution",
     "language navigation and compatibility aliases",
-    "HTML LF line endings and trailing whitespace normalization"
+    "HTML LF line endings and trailing whitespace normalization",
+    "Record published Git blob hashes for seven initially newline-normalized sticker text resources; retain pre-normalization hashes"
   ]
 }
