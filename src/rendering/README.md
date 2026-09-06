@@ -1,9 +1,12 @@
-# AILIS Rendering
+# 浏览器侧角色渲染
 
-这里是浏览器侧 3D 角色渲染的公共边界。
+[index.js](index.js)是公共导出边界，暴露 `VRMModelSystem`、对话气泡事件／安装方法和鼠标命中测试安装方法。
 
-- `index.js`：页面入口唯一需要依赖的渲染 API。
-- `vrm-model-system.js`：Three.js 场景、VRM 加载、相机、灯光、动画混合和逐帧渲染。
-- `../character/`：角色状态机、动作调度、表情、MToon 配置和 Persona Surface 到角色行为的映射。
+- [vrm-model-system.js](vrm-model-system.js)：场景、VRM、相机、灯光、动画与渲染。
+- [../character/](../character)：状态机、动作／表情调度、screenplay 与渲染 profile。
+- [../pet-app.js](../pet-app.js)：桌宠页面消费入口。
+- [../../Test/app.js](../../Test/app.js)：独立浏览器演示入口，不属于默认桌面包。
 
-桌宠页面入口是 `../pet-app.js`；`../../Test/app.js` 是独立渲染测试页入口。未接入页面的 `src/app.js` 和旧转发入口已删除。完整阅读路线见 [`../../docs/ailis-core-loop-reading-guide.zh-CN.md`](../../docs/ailis-core-loop-reading-guide.zh-CN.md)。
+角色呈现不是另一个模型改写主 Agent 答案。修改时分别验证正文保持、语音文本和动作映射，并进行实际画面验收；结构测试不能证明没有穿模或掉帧。
+
+配置、资源、许可与验证范围统一在 [语音和角色手册](../../docs/voice-and-avatar.md)维护，不在这里复制第二套架构。

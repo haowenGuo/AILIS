@@ -1,128 +1,56 @@
-<div align="center">
-  <img width="220" alt="AILIS waving" src="Resources/Emotes/ailis/wave.png">
-  <h1>AILIS</h1>
-  <p><strong>An open-source desktop AI companion that can see, listen, remember, and get real work done.</strong></p>
-  <p>
-    <img alt="Version" src="https://img.shields.io/badge/version-1.4.1-2563eb?style=flat-square">
-    <img alt="Desktop" src="https://img.shields.io/badge/desktop-Electron-0f172a?style=flat-square">
-    <img alt="License" src="https://img.shields.io/badge/license-MIT-059669?style=flat-square">
-  </p>
-  <p>
-    <a href="https://101.133.239.56/Test/"><strong>Try AILIS</strong></a> ·
-    <a href="https://github.com/haowenGuo/AILIS/releases"><strong>Download</strong></a> ·
-    <a href="docs/getting-started.md">Quick Start</a> ·
-    <a href="docs/README.md">Documentation</a>
-  </p>
-  <p>
-    <a href="README.md">English</a> ·
-    <a href="README.zh-CN.md">简体中文</a> ·
-    <a href="README.ja.md">日本語</a> ·
-    <a href="README.ko.md">한국어</a> ·
-    <a href="README.fr.md">Français</a> ·
-    <a href="README.de.md">Deutsch</a>
-  </p>
-</div>
+# AILIS
 
-## More Than a Chat Window
+AILIS is a desktop agent with a VRM avatar, text and voice interaction, tools, and persistent memory. The desktop main conversation uses **one agent and one durable Session** for dialogue, tool execution, and the final answer. Personality is configuration, not an automatic second model that rewrites task results.
 
-AILIS is designed to become a personal AI that actually lives on your desktop. She has a visible 3D character, voice, expressions, and long-term memory, backed by an Agent Runtime that can research, read files, write code, organize content, and operate computer tools.
+[中文](README.zh-CN.md) · [日本語](README.ja.md) · [한국어](README.ko.md) · [Français](README.fr.md) · [Deutsch](README.de.md)
 
-Talk to AILIS naturally, like a companion. When there is work to do, she can understand approved screen and file context, choose the right tools, complete the task, and remember the preferences that matter next time.
+## Source identity
 
-## Core Experience
+The package version is **1.4.1**. This documentation was checked against source commit `00b3244d67a6c63906f674a1b4c3746e4c362d78` in the independent consolidation worktree on 2026-09-06. It is not a claim that every installed 1.4.1 package or concurrent worktree contains the same code.
 
-<table>
-  <tr>
-    <td width="33%" valign="top"><h3>Visible</h3>A VRM desktop character with expressions, motions, lip sync, and dialogue bubbles. AI no longer has to feel like an empty text box.</td>
-    <td width="33%" valign="top"><h3>Conversational</h3>Voice input and natural speech output are available alongside quiet, fast text interaction.</td>
-    <td width="33%" valign="top"><h3>Context-aware</h3>With permission, AILIS can understand screens, windows, captured regions, and local files without making you repeat the context.</td>
-  </tr>
-  <tr>
-    <td width="33%" valign="top"><h3>Capable</h3>Search, code, files, web, email, and computer actions share one auditable tool execution path.</td>
-    <td width="33%" valign="top"><h3>Memorable</h3>Long-term memory keeps useful preferences, project background, and relationship context for better collaboration.</td>
-    <td width="33%" valign="top"><h3>Controllable</h3>Important tool actions enter approval and audit flows, so users know what the system plans to do and what it has done.</td>
-  </tr>
-</table>
+```powershell
+git rev-parse HEAD
+git status --short
+```
 
-## How AILIS Works
+## Start from source
 
-| 1. Describe | 2. Understand | 3. Execute | 4. Remember |
-| :---: | :---: | :---: | :---: |
-| Explain the goal naturally | Read approved screen and file context | Use search, code, file, and computer tools | Keep useful preferences and project background |
+The repository pins pnpm 10.33.0; the recorded local validation used Node 22.17.1. From this repository root:
 
-## Evaluated Agent Capability
-
-AILIS is tested on complete end-to-end tasks, not only feature demos. The following are historical, frozen-source results (GAIA A6 and Terminal A7), not a benchmark certification of v1.4.1. See the [version and evidence registry](docs/ailis-version-registry.md) for source identities and comparison protocols.
-
-| Benchmark | AILIS | Codex, same model |
-| :--- | ---: | ---: |
-| **GAIA public validation · 165 tasks** | **72.12%** | 64.85% |
-| **Terminal-Bench 2.1 · 89 tasks** | 67.42% | **75.73% ± 1.32%** |
-
-<p align="center">
-  <strong>ToolSandbox 71.51%</strong> ·
-  <strong>LongMemEval-S 71.60%</strong> ·
-  <strong>PersonaMem 65.71%</strong>
-</p>
-
-<p align="center">
-  <a href="docs/evaluation.md"><strong>View complete scores, efficiency metrics, and reproducible evidence</strong></a>
-</p>
-
-## What Works Today
-
-- [x] A resident VRM character, chat window, and control panel on Windows
-- [x] Realtime interaction through text, voice, expressions, and motion
-- [x] Permission-aware screen, window, file, and code context
-- [x] Search, web, code, file, email, and computer-operation tools
-- [x] Long-term memory for preferences, projects, and relationship context
-- [x] Approval, evidence, and recovery paths for consequential tool actions
-- [ ] Stronger reliability, caching, and recovery for long-horizon work
-- [ ] A more complete realtime voice, cross-device, and plugin experience
-
-## Quick Start
-
-### v1.4.1 update
-
-The latest release brings stable append-only context handling, a governed code-mode tool runtime, auxiliary vision routing, and fixes that preserve attachment context during compaction and Korean voice-profile settings. See the [release notes](docs/releases/v1.4.1.md) for upgrade instructions and limits. Cache hit rates and cost savings depend on the provider and workload; no fixed reduction is promised.
-
-### Use AILIS
-
-Download the desktop build from [Releases](https://github.com/haowenGuo/AILIS/releases), or meet AILIS first through the [web experience](https://101.133.239.56/Test/).
-
-### Develop Locally
-
-```bash
-pnpm install
+```powershell
+pnpm install --frozen-lockfile
 pnpm desktop:dev
 ```
 
-Desktop builds, voice, validation, the optional backend, and packaging are documented in the [Getting Started guide](docs/getting-started.md).
+For a production frontend followed by Electron startup, use `pnpm desktop:start`. These commands install dependencies or start processes and write state; they do not update an existing installed app. Configure the main model in the control panel before testing. Cloud availability, credentials and optional local runtimes are separate requirements.
 
-## Direction
+## What is here
 
-AILIS is neither a roleplay chat app with no execution ability nor a terminal wrapped in an avatar. The project brings three ideas together:
+- Electron desktop: control panel, chat, pet, Agent Lab and screen-region selector.
+- Gateway and Agent loop: model decisions, tool contracts, approvals, output references and Session checkpoints.
+- Memory: persistent context, curated profiles and budgeted background retrieval.
+- Optional voice, vision, MCP, local tools and asset packs.
+- Separate Hosted Node, Python APIs, website and browser demo. They are not all bundled into the desktop product.
 
-1. **A digital companion with presence**: conversation, voice, expression, relationships, and long-term memory.
-2. **A reliable personal Agent**: contextual understanding, general tools, and long-horizon task execution.
-3. **An understandable, controllable execution system**: approved actions, traceable progress, and recoverable failures.
+## Current manual
 
-## Learn More
+The technical manual is maintained as one Chinese source-of-truth set to avoid divergent translations:
 
-<p align="center">
-  <a href="docs/getting-started.md"><strong>Install and Configure</strong></a> ·
-  <a href="docs/README.md"><strong>Documentation Center</strong></a> ·
-  <a href="docs/evaluation.md"><strong>Complete Evaluation Scorecard</strong></a>
-</p>
+- [Documentation index](docs/README.md)
+- [Getting started](docs/getting-started.md) and [configuration / isolation](docs/configuration.md)
+- [Architecture](docs/architecture.md), [Agent / Session](docs/agent-session.md), [tools](docs/tools.md), [memory](docs/memory.md)
+- [Voice and avatar](docs/voice-and-avatar.md)
+- [Development](docs/development.md), [production packaging](docs/production-runtime.md), [backend](docs/backend-and-hosted.md)
+- [Evaluation definitions](docs/evaluation.md) and [troubleshooting](docs/troubleshooting.md)
 
-## Community
+## Limits and safety
 
-If AILIS is useful to you, star the repository to follow its progress. Bug reports, workflow ideas, and focused pull requests are welcome through [Issues](https://github.com/haowenGuo/AILIS/issues) and the [contribution guide](CONTRIBUTING.md).
+A stable Session does not guarantee cache hits or perfect recall. Current compaction, deployment and storage limitations are documented rather than presented as completed features. We do not reuse historical benchmark scores as measurements of this source snapshot.
 
-## Privacy and Control
+Tools may access files, networks, accounts and the operating system. Local storage does not imply that selected context never leaves the device. Protect settings, credentials, conversation logs and attachments; Base64-encoded memory secrets are not encrypted storage.
 
-AILIS is built for personal desktop use. Visual context requires permission, actions that affect files, apps, accounts, or external services enter an approval flow, and local memory and runtime state remain on the user's machine by default. Only context needed for the current request is sent to the configured model service.
+Old release notes and design reports remain recoverable from Git. [Migration and recovery scope](docs/README.md) explains what was removed from the current manual and what runtime/content resources were deliberately preserved.
 
-## License
+## Contributing and license
 
-AILIS source code is released under the [MIT License](LICENSE). Some third-party models, motions, voice assets, and character resources may use their own licenses.
+See [CONTRIBUTING](CONTRIBUTING.md) and [AGENTS.md](AGENTS.md). First-party code is declared MIT in [package.json](package.json); see [LICENSE](LICENSE). Third-party code, models, voices and motion assets retain their own terms. A runnable asset is not automatically licensed for redistribution.

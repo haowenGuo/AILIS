@@ -1,14 +1,20 @@
-## What changed
+## 目标与范围
 
-Describe the problem and the focused change.
+描述实际改变的行为、受影响入口，以及明确不改的部分。
 
-## Validation
+## 验证证据
 
-- [ ] Relevant automated tests pass
-- [ ] Visible changes include screenshots or recordings
-- [ ] No credentials, private memory, or generated evaluation outputs are included
-- [ ] Harness changes include regression and efficiency evidence
+- 基线 commit／环境：
+- 已运行的命令与结果：
+- 既有失败／新增失败／跳过：
+- 未验证的真实模型、桌面、语音或外部服务：
 
-## Compatibility
+## 契约与恢复
 
-List any migration, packaging, provider, tool-contract, or memory-state impact.
+- [ ] 主 Agent／Session、工具契约和权限边界已核对。
+- [ ] 涉及动态 worker／资源时已更新生产入口清单并验证包内路径，或说明不适用。
+- [ ] 数据写入、迁移、网络调用、恢复方式已说明。
+- [ ] 当前手册已同步；没有把历史分数当成新版实测。
+- [ ] 未提交凭据、私人状态、受限数据或未核验许可的资产。
+
+参考 [贡献约定](../CONTRIBUTING.md) 和 [开发手册](../docs/development.md)。

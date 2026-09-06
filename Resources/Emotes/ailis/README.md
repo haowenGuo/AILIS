@@ -1,15 +1,9 @@
-# AILIS Emote Stickers
+# AILIS 对话贴纸
 
-These AILIS emote stickers are generated from the project character reference and used by the program-level emoji replacement pipeline.
+这些贴纸的原稿记录为根据项目角色参考生成的素材，用于对话中的 emoji／表情呈现。当前实际映射由 [src/ailis-emote-stickers.js](../../../src/ailis-emote-stickers.js) 中的 `AILIS_EMOTE_STICKERS` 决定，映射使用本目录 PNG；目录中的其他文件不等于都会被加载。
 
-The active assets are transparent PNG files referenced by `src/ailis-emote-stickers.js`. The SVG files are lightweight placeholders/fallback references.
+增加或替换贴纸时同步核对资源路径和映射，并检查透明背景、缩小后的辨识度以及布局。不要把表情替换扩展成对 Agent 正文事实或用户称呼的改写。
 
-Current set: 30 transparent PNG stickers covering common LLM emoji output, including smile, shy, sparkle, love, sad, surprised, laugh, wink, kiss, cool, thinking, confused, sweat, worried, cry, angry, sleepy, calm, proud, party, thumbs up, clap, thanks, wave, hug, dizzy, neutral, eyes, idea, and facepalm.
+建议源图保持透明背景、无文字水印，在约 28–36 CSS 像素显示时仍可辨识。建议尺寸是制作规范，不是运行时自动校验保证。
 
-Recommended final asset specs:
-
-- Transparent PNG or WebP.
-- 512x512 source size.
-- Keep the face readable at 28-36 CSS pixels.
-- No text, watermark, speech bubble, or hard background.
-- Keep expression categories stable: `happy`, `shy`, `sparkle`, `love`, `sad`, `surprised`.
+保留新增素材的生成／来源和使用许可记录；本说明不为未核验的第三方图片赋予再分发许可。更多呈现边界见 [角色手册](../../../docs/voice-and-avatar.md)。

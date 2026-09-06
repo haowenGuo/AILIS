@@ -1,45 +1,19 @@
-# AILIS Motion Intake
+# 动作候选资源与审核
 
-这个目录用于管理 AILIS 的动作资产候选池。原则是：所有新动作先进入候选池并标注来源、许可、风格、女性化评分、穿模风险和是否通过审核；只有肉眼验收通过的动作才允许进入稳定 Runtime。
+本目录是候选动作资产池。实际账本是 [motion-intake-catalog.js](../../src/character/motion-intake-catalog.js) 与 [external-candidates](../../src/character/motion-intake-external-candidates.js)；稳定动作消费见 [motion-library.js](../../src/character/motion-library.js)。
 
-## 目录约定
+## 添加一个候选
 
-- `candidates/`: 用户下载或购买后的原始动作包解压目录。
-- `download-attempts.json`: 记录来源页面、下载链接、许可声明和当前下载状态。
-- `src/character/motion-intake-catalog.js`: Runtime 使用的动作资产账本。
+1. 在 `candidates/<source-id>/` 保留来源、原始许可和下载／购买凭据，不把凭据公开提交。
+2. 登记路径、source、license、style、feminineScore、clippingRisk、approved 等账本字段；未完成核验不要冒充正式可发布资源。
+3. 在仓库根执行 `pnpm motion:intake:scan`，需要结构核验时执行 `pnpm motion:intake:verify`。
+4. 逐项检查本地文件、动作注册、身体／衣服／头发穿模、镜头构图、动作节奏与角色风格。
+5. 单独核验授权范围和是否允许随包分发；程序中的 approved 不能代替许可审查。
 
-## 状态流转
+## 必须保留的来源边界
 
-1. 下载或购买动作包，保存到 `Resources/MotionIntake/candidates/<source-id>/raw/`。
-2. 解压后只把准备测试的 `.vrma` 放到 `Resources/MotionIntake/candidates/<source-id>/vrma/`。
-3. 在 `src/character/motion-intake-catalog.js` 新增动作条目，必须填写：
-   - `source`
-   - `license`
-   - `style`
-   - `feminineScore`
-   - `clippingRisk`
-   - `approved`
-4. 运行 `pnpm motion:intake:verify`，确保账本、文件和 Runtime 注册一致。
-5. 在桌面端打开“角色验收”面板，逐个观看候选动作。
-6. 只有满足以下条件才把 `approved` 改为 `true`：
-   - AILIS 身体、衣服、头发、手臂没有明显穿模。
-   - 动作风格符合 AILIS：柔和、女性化、二次元助手感。
-   - 镜头内构图稳定，不会大幅出框。
-   - 不会显著打断对话节奏。
-   - 许可允许当前使用场景。
+账本将 VRoid official 动作与 Sachi／fumi2kick 候选分开记录。VRoid 条款不等于 CC0；Sachi／fumi2kick 的 CC0 描述仍要求核对取得的包内条款。历史 Sachi ZIP 曾有损坏记录，抽取到部分文件不等于拥有完整归档。
 
-## 当前免费来源
+旧命名动作中有 `approved: true` 但 `license: unknown-local-file` 的条目。发布前应解决这些授权缺口，而不是因为当前能播放就统一声明可再分发。相关原始 README／许可文件保留不变。
 
-- `[CC0] Sachi VRMA 1`: BOOTH 商品页可访问，但匿名访问 `downloadables/5713997` 会跳转登录。
-- `fumi2kick VRMA motion pack`: BOOTH 商品页可访问，但匿名访问 `downloadables/4234181` 会跳转登录。
-- `VRoid official 7 VRMA`: 本地 `Resources/VRMA_MotionPack` 已包含对应 readme 和 `VRMA_01` 到 `VRMA_07` 文件；许可不是 CC0，需遵守 VRoid Project 条款。
-
-## 2026-06-03 本地导入
-
-- `F:/新建文件夹/SachiVRMA1.zip` 已复制到 `candidates/sachi-vrma-1/raw/`。该 zip 的中央目录损坏，`Expand-Archive` 无法完整打开；`tar` 成功抽出 `capture_vrma` 下 42 个 `.vrma`，但在后续 Blender 源文件处失败。因此这些 VRMA 可以进入候选验收，但在重新下载健康压缩包前，不应视为完整归档。
-- `F:/新建文件夹/fm_vrma_motion_pack_01.zip` 已完整解压到 `candidates/fumi2kick-vrma-motion-pack/extracted/`，包含 8 个 `.vrma`。
-- 两个包的动作均已登记到 `src/character/motion-intake-external-candidates.js`，默认 `approved: false`。
-
-## 付费动作包导入原则
-
-付费包也走同一流程，不允许直接改稳定动作映射。先进入候选池，标注购买来源和许可摘要，再由验收面板肉眼通过后进入稳定 Runtime。
+[scan-motion-intake.mjs](../../scripts/scan-motion-intake.mjs)核对结构和本地文件／注册关系，不会替你完成视觉或法律授权判断。参见 [角色手册](../../docs/voice-and-avatar.md)。

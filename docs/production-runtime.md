@@ -1,75 +1,84 @@
-# 生产代码提取与精简
+# 构建、运行子集和安装包
 
-2026-09-06，独立工作树 `F:\AILIS\code-consolidation-20260904`。本轮基线为 `f6b89ad32a47ab3434352b046a221fe9edef925a`，没有部署、替换已安装应用或写入主仓。
+[手册索引与源码基线](README.md) · [生成的桌面清单](generated/desktop-runtime.md)
 
-## 已落地的边界
+## 三个范围分别报告
 
-生产范围以 `runtime/production-entrypoints.json` 为准，不再把所有脚本、测试页面都当成桌面入口。
+源仓包含桌面、Hosted、网站、演示、后端、测试与工具链。桌面闭包只保留该产品可能需要的文件。安装包还需要构建后的前端、Electron、生产 npm 依赖、原生二进制以及可选外部运行时。
 
-| 产品边界 | 内容 | 处理 |
-| --- | --- | --- |
-| desktop | 主进程、preload、聊天、控制台、角色、区域选择、Agent Lab | 正式桌面构建/提取/打包 |
-| hosted | 独立托管服务 | 代码保留，单独审计，不混入桌面包 |
-| website | 官网入口 | 普通 web 构建保留，桌面构建排除 |
-| demo | Test 页面和浏览器语音实验 | `build:demo` 显式构建，不混入正常产品 |
-| 工程资产 | 测试、评测、发布工具、文档 | 保留于开发仓，不进入生产源码子集 |
+“不进入桌面包”不等于“代码已删除”，也不等于“其他产品不需要”。依赖闭包是保守保留集合，不证明文件中每一行都会执行。
 
-当前桌面闭包 **168 个文件**，含资源；其中第一方源码 **148 个文件 / 145,272 行**，另有第三方 Python 源码 **1,266 行**。相比上轮含测试/脚本/其他产品的第一方 **244,673 行**，约 40.6% 不属于桌面依赖闭包。**这是范围拆分，不是删除了约十万行死代码，也不是总仓库净减量。** 本轮新增了开发期审计工具，不能把它们藏在统计外再声称仓库变小。
+## 当前依赖生成机制
 
-生成的模块计数见 [运行清单](generated/desktop-runtime.md)。完整逐文件台账在 `tmp/production-audit/desktop.json`，记录类别、保留原因、上游节点和 SHA-256。
+[production-entrypoints.json](../runtime/production-entrypoints.json)声明产品入口、页面、动态边、运行资源和外部加载边界。[production-closure.cjs](../scripts/production-closure.cjs)分析 JS 的 import／require 和 HTML 引用，合并显式 worker、Python、prompt、Skill、词库和资源边。
 
-## 判定方法
-
-1. 从产品入口建立 JS import/require/require.resolve、HTML 资源与保守文件字面量依赖图。
-2. 显式登记进程/worker、Python importlib、技能目录、prompt、词表、安装器资源边界；未知动态模块加载、缺少本地依赖时失败退出。
-3. Knip production 模式独立检查候选；dependency-cruiser 检查产品不得导入测试/评测链路。
-4. Node V8 采集测试和打包烟测的正向证据。未收集到命中不等于未执行，更不等于无用；权限隔离的 worker 可能无法输出覆盖文件。
-5. 生成不含开发脚本的独立目录；两种安装配置共用同一生产 allowlist，拒绝混入旧 demo/官网构建。打包后验证源码哈希，禁止 Node 模块回退到源码仓库或仓库的 node_modules。
-
-静态图不是任意动态语言程序的完整执行证明。仍要人工复核运行时构造的路径、配置选择、外部工具与低频功能；不能自动删除图外文件或 Knip 报出的所有导出。
-
-## 本轮实际变更
-
-- 新增可复跑的入口清单、闭包台账、生成文档、Knip 与 dependency-cruiser 配置、V8 汇总、独立包验证脚本和防漏测试。
-- 桌面打包不再使用 `electron/**/*` 全收集，而是根据生产依赖闭包保留文件；排除 hosted、人设评测模块和旧 Kokoro worker。它们在其他入口仍有用途，开发仓保留。
-- 补上旧打包清单遗漏的 `scripts/ailis-stockfish-engine.cjs`、表格导入 Python worker、实际动态加载的四个 RAGFlow vendor 文件及许可证。
-- 修正表格导入在 ASAR 中启动 Python 的路径：worker、cwd、相对 vendor 依赖都使用真实解包目录；普通源码路径不变。
-- `desktop:start`、桌面打包与发布编排使用 `build:desktop`；Agent Lab 没有被误当成测试页移除。
-
-## 可复跑命令
-
-在本独立工作树执行：
+未知动态模块加载或缺失的本地文件会使审计失败。按文件保存保留原因、上游引用和 SHA-256，而不凭一个“未用到”的搜索结果删代码。可选 OpenClaw SDK、Python 依赖和模型权重等仍是外部条件。
 
 ```powershell
 pnpm audit:production
+pnpm test:production
 pnpm audit:dependencies
 pnpm audit:knip
-pnpm test:production
-pnpm build:desktop
-node scripts/production-closure.cjs --extract tmp/production-audit/my-new-desktop-source
 ```
 
-提取目标必须不存在，脚本拒绝覆盖；提取目录包含运行源码与构建资源、精简 package.json、证据清单，**尚未安装 npm 依赖，不等于可双击安装包**。没有到旧源码的链接。
-
-本轮另生成了可运行的未签名 Windows 解包目录：`tmp/production-audit/package/win-unpacked`。这是本地验证产物，不是已部署的新版本。只为验证跳过了 exe 图标修改钩子，未更改正常发行配置的图标钩子。
+产物：`tmp/production-audit/desktop.json` 和自动生成的本页邻接清单。Knip 的候选或非零退出码需要人工判断，不直接转成删除清单。其他 profile 可单独审计，例如：
 
 ```powershell
-pnpm test:production-package tmp/production-audit/package/win-unpacked tmp/production-audit/desktop.json
-# 要同时执行 Python 表格烟测，先给测试进程设置 AILIS_RAGFLOW_PYTHON。
+node scripts/production-closure.cjs --profile hosted --output tmp/production-audit/hosted.json
 ```
 
-该烟测使用临时工作区、假模型和 packaged Electron 的 Node 模式，不启动用户桌面、不读真实会话、不调用真实 provider。Python 解释器及三方依赖由测试环境提供，不声称随包内置。
+## 前端构建与共享 allowlist
 
-## 验证结果与剩余工作
+`pnpm build:desktop` 只产出五个正式桌面页面。`pnpm build` 加网站首页；`pnpm build:demo` 再包含独立 Test 演示。所有模式共用 `dist/`，不能并发写同一产物目录。
 
-- 原 42 组回归：496 项，477 通过、15 个既有失败、4 跳过；失败名称与上轮一致。既有失败位于 llm-planner（14）和 self-debugger（1），没有隐藏或修复它们。
-- 生产/发布/路径测试 11/11；真实表格导入与存储集成 2/2。合计 509 项：490 通过、15 既有失败、4 跳过。
-- dependency-cruiser：153 模块、418 依赖，无配置规则违反。
-- Knip：3 个桌面未引用文件、442 个导出、50 项依赖候选和 1 个外部 OpenClaw 未声明依赖提示。不是 496 个可以直接删除的对象；公开 API、内部仍调用的函数、传递依赖和可选 SDK 要分别核对。没有启用自动修复或压掉报告。
-- 打包烟测：119 个源码/资源哈希一致，696 个模块解析留在包内；exec、shell、临时文件读写、原样最终输出、下一轮上下文续接通过。Stockfish 真正运行成功；Python 表格 worker 从包内加载四个 vendor 模块并成功产出数据。真实模型调用为 0。
-- V8 正向证据：最终 58 个覆盖记录，138 个候选 JS 文件中 116 个收集到执行命中。不是行覆盖率；未覆盖实际桌面 UI、麦克风、语音模型、所有 Python 分支或所有插件场景。
-- 桌面构建 JS 合计 1,287,735 字节，比前轮混合入口构建的 1,309,011 字节少 21,276 字节；资源输出口径不同，不比较总构建目录大小。
-- 两个 OpenClaw 动态 SDK 边界仍依赖单独安装的运行时；完整 renderer/UI 场景矩阵、低频外部能力验证、442 个导出的逐项处置和更深的重复实现合并尚未完成。没有宣称“全部代码都确实执行过”或“已最小化”。
-- 主仓只读核验发现此前保护快照中的 4 个文件已有变化：control.html、electron/ailis-gateway.cjs、electron/store.cjs、src/control-panel-app.js。本轮未写主仓，也未自动吸收这些变化。
+[electron-builder.runtime.cjs](../electron-builder.runtime.cjs)提供两份桌面 YAML 共同使用的精确源码 allowlist。`beforePack` 检查五个页面完整，并拒绝混有 `dist/Test` 或 `dist/index.html` 的产物。不能用默认网站构建代替桌面打包前置步骤。
 
-本地详细日志和 `verification.json`、`coverage.json` 位于 `tmp/production-audit/`；原始测试/Knip/V8 文件位于 `tmp/code-consolidation-20260904/round4-*`。恢复点和前三轮实际删除记录见 [精简记录](code-consolidation.md)。
+## 抽取一份可审计运行源码
+
+先构建 desktop，再选一个**尚不存在**的目标目录：
+
+```powershell
+pnpm build:desktop
+node scripts/production-closure.cjs --extract tmp/desktop-source-new
+```
+
+抽取目前只支持 desktop；保留运行资源、构建前端、最小 package.json 和 `production-evidence.json`。目标存在时拒绝覆盖。抽取器不安装 npm 依赖、解释器、模型或 MCP，也不是“一份立即离线运行的单文件程序”。
+
+## 发布配置
+
+[发布脚本](../scripts/build-ailis-release.mjs)读取 [profiles](../installer/ailis-release-profiles.json) 与 [组件清单](../installer/ailis-runtime-components.json)。
+
+| profile | 产物意图 |
+| --- | --- |
+| `core` | 桌面核心安装／便携产物，不附完整可选模型资源 |
+| `runtime-packs` | Python、CosyVoice3、ASR、Web 等可选资源包 |
+| `with-packs` | 桌面与所选 sidecar 资源包 |
+| `voice-debug` | 含语音资源的调试目录产物，不是默认 core 发布 |
+
+清单默认输出根为 `F:/AILIS/Build/AILIS`，是可能被多个工作树共享的路径。隔离构建必须明确覆盖：
+
+```powershell
+node scripts/build-ailis-release.mjs --profile core --output-root tmp/release-doc-example --dry-run --json
+```
+
+该 `--dry-run` 只输出计划。确认计划、空间、依赖和权限后才去掉 dry-run 进行真实构建。产物 manifest 记录源码 commit、dirty 状态、文件、字节数与校验值；不要只根据文件名中的版本判断是否新包。
+
+`desktop:package:*` 和 release 命令会构建或写产物，部分会准备大资源。Windows 图标 hook 也会改 exe；检查 [fix-windows-exe-icon.cjs](../scripts/fix-windows-exe-icon.cjs) 的实际目标，尤其不要无参数独立执行其共享路径 fallback。
+
+## 包内执行验证
+
+已有解包目录后，用它对应的源审计报告执行两个位置参数：
+
+```powershell
+node scripts/verify-production-package.cjs tmp/production-audit/package/win-unpacked tmp/production-audit/desktop.json
+```
+
+[探针](../scripts/verify-production-package.cjs)以 Electron Node 模式启动，不开启正常用户桌面；检查源码资源哈希、包内模块解析不得回退源仓、禁止混入的非桌面文件、Stockfish 运行，以及受控 Agent 工具流程。
+
+设置 `AILIS_RAGFLOW_PYTHON` 指向已有兼容解释器时，还验证包内 CSV 导入 worker 和四个保留 vendor 模块；未设置则明确报告该项未请求，而不是声称通过。Python 依赖须另行准备。
+
+成功的包内探针仍不等于全量 UI、麦克风、语音、模型账户、外部插件、操作系统分支和资源授权都已通过。不要由打包成功推导出回答质量、缓存率或所有功能无回归。
+
+## 发布前清单
+
+核对 source identity 与实际包一致；资源 hash 与依赖完整；无密钥／个人数据／评测答案泄漏；所带资源许可允许分发；真实 UI／语音／工具矩阵验收；旧包与数据恢复路径明确。发布、推送、部署、安装替换各自需要明确范围，不由一次构建自动授权。

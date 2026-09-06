@@ -1,65 +1,73 @@
-# AILIS Evaluation
+# 评估：质量、开销、缓存与时延
 
-[Documentation](README.md) · [简体中文](evaluation.zh-CN.md) · [Full Scorecard](ailis-evaluation-master-scorecard-20260817.md)
+[手册索引与源码基线](README.md) · [工具](tools.md) · [记忆](memory.md)
 
-AILIS is evaluated as an end-to-end Agent system: the model, Harness, context, memory, tools, environment, and verifier all participate in the result.
+本页给出口径与代码观测点，不给未经本轮验证的“最新版得分”。旧 A6／A7／1.4.x 报告保留在 Git 历史，不能自动移植成当前工作树的成绩。
 
-## Agent Benchmarks
+## 先固定一次实验的身份
 
-| Benchmark | AILIS | Codex, same model |
-| :--- | ---: | ---: |
-| **GAIA public validation** | **119 / 165 · 72.12%** | 107 / 165 · 64.85% |
-| **Terminal-Bench 2.1** | 60 / 89 · 67.42% | **75.73% ± 1.32%** |
+至少记录：commit、dirty 状态、构建身份、实际程序路径、provider、model、temperature／reasoning、工具表面、状态目录、Session／run ID、数据集版本、任务 ID、并发、超时、重试和开始／结束时间。
 
-GAIA uses the same 165 task IDs, Luna medium, complete visible answers, and one semantic scorer for both systems. Terminal-Bench uses Luna Max on the same 89 tasks; AILIS is one complete pass@1 run and the official Codex result aggregates five runs.
+同名模型或同为 1.4.1 不足以保证可比。复用旧记忆、不同工具定义、缓存预热、缺失权限、人工提示和私自改 verifier 都会改变口径。正式任务与练习／人工 smoke 分开输出。
 
-### GAIA By Level
+## 原始证据优先
 
-| Level | AILIS + Luna | Codex + Luna | Difference |
-| :--- | ---: | ---: | ---: |
-| L1 | **43 / 53 · 81.13%** | 41 / 53 · 77.36% | +3.77 pp |
-| L2 | **64 / 86 · 74.42%** | 57 / 86 · 66.28% | +8.14 pp |
-| L3 | **12 / 26 · 46.15%** | 9 / 26 · 34.62% | +11.54 pp |
-| **Total** | **119 / 165 · 72.12%** | 107 / 165 · 64.85% | **+7.27 pp** |
+[Runner](../electron/agent-loop/runner.cjs)记录模型 usage、工具结果、模型输入前缀诊断和分阶段成本，并发出 `agent.token_usage` 等事件。[Gateway](../electron/ailis-gateway.cjs)提供分析归一逻辑；[provider](../electron/desktop-llm-provider.cjs)传回各接口结果。
 
-### Agent Efficiency
+汇总前去重同一个模型调用，避免把原始事件、Runner 聚合和 Gateway 汇总重复相加。区分主模型、显式子任务、压缩、画像整理、视觉、TTS 等费用来源。
 
-| GAIA, 165 tasks | AILIS + Luna | Codex + Luna |
-| :--- | ---: | ---: |
-| Logical input / output tokens | **31.04M / 330.7K** | 68.56M / 497.0K |
-| Average task time | **210.4s** | 255.9s |
-| P50 / P95 task time | **140.1s / 575.0s** | 229.3s / 584.7s |
-| Tool events | 3,628 | **1,959** |
+**缺失不等于零。** 当前 `normalizeCostUsage` 等聚合路径会对部分缺失字段填 0，所以只有聚合对象中的数字，不足以证明原始 provider 返回了零 usage。保留原始字段存在性；无 usage 的调用标为 unknown，并单列覆盖率。
 
-| Terminal-Bench, 89 tasks | AILIS A7 | Official Codex + Luna Max |
-| :--- | ---: | ---: |
-| Score | 67.42% | **75.73% ± 1.32%** |
-| Average trial time | 1,088.0s | **457.3s** |
-| Logical input per task | **2.569M** | 3.183M |
-| Cached input per task | 1.270M | **3.093M** |
-| Uncached input per task | 1.299M | **89.9K** |
-| Input cache rate | 49.44% | **97.17%** |
-| Output per task | 23.95K | 23.89K |
+## 指标定义
 
-AILIS reaches the same general task-execution band while using fewer logical input tokens on both suites. The largest measured efficiency gap is stable-prefix reuse: Terminal-Bench uncached input remains 14.44 times Codex's, which also corresponds to longer trials and more timeout pressure.
+| 指标 | 推荐口径 | 常见错误 |
+| --- | --- | --- |
+| 任务通过率 | verifier 通过任务数 / 明确约定分母 | 把运行中、缺结果或网络失败算作模型答错 |
+| 有效完成率 | 有完整运行与结果证据的任务数 / 计划任务数 | 只给通过率，不交代未完成任务 |
+| 输入／输出 token | 去重后原始 provider usage 求和 | 用工具输出字节数冒充总 token |
+| token 缓存命中率 | 同口径调用的缓存输入 token 总和 / 总输入 token 总和 | 对每轮百分比直接算平均，或把缺字段算零命中 |
+| 未缓存输入 | 先核实 provider 的总输入是否已含缓存，再按协议计算 | 缓存输入在总量里重复计入或重复扣除 |
+| 成本 | 各模型／服务的计费单位乘对应单价，按日期和币种分列 | 只算最终输出、遗漏重试／压缩／视觉／TTS |
+| 首字时延 | 请求发出到第一个实际可见文本增量 | 用整次请求 duration 代替 TTFT |
+| 端到端时延 | 用户提交到最终可交付结果 | 将并行子调用耗时相加当墙钟时间 |
+| 语音首响／播完 | 用户结束说话到首个音频／最后音频 | 与模型首字时间混报 |
+| 工具可靠性 | 成功、失败、超时、审批等待、协议错误分别计数 | `exit 0` 当成业务验收通过 |
 
-## Memory And Stateful Work
+Provider 字段可能使用 `prompt_tokens`、`input_tokens`、`prompt_tokens_details.cached_tokens`、`input_tokens_details.cached_tokens` 或 `prompt_cache_hit_tokens` 等。先读实际协议；若缓存 token 与普通输入是分列而非包含关系，先归一总输入再计算。不同缺失口径不能硬凑一个百分比。
 
-| Evaluation | Result |
-| :--- | ---: |
-| **Apple ToolSandbox** | **71.51%** frozen holdout mean |
-| **LongMemEval-S** | **358 / 500 · 71.60%** QA accuracy |
-| **PersonaMem Balanced-140** | **92 / 140 · 65.71%** |
-| **LoCoMo** | **24.69 token-F1** |
+简化费用式只在计费口径核对后适用：
 
-LongMemEval-S completed all 500 items with zero generation or Judge failures. LoCoMo completed all 1,986 items; its strong retrieval but lower answer F1 identifies multi-hop evidence composition as the remaining memory bottleneck.
+```text
+文本模型费用 = 未缓存输入 × 输入单价
+             + 缓存读取输入 × 缓存读取单价
+             + 输出 × 输出单价
+             + 其他单列计费项
+```
 
-## Evidence
+缓存写入、图片／音频、工具服务、失败请求和 reasoning 的收费是否独立由实际服务决定，不能把 reasoning token 在已含它的输出中再加一遍。本页不维护会过期的模型价格表；出报告时保留价格日期与来源。
 
-- [Complete scorecard and protocol details](ailis-evaluation-master-scorecard-20260817.md)
-- [TaskAgent A7 context baseline](ailis-a7-taskagent-context-baseline.md)
-- [GAIA evaluation method](ailis-desktop-real-gaia-eval.md)
-- [Memory retrieval baseline](ailis-memory-bm25-mmr-baseline.md)
-- [Official Codex Terminal-Bench row](https://hub.harborframework.com/datasets/terminal-bench/terminal-bench-2-1/6/leaderboards/main/rows/e5f3feda-4629-46ba-963f-300dcf7c2a4c)
+## 回答质量要人工与程序同时看
 
-GAIA is public-validation evaluation rather than a private-test leaderboard submission. Different benchmark metrics are reported separately rather than merged into a synthetic overall score.
+至少分别检查：事实是否有证据、是否理解当前源码、是否遵守称呼与用户纠正、工具是否真的执行、结果是否可复验、引用是否可打开、是否遗漏限制、是否把不确定结论说成事实。
+
+模型评审是辅助信号，需记录 judge 模型和提示、抽查一致性；不能称为官方 verifier。长上下文测试要包含重启、续接、称呼纠正、预算压力和工件回读，而不只是短问答。
+
+## 测试阶梯
+
+1. 离线单元／契约：参见 [开发](development.md)。只证明对应的受控场景。
+2. 隔离工具执行与包内探针：参见 [生产运行](production-runtime.md)。使用 scratch 与 fake model，不消耗真实 provider。
+3. 真实小样本：先确认服务、usage 和工件链，再扩大任务数。使用独立状态与结果目录。
+4. 正式数据集：固定官方题、prompt、verifier、超时和计分方式。基础设施异常按协议重试，保留每次尝试，不挑最高分替换。
+
+仓库保留 GAIA、OSWorld、screen-understanding、humanlike、artifact 等驱动。脚本存在不表示数据、依赖、授权或当前成绩存在。真实执行命令必须先读参数，不作为“文档验证”顺带运行。
+
+屏幕理解只评估截图描述，不评估点击或任务完成，见 [该评测说明](../evals/screen-understanding/README.md)。[手工 smoke 资料](../manual-tests/benchmark-smoke-20260826/README.md)不是官方分数。
+
+## 一份可核对报告应包含
+
+- 有效任务数、计划数、通过数与每类失败数，明确分母。
+- usage 可观测调用数 / 全部调用数、输入／输出／缓存统计及未知项。
+- 端到端与首字的 p50／p95、样本量、预热策略；样本太小时直接列观测值，不制造稳定性结论。
+- 按 provider／model／phase 的费用明细、重试费用和累计墙钟时间。
+- 原始 result／metadata／日志与 source hash 的对应关系，脱敏后才共享。
+- 与基线比较时固定场景及约束；代码行数下降不能充当缓存、质量或时延改善证据。

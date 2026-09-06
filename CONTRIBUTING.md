@@ -1,40 +1,28 @@
-# Contributing to AILIS
+# 贡献约定
 
-Thanks for helping build a capable, understandable desktop AI companion.
+先读 [当前手册](docs/README.md) 和 [AGENTS.md](AGENTS.md)。程序、运行提示、资源、说明文档和个人数据是不同类型的改动。
 
-## Start Here
+## 提交前
 
-1. Read the [Getting Started guide](docs/getting-started.md).
-2. Search existing [issues](https://github.com/haowenGuo/AILIS/issues) before opening a new one.
-3. For a code change, create a focused branch and keep one behavioral objective per pull request.
+1. 固定实际工作树与 commit，保留用户已有未提交改动；有风险的重构在独立分支／worktree 验证。
+2. 给变更写清目标、涉及入口、兼容影响和不涉及范围。
+3. 主对话保持一个 Agent、一个 durable Session、一个最终回答；人格是配置。语义决策属于模型，Harness 负责上下文、契约、权限和生命周期。
+4. 改工具要核对注册、schema、实际 handler、审批、错误结果和大输出引用，不能只加一个描述。
+5. 改 worker／动态资源时同步生产入口清单并验证包内路径；未命中覆盖不构成删除依据。
+6. 先跑相关测试，再按风险增加构建和端到端验证；列出已知基线失败、新增失败、跳过和未验证部分。
+7. 更新唯一对应手册页。不要新增一篇与当前架构冲突的“最新版说明”。
 
-```bash
-pnpm install
-pnpm desktop:dev
-```
+具体命令与职责见 [开发](docs/development.md)、[运行依赖](docs/production-runtime.md)、[评估](docs/evaluation.md)。
 
-Run the tests closest to your change. Runtime and Harness changes should also run:
+## 不提交
 
-```bash
-pnpm ailis:validate-harness
-```
+真实密钥、`.env`、desktop-state、用户记忆／聊天、私人附件、带凭据日志、下载模型、node_modules、构建包、无授权资产或受限制数据。对外发布前另外核验资源许可证和数据边界。
 
-## Project Principles
+## 变更说明至少包括
 
-- Improve general Agent capability, context, tools, memory, reliability, or user experience.
-- Do not add benchmark-task answers, site-specific routes, or hidden behavior that only raises one score.
-- Preserve approval and audit boundaries for consequential actions.
-- Keep model-visible context and tool contracts explicit and testable.
-- Include correctness, latency, token, cache, and regression evidence for Harness changes.
+- 源码身份、改了什么、为什么改。
+- 真实执行的检查和结果，不能只写计划命令。
+- 兼容／迁移策略、状态写入、网络调用与恢复方式。
+- 文档是否同步；无关失败是否维持基线。
 
-## Pull Requests
-
-A useful pull request includes:
-
-- the problem and intended behavior;
-- the smallest relevant implementation;
-- tests or reproducible validation;
-- screenshots for visible UI changes;
-- benchmark evidence only when the protocol and source are fixed.
-
-Please do not commit credentials, user memory, chat transcripts, generated evaluation outputs, or third-party assets without a compatible license.
+本地 commit 不等于推送、发布、部署或替换安装包。涉及这些动作时另行明确目标与授权。

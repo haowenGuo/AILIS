@@ -1,51 +1,12 @@
-# Codex Memory Checkpoint
+# 当前工作树说明
 
-Date/time: 2026-09-01 Asia/Shanghai
-Workspace: `F:\AILIS\main`
-Branch before submission: `codex/taskagent-cost-projection`
-Base HEAD: `08761b73c75e05f88f62be8a02569b42cb235355`
+本文件是状态入口，不是自动执行任务清单。
 
-## Current objective
+- 文档对应的程序基线：`00b3244d67a6c63906f674a1b4c3746e4c362d78`，package 1.4.1。
+- 本次整理位置：独立分支 `codex/code-consolidation-20260904`；不代表其他工作树或已安装版本已同步。
+- 当前技术正文：[docs/README.md](docs/README.md)。主链是一套统一 Agent／持久 Session；兼容路径见 [Session 手册](docs/agent-session.md)。
+- 构建和可达性依据：[runtime/production-entrypoints.json](runtime/production-entrypoints.json) 与 [生产运行说明](docs/production-runtime.md)。
+- 旧部署任务、旧 benchmark 计划和旧架构指令已从本文件移除；需要历史证据时用 `git show 00b3244:CODEX_MEMORY.md` 查阅，不把它当当前授权。
+- 本次文档原稿本地备份在 `tmp/doc-rewrite-20260906/originals/`，清单和核验报告在其父目录；该目录不属于发布产物。
 
-- Submit and deploy the latest AILIS mainline changes.
-- Re-run the same three official Terminal-Bench 2.1 tasks for a comparable regression result:
-  `cancel-async-tasks`, `fix-git`, and `write-compressor`.
-- Model and effort remain `gpt-5.6-luna` / `max`, serial execution, official verifiers.
-
-## Included implementation
-
-- TaskAgent uses the native Codex instruction snapshot through
-  `electron/codex-native-instructions.cjs`.
-- Context history follows an append-only Codex-style model: one original user turn followed
-  by model decisions, tool calls, and tool outputs, without duplicated request wrappers.
-- Default TaskAgent tools are aligned to the real runtime surface:
-  `exec_command`, `write_stdin`, `apply_patch`, `update_plan`, and `tool_search`.
-- Optional web, vision, goal, and permission tools are exposed only when the request or
-  runtime state requires them. Legacy collaboration tools are hidden.
-- `apply_patch` uses a native free-form/custom tool call. `update_plan` is explicitly a
-  progress-board operation and returns a compact UI-only observation.
-- Screen capture can be invoked by Persona or TaskAgent and routes image pixels through a
-  configured multimodal model without automatic per-turn capture.
-- Avatar lip-sync amplitude and web presentation behavior include the current UX tuning.
-
-## Verification before submission
-
-- Focused system TaskAgent harness: 18/18 passed.
-- Full relevant regression selection: 305 tests, 300 passed, 4 skipped, 0 failed after
-  updating one stale assertion for the new on-demand `task_goal` surface.
-- Temporary `.tmp-codex-luna-desktop.*.log` files are local diagnostics and must not be
-  committed.
-
-## Latest comparable benchmark
-
-- Report: `longrun/jobs/ailis-codex-tools-p0p1-terminal3-luna-max-20260831-v4/final-analysis.md`
-- Result: 2/3.
-- `cancel-async-tasks`: passed.
-- `fix-git`: passed and terminated cleanly.
-- `write-compressor`: failed (2/3 verifier tests; decompressor segfault/timeout).
-
-## Next actions
-
-1. Build, commit, fast-forward `origin/main`, and deploy the web build.
-2. Launch a fresh three-task job from the committed source using the same immutable task set.
-3. Compare score, termination, model calls, prompt/cache telemetry, and failure cause with v4.
+接手任何新任务时，以当前用户请求、实际目录、Git 状态和代码为准。这里不授权启动评测、清空状态、操作其他工作树、推送或部署。
