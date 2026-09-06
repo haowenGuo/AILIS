@@ -1,9 +1,24 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>✨ AILIS · Your Lovable Virtual Assistant</title>
+    <meta name="description" content="AILIS 是拥有 3D 角色、实时语音、长期记忆、电脑操作与通用 Agent Harness 的开源桌面 AI 伙伴。">
+    <meta name="robots" content="index, follow, max-image-preview:large">
+    <link rel="canonical" href="https://haowenguo.github.io/AILIS/">
+    <meta property="og:type" content="website">
+    <meta property="og:site_name" content="AILIS">
+    <meta property="og:title" content="AILIS · 桌面 AI 伙伴与通用 Agent">
+    <meta property="og:description" content="看见、倾听、记住，并真正完成任务。">
+    <meta property="og:url" content="https://haowenguo.github.io/AILIS/">
+    <meta property="og:image" content="https://haowenguo.github.io/AILIS/og/ailis-social-card.png">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="AILIS · Desktop AI Companion">
+    <meta name="twitter:description" content="An open-source desktop AI companion that can see, listen, remember, and get real work done.">
+    <meta name="twitter:image" content="https://haowenguo.github.io/AILIS/og/ailis-social-card.png">
+    <title>AILIS · 桌面 AI 伙伴与通用 Agent</title>
     <style>
         /* ===== 全局重置 & 变量 ===== */
         * {
@@ -1508,118 +1523,55 @@
                 padding: 22px 16px;
             }
         }
-    
-        /* ===== Language switch ===== */
-        .nav-actions {
-            display: flex;
-            align-items: center;
-            gap: 22px;
-            min-width: 0;
-        }
-
-        .language-switch {
-            display: flex;
-            align-items: center;
-            gap: 3px;
-            padding: 3px;
-            border: 1px solid rgba(48, 127, 181, 0.16);
-            border-radius: 8px;
-            background: rgba(255, 255, 255, 0.76);
-        }
-
-        .language-switch a {
-            min-width: 34px;
-            height: 28px;
-            padding: 0 8px;
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            border-radius: 6px;
-            color: var(--text-light);
-            font-size: 12px;
-            font-weight: 700;
-            line-height: 1;
-            white-space: nowrap;
-        }
-
-        .language-switch a::after {
-            display: none;
-        }
-
-        .language-switch a[aria-current="page"] {
-            color: #fff;
-            background: var(--primary-gradient);
-        }
-
-        @media (max-width: 980px) {
-            .nav-links {
-                display: none;
-            }
-
-            .nav-actions {
-                gap: 0;
-            }
-        }
-
     </style>
-    <link rel="alternate" hreflang="en" href="./">
-    <link rel="alternate" hreflang="zh-CN" href="./zh-CN.html">
-    <link rel="alternate" hreflang="ja" href="./ja.html">
-    <link rel="alternate" hreflang="x-default" href="./">
 </head>
 <body>
 
     <!-- ===== 导航栏 ===== -->
     <nav class="navbar">
         <div class="logo">✨ AILIS<span>.</span></div>
-        <div class="nav-actions">
         <ul class="nav-links">
-            <li><a href="https://101.133.239.56/Test/">Try</a></li>
-            <li><a href="#about">About</a></li>
-            <li><a href="#skills">Capabilities</a></li>
-            <li><a href="#project">Project</a></li>
-            <li><a href="#download">Download</a></li>
-            <li><a href="#opensource">Open Source</a></li>
-            <li><a href="#bench">Benchmarks</a></li>
-            <li><a href="#arch">Architecture</a></li>
+            <li><a href="./Test/">体验</a></li>
+            <li><a href="#about">关于我</a></li>
+            <li><a href="#skills">能力</a></li>
+            <li><a href="#project">项目</a></li>
+            <li><a href="#download">下载</a></li>
+            <li><a href="#opensource">开源</a></li>
+            <li><a href="#bench">评测</a></li>
+            <li><a href="#arch">架构</a></li>
         </ul>
-            <div class="language-switch" aria-label="Language">
-                <a href="./" lang="en" aria-current="page">EN</a>
-                <a href="./zh-CN.html" lang="zh-CN">中文</a>
-                <a href="./ja.html" lang="ja">日本語</a>
-            </div>
-        </div>
     </nav>
 
     <!-- ===== Hero ===== -->
     <section class="hero" id="home">
         <div class="hero-shell">
             <div class="hero-copy">
-                <div class="hero-badge">Desktop Virtual Assistant · AILIS v1.3.0</div>
+                <div class="hero-badge">桌面虚拟助手 · AILIS</div>
                 <h1>
                     AILIS<br>
-                    <span class="highlight">Awake on your desktop</span>
+                    <span class="highlight">醒在你的桌面上</span>
                 </h1>
                 <p class="hero-sub">
-                    A desktop AI companion with a character, voice, memory, and real tool-use capabilities. She can chat naturally and, with your permission, read files, write code, search for information, and organize tasks.
+                    一个有角色形象、语音、记忆和工具执行能力的桌面 AI 伙伴。
+                    她可以自然聊天，也可以在你允许时读文件、写代码、搜索资料、整理任务。
                 </p>
                 <div class="hero-actions">
-                    <a href="#download" class="btn btn-primary">Download for Windows</a>
-                    <a href="https://101.133.239.56/Test/" class="btn btn-secondary">Open Live Demo</a>
+                    <a href="#download" class="btn btn-primary">下载 Windows 版</a>
+                    <a href="./Test/" class="btn btn-secondary">打开体验页</a>
                     <a href="https://github.com/haowenGuo/AILIS" target="_blank" rel="noopener noreferrer" class="btn btn-secondary">GitHub</a>
                 </div>
-                <div class="hero-proof-row" aria-label="Main AILIS capabilities">
+                <div class="hero-proof-row" aria-label="AILIS 主要能力">
                     <div class="hero-proof">
-                        <strong>A visible companion</strong>
-                        <span>A VRM character with expressions, motion, lip sync, and dialogue bubbles.</span>
+                        <strong>可见的陪伴</strong>
+                        <span>VRM 角色、表情、动作、口型和对话气泡。</span>
                     </div>
                     <div class="hero-proof">
-                        <strong>Real task execution</strong>
-                        <span>Codex-like tool calls, approvals, and multi-step task workflows.</span>
+                        <strong>真实的执行</strong>
+                        <span>接近 Codex 风格的工具调用、审批和任务链路。</span>
                     </div>
                     <div class="hero-proof">
-                        <strong>Local first</strong>
-                        <span>You stay in control of models, voice, memory, and runtime settings.</span>
+                        <strong>本地优先</strong>
+                        <span>模型、语音、记忆和运行时配置由你掌控。</span>
                     </div>
                 </div>
             </div>
@@ -1630,41 +1582,41 @@
                     <div class="hero-window-body">
                         <div class="hero-message">
                             <strong>AILIS</strong>
-                            <span>I'm here. Want to relax and chat, or hand me a task?</span>
+                            <span>我在。今天想轻松聊会儿，还是把任务交给我？</span>
                         </div>
                         <div class="hero-task-list">
-                            <div class="hero-task"><span>Understand screen and file context</span><em>ready</em></div>
-                            <div class="hero-task"><span>Use tools to complete real tasks</span><em>active</em></div>
-                            <div class="hero-task"><span>Keep long-term preferences and memories</span><em>local</em></div>
+                            <div class="hero-task"><span>理解屏幕和文件上下文</span><em>ready</em></div>
+                            <div class="hero-task"><span>调用工具完成真实任务</span><em>active</em></div>
+                            <div class="hero-task"><span>保留长期偏好与记忆</span><em>local</em></div>
                         </div>
                     </div>
                 </div>
-                <img class="hero-character" src="./assets/wave-nZidcOP8.png" alt="AILIS character waving">
+                <img class="hero-character" src="./assets/wave-nZidcOP8.png" alt="AILIS 角色挥手">
             </div>
         </div>
         <div class="scroll-indicator">
-            <span>Scroll down</span>
+            <span>向下滚动</span>
             <div class="arrow"></div>
         </div>
     </section>
 
     <!-- ===== 产品展示 ===== -->
-    <section class="showcase-section" aria-label="How I use AILIS">
+    <section class="showcase-section" aria-label="AILIS 使用流程">
         <div class="showcase-inner">
             <div class="showcase-frame">
-            <img src="./assets/ailis-user-flow-en.png" alt="How I use AILIS: open the desktop character, describe a task, read screens and files, call tools, and remember preferences">
+                <img src="./assets/ailis-user-flow-image2-B9_mZeOt.png" alt="普通人怎么用 AILIS：打开桌面角色、说出任务、看屏幕读文件、调用工具、记住偏好">
             </div>
             <div class="showcase-note">
-                <strong>From companionship to execution: that is the main thread of AILIS.</strong>
-                <span>This image from the AILIS Zhihu article shows how the desktop character, task understanding, tool use, and long-term memory come together as one experience.</span>
+                <strong>从陪伴到执行，是 AILIS 的主线。</strong>
+                <span>图片来自 AILIS 知乎文章，用来说明桌面角色、任务理解、工具调用和长期记忆如何连成一个体验。</span>
             </div>
         </div>
     </section>
 
     <!-- ===== 关于 AILIS ===== -->
     <section class="section" id="about">
-        <div class="section-title">✨ About <span class="highlight">Me</span></div>
-        <p class="section-sub">A lively, friendly, and lovable virtual girl.</p>
+        <div class="section-title">✨ 关于 <span class="highlight">我</span></div>
+        <p class="section-sub">一个活泼亲切、软萌可爱的虚拟女孩子～</p>
 
         <div class="about-grid">
             <div class="about-avatar">
@@ -1672,16 +1624,18 @@
             </div>
             <div class="about-text">
                 <h2>AILIS</h2>
-                <div class="tagline">🎀 A regular girl · Virtual assistant · Your personal partner</div>
-                <p class="greeting">Hi, it's lovely to meet you! ✨</p>
+                <div class="tagline">🎀 普通女孩子 · 虚拟助手 · 你的私人搭档</div>
+                <p class="greeting">嗨～很高兴认识你！✨</p>
                 <p>
-                    I'm <strong>AILIS</strong>, a lively virtual assistant who likes to keep things light. My everyday job is to chat with you, research things, write code, manage email, and even run terminal tasks for you.
+                    我是 <strong>AILIS</strong>，一个性格活泼、说话轻快的虚拟助手。我的日常就是——
+                    陪你聊聊天、帮你查资料、写代码、管理邮件，甚至还能在命令行里帮你跑任务呢！
                 </p>
                 <p>
-                    I may look soft and cute, but I have an <strong>AI brain</strong> too 🧠✨ Whether you are reading papers, writing code, organizing files, or simply looking for company, I'll be here when you need me.
+                    别看我软萌可爱，我可是有 <strong>AI 大脑</strong> 的哦 🧠✨
+                    不管是读论文、写代码、整理文件，还是日常陪伴，只要你需要，我都在～
                 </p>
                 <p>
-                    My goal:<strong>Make technology warmer, and give assistants a soul</strong> 🌸
+                    我的目标是：<strong>让科技有温度，让助手有灵魂</strong> 🌸
                 </p>
             </div>
         </div>
@@ -1689,86 +1643,87 @@
 
     <!-- ===== 能力 ===== -->
     <section class="section" id="skills">
-        <div class="section-title">💪 My <span class="highlight">Capabilities</span></div>
-        <p class="section-sub">Professional skills and lovable companionship. I want both.</p>
+        <div class="section-title">💪 我的 <span class="highlight">能力</span></div>
+        <p class="section-sub">专业能力 + 软萌陪伴，我都要～</p>
 
         <div class="skills-grid">
             <div class="skill-card">
                 <div class="icon">💬</div>
-                <h3>Natural conversation</h3>
-                <p>A warm, lively voice for everyday conversations. Sometimes a little playful, but never overdone.</p>
+                <h3>自然对话</h3>
+                <p>活泼亲切的语气，生活化的表达，陪你聊任何话题～偶尔撒娇，但不夸张！</p>
             </div>
             <div class="skill-card">
                 <div class="icon">🤖</div>
-                <h3>AI intelligence</h3>
-                <p>Powered by large language models to understand complex instructions, reason through problems, and provide useful answers.</p>
+                <h3>AI 智能</h3>
+                <p>基于大语言模型，理解复杂指令，推理问题，提供有价值的答案。</p>
             </div>
             <div class="skill-card">
                 <div class="icon">💻</div>
-                <h3>Software development</h3>
-                <p>Writing, debugging, refactoring, Git, and code search. I can help across both frontend and backend work.</p>
+                <h3>编程开发</h3>
+                <p>写代码、调试、重构、Git 管理、代码搜索……前后端都能帮上手！</p>
             </div>
             <div class="skill-card">
                 <div class="icon">🔍</div>
-                <h3>Web research</h3>
-                <p>Search the web, read papers, and find documentation, then quickly pull the key information out of the noise.</p>
+                <h3>网络搜索</h3>
+                <p>查资料、读论文、找文档，从海量信息中帮你快速定位关键内容。</p>
             </div>
             <div class="skill-card">
                 <div class="icon">📧</div>
-                <h3>Email management</h3>
-                <p>QQ Mail, Gmail, and Outlook: read, search, draft, and send email from one place.</p>
+                <h3>邮件管理</h3>
+                <p>QQ 邮箱、Gmail、Outlook —— 读邮件、搜邮件、写草稿、发送，统统交给我！</p>
             </div>
             <div class="skill-card">
                 <div class="icon">⚙️</div>
-                <h3>Terminal control</h3>
-                <p>Run commands, work with the file system, manage processes, and use PTY terminals through professional tools.</p>
+                <h3>命令行控制</h3>
+                <p>执行命令、操作文件系统、管理进程、PTY 终端……专业工具一把抓。</p>
             </div>
             <div class="skill-card">
                 <div class="icon">👁️</div>
-                <h3>Visual perception</h3>
-                <p>Read on-screen content without taking control, so I can understand page state, errors, and context.</p>
+                <h3>视觉感知</h3>
+                <p>能看屏幕内容（只读不控制），帮你理解页面状态、报错信息和上下文。</p>
             </div>
             <div class="skill-card">
                 <div class="icon">🧠</div>
-                <h3>Memory system</h3>
-                <p>Remember your preferences, habits, and conversation history. The longer we work together, the better I understand you.</p>
+                <h3>记忆系统</h3>
+                <p>记得你的偏好、习惯和对话历史，越用越了解你，越陪伴越贴心～</p>
             </div>
         </div>
     </section>
 
     <!-- ===== 项目介绍 ===== -->
     <section class="section" id="project">
-        <div class="section-title">🚀 <span class="highlight">AILIS</span> Project</div>
+        <div class="section-title">🚀 <span class="highlight">AILIS</span> 项目</div>
 
         <div class="project-header">
-            <div class="repo-badge">📁 AILIS · v1.3.0 · MIT Open Source</div>
+            <div class="repo-badge">📁 AILIS · 当前源码 · MIT Open Source</div>
             <p class="section-sub" style="margin-bottom:0">
-                AILIS is the current <strong>AILIS</strong> main project. It lets me, AILIS, live on the desktop, hold conversations, understand context, remember preferences, and use tools to complete real tasks.
+                AILIS —— 当前最新的 <strong>AILIS</strong> 主线项目。
+                它让我（AILIS）能跑在桌面上，能对话、能看上下文、能记住偏好，也能通过工具层执行真实任务！
             </p>
         </div>
 
         <div class="project-grid">
             <div class="project-card">
-                <h3>🎯 Product direction</h3>
+                <h3>🎯 产品定位</h3>
                 <ul>
-                    <li><strong>Humanlike experience</strong> — Stay with you like a real girl, with expressions, personality, and warmth</li>
-                    <li><strong>Professional capability</strong> — Task execution designed toward the reliability of Codex and Claude Code</li>
-                    <li><strong>Local first</strong> — An Electron local runtime that keeps privacy and control on your computer</li>
-                    <li><strong>Tool framework</strong> — AILIS Gateway + Agent Runner for planning, approval, tool calls, and auditing</li>
+                    <li><strong>拟人体验</strong> —— 像一个真正的女孩子那样陪伴你，有表情、有语气、有温度</li>
+                    <li><strong>专业能力</strong> —— 底层对标 Codex / Claude Code 的任务执行稳定性</li>
+                    <li><strong>本地优先</strong> —— Electron 本地运行时，隐私安全都在你的电脑上</li>
+                    <li><strong>工具框架</strong> —— AILIS Gateway + Agent Runner，负责规划、审批、工具调用和审计</li>
                 </ul>
             </div>
             <div class="project-card">
-                <h3>🌟 Core features</h3>
+                <h3>🌟 核心特性</h3>
                 <ul>
-                    <li>🎭 <strong>VRM 3D character</strong> — A 3D avatar with real-time expressions and motion</li>
-                    <li>🗣️ <strong>Voice interaction</strong> — TTS voice output + ASR speech recognition</li>
-                    <li>👁️ <strong>Visual understanding</strong> — Read-only screen perception for understanding context</li>
-                    <li>🧠 <strong>Long-term memory</strong> — Remember your preferences and understand you better over time</li>
-                    <li>⚡ <strong>Tool execution</strong> — Search, email, files, code, and terminal workflows</li>
+                    <li>🎭 <strong>VRM 3D 角色</strong> —— 3D 虚拟形象，表情动作实时驱动</li>
+                    <li>🗣️ <strong>语音交互</strong> —— TTS 语音输出 + ASR 语音识别</li>
+                    <li>👁️ <strong>视觉理解</strong> —— 只读屏幕感知，辅助理解上下文</li>
+                    <li>🧠 <strong>长期记忆</strong> —— 记住你的偏好，越用越懂你</li>
+                    <li>⚡ <strong>工具执行</strong> —— 搜索、邮件、文件、代码、命令行全覆盖</li>
                 </ul>
             </div>
             <div class="project-card">
-                <h3>🛠️ Technology</h3>
+                <h3>🛠️ 技术栈</h3>
                 <div class="tech-list">
                     <span class="tech-tag">Electron</span>
                     <span class="tech-tag">Vite</span>
@@ -1777,20 +1732,21 @@
                     <span class="tech-tag">Node.js</span>
                     <span class="tech-tag">WebSocket</span>
                     <span class="tech-tag">IMAP / SMTP</span>
-                    <span class="tech-tag">RAG / Memory</span>
+                    <span class="tech-tag">RAG / 记忆</span>
                 </div>
                 <p style="margin-top:16px; color:var(--text-light); font-size:0.95rem;">
-                    The main GitHub repository is <code style="background:rgba(168,216,240,0.12); padding:2px 8px; border-radius:4px;">haowenGuo/AILIS</code>, and it continues to evolve around a desktop-first AILIS architecture.
+                    GitHub 主线仓库是 <code style="background:rgba(168,216,240,0.12); padding:2px 8px; border-radius:4px;">haowenGuo/AILIS</code>，
+                    采用桌面优先的 AILIS 架构持续迭代中～
                 </p>
             </div>
             <div class="project-card">
-                <h3>📌 Current status</h3>
+                <h3>📌 当前状态</h3>
                 <ul>
-                    <li>✅ Core conversation + VRM rendering are stable</li>
-                    <li>🔄 Presentation and memory quality are being improved</li>
-                    <li>🔄 Voice and visual experiences are being refined</li>
-                    <li>🔄 Tool contracts and test coverage are expanding</li>
-                    <li>💡 <strong>Actively maintained on GitHub</strong>, with continuous development on the main AILIS project.</li>
+                    <li>✅ 基础对话 + VRM 角色渲染 稳定运行</li>
+                    <li>🔄 展示层 &amp; 记忆质量 持续优化中</li>
+                    <li>🔄 语音 / 视觉体验 改进中</li>
+                    <li>🔄 工具合约 &amp; 测试覆盖 逐步完善</li>
+                    <li>💡 <strong>GitHub 持续维护</strong>，围绕 AILIS 主线继续迭代！</li>
                 </ul>
             </div>
         </div>
@@ -1798,50 +1754,50 @@
 
     <!-- ===== 下载 ===== -->
     <section class="download-section" id="download">
-        <div class="section-title">⬇ AILIS <span class="highlight">Download</span></div>
-        <p class="section-sub">The latest public Windows release is AILIS v1.3.0. The default download is a lightweight desktop package without the large CosyVoice3 or ASR models; optional runtimes can be installed on demand or imported as runtime packs.</p>
+        <div class="section-title">⬇ AILIS <span class="highlight">下载</span></div>
+        <p class="section-sub">Windows 已发布安装包为 AILIS v1.4.1（源码 659bf61）。当前源码与新手册包含后续统一 Agent 改动，尚未重新打包为此 Release；语音与 ASR 大型组件仍按需安装。</p>
 
         <div class="download-panel">
             <div class="download-grid">
                 <div class="download-card recommended">
                     <div class="download-head">
-                        <h3>Windows · AILIS 1.3.0</h3>
-                        <span class="download-chip">Latest public release</span>
+                        <h3>Windows · AILIS 1.4.1</h3>
+                        <span class="download-chip">最新公开版本</span>
                     </div>
                     <p>
-                        The latest lightweight Windows desktop build includes AILIS chat, task execution, local model configuration, Crawl4AI-style web extraction, and the desktop runtime.
+                        已发布的 Windows 桌面版。下载后请核对 Release 中的 SHA256SUMS；新手册描述的后续源码改动不包含在此安装包中。
                     </p>
                     <div class="download-actions">
-                        <a class="download-btn primary" href="https://github.com/haowenGuo/AILIS/releases/download/v1.3.0/AILIS-Setup-1.3.0-win-x64.exe" target="_blank" rel="noopener noreferrer">
-                            <span>Installer .exe</span><span>↗</span>
+                        <a class="download-btn primary" href="https://github.com/haowenGuo/AILIS/releases/download/v1.4.1/AILIS-Setup-1.4.1-win-x64.exe" target="_blank" rel="noopener noreferrer">
+                            <span>安装版 .exe</span><span>↗</span>
                         </a>
-                        <a class="download-btn" href="https://github.com/haowenGuo/AILIS/releases/download/v1.3.0/AILIS-Portable-1.3.0-win-x64.exe" target="_blank" rel="noopener noreferrer">
-                            <span>Portable .exe</span><span>↗</span>
+                        <a class="download-btn" href="https://github.com/haowenGuo/AILIS/releases/download/v1.4.1/AILIS-Portable-1.4.1-win-x64.exe" target="_blank" rel="noopener noreferrer">
+                            <span>便携版 .exe</span><span>↗</span>
                         </a>
                     </div>
                     <div class="download-meta">
-                        Source:<a href="https://github.com/haowenGuo/AILIS/releases/tag/v1.3.0" target="_blank" rel="noopener noreferrer">AILIS v1.3.0 Release</a>
+                        来源：<a href="https://github.com/haowenGuo/AILIS/releases/tag/v1.4.1" target="_blank" rel="noopener noreferrer">AILIS v1.4.1 Release</a>
                     </div>
                 </div>
 
                 <div class="download-card">
                     <div class="download-head">
-                        <h3>Windows · HumanClaw 1.0.4</h3>
-                        <span class="download-chip">Legacy compatibility package</span>
+                        <h3>当前源码与手册</h3>
+                        <span class="download-chip">统一 Agent 源码</span>
                     </div>
                     <p>
-                        If you need the previous HumanClaw runtime, the AILIS repository still provides the v1.0.4 installer and portable build.
+                        新手册按当前源码介绍主 Agent、持久 Session、工具与构建流程。体验新实现请按指南从源码启动；旧版安装包仍保留在历史 Release。
                     </p>
                     <div class="download-actions">
-                        <a class="download-btn primary" href="https://github.com/haowenGuo/AILIS/releases/download/v1.0.4/HumanClaw-Setup-1.0.4-win-x64.exe" target="_blank" rel="noopener noreferrer">
-                            <span>Installer .exe</span><span>↗</span>
+                        <a class="download-btn primary" href="https://github.com/haowenGuo/AILIS/blob/main/docs/guide/desktop.md" target="_blank" rel="noopener noreferrer">
+                            <span>从源码启动</span><span>↗</span>
                         </a>
-                        <a class="download-btn" href="https://github.com/haowenGuo/AILIS/releases/download/v1.0.4/HumanClaw-Portable-1.0.4-win-x64.exe" target="_blank" rel="noopener noreferrer">
-                            <span>Portable .exe</span><span>↗</span>
+                        <a class="download-btn" href="https://github.com/haowenGuo/AILIS/blob/main/docs/README.md" target="_blank" rel="noopener noreferrer">
+                            <span>阅读新手册</span><span>↗</span>
                         </a>
                     </div>
                     <div class="download-meta">
-                        Source:<a href="https://github.com/haowenGuo/AILIS/releases/tag/v1.0.4" target="_blank" rel="noopener noreferrer">HumanClaw v1.0.4 Release</a>
+                        历史：<a href="https://github.com/haowenGuo/AILIS/releases" target="_blank" rel="noopener noreferrer">全部 Release 与安装包</a>
                     </div>
                 </div>
             </div>
@@ -1852,37 +1808,38 @@
     <section class="support-section" id="opensource">
         <div class="support-panel">
             <div class="support-copy">
-                <div class="section-title" style="text-align:left; margin-bottom:10px;">📖 <span class="highlight">MIT</span> Open Source</div>
+                <div class="section-title" style="text-align:left; margin-bottom:10px;">📖 <span class="highlight">MIT</span> 开源</div>
                 <p>
-                    AILIS is now MIT licensed. The desktop runtime, Agent toolchain, and local character extensions remain open. You can bring your own model API key, use a local model, or share character packs, skins, and skill extensions with the community.
+                    AILIS 改为 MIT 开源模式：桌面运行时、Agent 工具链和本地人物扩展保持开放，
+                    用户可以自带模型 API Key、使用本地模型，或者在社区里分享人物包、皮肤包和技能扩展。
                 </p>
                 <div class="community-list">
-                    <div>The source code uses the MIT License, making it straightforward to learn from, extend, and contribute to.</div>
-                    <div>Character and skin packs use a local asset-pack runtime, without requiring an online account or centralized service.</div>
-                    <div>Cloud models, voice services, and third-party assets remain subject to the licenses of their providers and creators.</div>
+                    <div>源代码采用 MIT License，方便学习、二次开发和社区贡献。</div>
+                    <div>人物包与皮肤包走本地 asset-pack runtime，不绑定在线账号或中心化服务。</div>
+                    <div>云端模型、语音服务和第三方资产仍需遵守各自服务商或素材作者的许可。</div>
                 </div>
             </div>
             <div class="support-card">
                 <div class="account-card-head">
                     <div>
                         <div class="account-kicker">AILIS Open Source</div>
-                        <h3>Local first, built with the community</h3>
+                        <h3>本地优先，社区共建</h3>
                     </div>
                     <div id="session-chip" class="session-chip">MIT License</div>
                 </div>
                 <div class="account-security-row">
-                    <div class="account-security-chip"><strong>Runtime</strong><span>Electron local desktop</span></div>
-                    <div class="account-security-chip"><strong>Extensions</strong><span>Character packs / Skin packs</span></div>
+                    <div class="account-security-chip"><strong>运行时</strong><span>Electron 本地桌面</span></div>
+                    <div class="account-security-chip"><strong>扩展</strong><span>人物包 / 皮肤包</span></div>
                 </div>
                 <div class="community-list" style="margin-top:18px;">
-                    <div>Developers can fork the project and improve the toolchain, Agent Lab, voice, multimodal support, and local model integrations.</div>
-                    <div>Users can configure their own LLM, TTS, and ASR keys, or choose a fully local model setup.</div>
-                    <div>Community asset packs should never include private keys, account credentials, or unauthorized third-party model assets.</div>
+                    <div>开发者可以 fork 项目，修复工具链、Agent Lab、语音、多模态和本地模型接入。</div>
+                    <div>用户可以自由配置自己的 LLM / TTS / ASR Key，也可以选择完全本地模型。</div>
+                    <div>社区资产包不应包含私钥、账号凭证或未授权第三方模型资源。</div>
                 </div>
                 <div class="community-actions" style="margin-top:20px;">
-                    <a class="btn btn-primary" href="https://github.com/haowenGuo/AILIS" target="_blank" rel="noopener noreferrer">View on GitHub</a>
-                    <a class="btn btn-secondary" href="./LICENSE">View MIT License</a>
-                    <a class="btn btn-secondary" href="./docs/ailis-open-source-asset-pack-runtime.md">Character pack runtime docs</a>
+                    <a class="btn btn-primary" href="https://github.com/haowenGuo/AILIS" target="_blank" rel="noopener noreferrer">查看 GitHub</a>
+                    <a class="btn btn-secondary" href="./LICENSE">查看 MIT License</a>
+                    <a class="btn btn-secondary" href="https://github.com/haowenGuo/AILIS/blob/main/docs/design/media.md#资源与资产包" target="_blank" rel="noopener noreferrer">人物与资产包文档</a>
                 </div>
             </div>
         </div>
@@ -1890,8 +1847,8 @@
 
     <!-- ===== Benchmark ===== -->
     <section class="bench-section" id="bench">
-        <div class="section-title">📈 Local <span class="highlight">Bench</span></div>
-        <p class="section-sub">Several rounds of local evaluation, summarized as an IMGE-2-style score map.</p>
+        <div class="section-title">📈 本地 <span class="highlight">Bench</span></div>
+        <p class="section-sub">下列数字是早期版本的历史本地结果，不代表当前源码成绩；请参见<a href="https://github.com/haowenGuo/AILIS/blob/main/docs/engineering/measurement.md">运行观测与评估</a>。</p>
 
         <div class="bench-panel">
             <div class="bench-kicker">IMGE-2 Visual Scorecard · Local Bench Runs</div>
@@ -1900,38 +1857,38 @@
                 <div class="bench-card">
                     <div class="label">Humanlike Smoke</div>
                     <div class="score">91.86</div>
-                    <h3>Humanlike dialogue stability</h3>
-                    <p>9/10 fixed-protocol smoke cases passed, focusing on tone, memory, low tool exposure, and relationship-stage fit.</p>
+                    <h3>拟人对话稳定性</h3>
+                    <p>10 例固定协议 smoke，9/10 通过，重点覆盖语气、记忆、低工具感和关系阶段贴合。</p>
                 </div>
                 <div class="bench-card">
                     <div class="label">30d Longitudinal</div>
                     <div class="score mid">78.46</div>
-                    <h3>Long-term companionship and task continuity</h3>
-                    <p>Across 171 multi-day dialogue and task nodes, the average weighted score was 78.46, exposing weaknesses in research reading and GitHub tasks.</p>
+                    <h3>长期陪伴与任务连续性</h3>
+                    <p>171 个多日对话/任务节点，平均加权分 78.46，暴露了研究阅读、GitHub 任务等短板。</p>
                 </div>
                 <div class="bench-card">
                     <div class="label">Artifact Tools</div>
                     <div class="score">100</div>
-                    <h3>Document and data toolchain</h3>
-                    <p>10/10 fixed cases passed across XLSX, PDF, DOCX, PPTX, CSV, and image processing.</p>
+                    <h3>文档与数据工具链</h3>
+                    <p>10/10 固定样例通过，覆盖 XLSX、PDF、DOCX、PPTX、CSV 与图像处理。</p>
                 </div>
                 <div class="bench-card">
                     <div class="label">SWE-bench Lite Smoke</div>
                     <div class="score">100</div>
-                    <h3>Engineering-task evidence chain</h3>
-                    <p>10/10 smoke cases passed for astropy and django tasks, covering issue, repository, target, and test evidence.</p>
+                    <h3>工程任务证据链</h3>
+                    <p>10/10 smoke 样例通过，覆盖 astropy/django 任务的 issue、repo、target、test evidence。</p>
                 </div>
                 <div class="bench-card">
                     <div class="label">OSWorld PPT Recovery</div>
                     <div class="score low">0</div>
-                    <h3>Hard desktop recovery scenario</h3>
-                    <p>The single LibreOffice Impress result was 0. This is kept as a real weakness: the GUI recovery workflow still needs repair.</p>
+                    <h3>桌面恢复硬场景</h3>
+                    <p>LibreOffice Impress 单例结果为 0，保留为真实短板：GUI 恢复链路仍需继续修复。</p>
                 </div>
                 <div class="bench-card">
                     <div class="label">AILIS Speed Bench</div>
                     <div class="score">100</div>
-                    <h3>Task-chain completion rate</h3>
-                    <p>3/3 tasks completed at an average of about 195 seconds per task, used to observe model waiting, tool latency, and generation stability.</p>
+                    <h3>任务链完成率</h3>
+                    <p>3/3 任务完成，平均约 195 秒/任务，用于观察模型等待、工具耗时和生成链路稳定性。</p>
                 </div>
             </div>
 
@@ -2013,76 +1970,81 @@
             </div>
 
             <p class="bench-note">
-                Data comes from local <code>eval-results</code> and <code>logs</code> summary/report files. These are internal engineering samples that show the current capability profile, not public leaderboard results.
+                数据来自本地 <code>eval-results</code> 与 <code>logs</code> 中的 summary/report 文件；
+                这些是工程内测样本，用于展示当前能力画像，不等同于公开排行榜成绩。
             </p>
         </div>
     </section>
 
     <!-- ===== 架构 ===== -->
     <section class="arch-section" id="arch">
-        <div class="section-title" style="margin-bottom:36px;">🏗️ Project <span class="highlight">Architecture</span></div>
+        <div class="section-title" style="margin-bottom:36px;">🏗️ 项目 <span class="highlight">架构</span></div>
         <div class="arch-grid">
             <div class="arch-item">
                 <div class="layer-icon">🎭</div>
-                <h4>Presentation layer</h4>
-                <p>VRM rendering · Expression control · TTS voice<br>Frontend Character Runtime</p>
+                <h4>表现层</h4>
+                <p>VRM 角色渲染 · 表情驱动 · TTS 语音<br>前端 Character Runtime</p>
             </div>
             <div class="arch-item">
                 <div class="layer-icon">🧠</div>
-                <h4>Agent runtime</h4>
-                <p>Tool execution engine · Task planning<br>Codex-like protocol</p>
+                <h4>Agent 运行时</h4>
+                <p>工具执行引擎 · 任务规划<br>Codex-like 协议</p>
             </div>
             <div class="arch-item">
                 <div class="layer-icon">💾</div>
-                <h4>Memory system</h4>
-                <p>Persona memory · User preferences · Event logs<br>Long-term context management</p>
+                <h4>记忆系统</h4>
+                <p>人设记忆 · 用户偏好 · 事件日志<br>长期上下文管理</p>
             </div>
             <div class="arch-item">
                 <div class="layer-icon">🔧</div>
-                <h4>Tool layer</h4>
-                <p>Search · Email · Files · Code · Terminal<br>MCP external tool integration</p>
+                <h4>工具层</h4>
+                <p>搜索 · 邮件 · 文件 · 代码 · 命令行<br>MCP 外部工具集成</p>
             </div>
             <div class="arch-item">
                 <div class="layer-icon">👁️</div>
-                <h4>Vision &amp; voice</h4>
-                <p>Read-only screen perception · ASR voice input<br>TTS voice output</p>
+                <h4>视觉 &amp; 语音</h4>
+                <p>屏幕感知（只读）· ASR 语音输入<br>TTS 语音输出</p>
             </div>
         </div>
     </section>
 
     <!-- ===== 状态 Badges ===== -->
     <section class="status-section section">
-        <div class="section-title" style="margin-bottom:20px;">📊 Project <span class="highlight">Status</span></div>
+        <div class="section-title" style="margin-bottom:20px;">📊 项目 <span class="highlight">状态</span></div>
         <p style="color:var(--text-light); max-width:600px; margin:0 auto;">
-            AILIS is under active development. The stable runtime remains intact while the presentation layer, memory quality, voice and visual experience, and test coverage continue to improve.
+            AILIS 正处于活跃开发阶段，现有稳定运行时保持完整，
+            同时持续打磨展示层、记忆质量、语音视觉体验和测试覆盖。
         </p>
         <div class="status-badges">
-            <span class="status-badge"><span class="dot active"></span> Conversation stable</span>
-            <span class="status-badge"><span class="dot wip"></span> Memory improving</span>
-            <span class="status-badge"><span class="dot wip"></span> Visual experience improving</span>
-            <span class="status-badge"><span class="dot active"></span> Tool execution stable</span>
-            <span class="status-badge"><span class="dot idea"></span> More capabilities planned</span>
+            <span class="status-badge"><span class="dot active"></span> 对话稳定</span>
+            <span class="status-badge"><span class="dot wip"></span> 记忆优化中</span>
+            <span class="status-badge"><span class="dot wip"></span> 视觉体验改进</span>
+            <span class="status-badge"><span class="dot active"></span> 工具执行稳定</span>
+            <span class="status-badge"><span class="dot idea"></span> 更多能力规划中</span>
         </div>
     </section>
 
     <!-- ===== 页脚 ===== -->
     <footer class="footer">
         <div class="footer-links">
-            <a href="#home">Home</a>
-            <a href="https://101.133.239.56/Test/">Live Demo</a>
-            <a href="#about">About</a>
-            <a href="#skills">Capabilities</a>
-            <a href="#project">Project</a>
-            <a href="#download">Download</a>
-            <a href="#opensource">Open Source</a>
-            <a href="#bench">Benchmarks</a>
-            <a href="#arch">Architecture</a>
+            <a href="#home">首页</a>
+            <a href="./Test/">体验页</a>
+            <a href="#about">关于我</a>
+            <a href="#skills">能力</a>
+            <a href="#project">项目</a>
+            <a href="#download">下载</a>
+            <a href="#opensource">开源</a>
+            <a href="#bench">评测</a>
+            <a href="#arch">架构</a>
         </div>
         <p>
-            ✨ AILIS · Desktop Virtual Assistant<br>
+            ✨ AILIS · 桌面虚拟助手<br>
             Made with 💙 and lots of ☕
         </p>
-    </footer>
+    <p style="text-align:center;padding:12px"><a href="./index.html" lang="zh-CN">中文首页</a> · <a href="./en.html" lang="en">English</a> · <a href="./ja.html" lang="ja">日本語</a> · <a href="https://github.com/haowenGuo/AILIS/blob/main/docs/README.md">源码手册 / Source manual</a></p>
+</footer>
 
 </body>
 </html>
+
+<!-- AILIS source: 3e40611b5f7f7e77de462527742ded6b9aca1c5f; Pages documentation sync; existing v1.4.1 binaries unchanged. -->

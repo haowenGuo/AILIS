@@ -27,6 +27,9 @@
         }
 
         #pet-shell {
+            --pet-dialogue-reserved-top: 0px;
+            --pet-dialogue-reserved-left: 0px;
+            --pet-dialogue-reserved-right: 0px;
             position: relative;
             width: 100%;
             height: 100%;
@@ -35,7 +38,10 @@
 
         #canvas-container {
             position: absolute;
-            inset: 0;
+            left: var(--pet-dialogue-reserved-left, 0px);
+            right: var(--pet-dialogue-reserved-right, 0px);
+            bottom: 0;
+            height: calc(100% - var(--pet-dialogue-reserved-top, 0px));
         }
 
         #canvas-container canvas {
@@ -44,16 +50,33 @@
             height: 100% !important;
         }
 
+        .pet-hidden-ui {
+            position: absolute;
+            width: 1px;
+            height: 1px;
+            overflow: hidden;
+            opacity: 0;
+            pointer-events: none;
+            left: -9999px;
+            top: -9999px;
+        }
     </style>
-  <script type="module" crossorigin src="./assets/pet-CoF0uNpX.js"></script>
-  <link rel="modulepreload" crossorigin href="./assets/modulepreload-polyfill-CGdBa_z4.js">
-  <link rel="modulepreload" crossorigin href="./assets/config-CxRpwYFV.js">
-  <link rel="modulepreload" crossorigin href="./assets/i18n-B5SS86Ke.js">
+  <script type="module" crossorigin src="./assets/pet-DG-8ulKL.js"></script>
+  <link rel="modulepreload" crossorigin href="./assets/modulepreload-polyfill-DfS4ul37.js">
+  <link rel="modulepreload" crossorigin href="./assets/markdown-renderer-C_bTd4qb.js">
+  <link rel="modulepreload" crossorigin href="./assets/chat-attachments-KqhlJfe2.js">
+  <link rel="modulepreload" crossorigin href="./assets/i18n-D7yMXoS4.js">
 </head>
 <body>
     <div id="pet-shell">
         <div id="canvas-container"></div>
+
+        <div class="pet-hidden-ui" aria-hidden="true">
+            <div id="message-list"></div>
+            <textarea id="message-input"></textarea>
+            <button id="send-btn" type="button">发送</button>
+        </div>
     </div>
-
+
 </body>
 </html>

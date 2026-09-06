@@ -1,0 +1,2 @@
+# Deployment artifacts must retain their exact bytes for the publication hashes.
+* -text

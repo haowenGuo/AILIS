@@ -4,15 +4,33 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="theme-color" content="#edf6f8">
+    <meta name="ailis-resource-root" content="../">
     <meta
         name="description"
-        content="AILIS 在线陪伴体验，包含最新 3D 角色、流式对话、动作与表情联动。"
+        content="体验 AILIS：拥有 3D 角色、实时语音、长期记忆与通用任务执行能力的开源桌面 AI 伙伴。"
     >
+    <meta name="robots" content="index, follow, max-image-preview:large">
+    <link rel="canonical" href="https://haowenguo.github.io/AILIS/Test/">
+    <meta property="og:type" content="website">
+    <meta property="og:site_name" content="AILIS">
+    <meta property="og:title" content="AILIS · 桌面 AI 伙伴与通用 Agent">
+    <meta property="og:description" content="3D 角色、实时语音、长期记忆、电脑操作与经过评测的通用 Agent Harness。">
+    <meta property="og:url" content="https://haowenguo.github.io/AILIS/Test/">
+    <meta property="og:image" content="https://haowenguo.github.io/AILIS/og/ailis-social-card.png">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+    <meta property="og:image:alt" content="AILIS open-source desktop AI companion">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="AILIS · Desktop AI Companion">
+    <meta name="twitter:description" content="An open-source desktop AI companion that can see, listen, remember, and get real work done.">
+    <meta name="twitter:image" content="https://haowenguo.github.io/AILIS/og/ailis-social-card.png">
+    <meta name="twitter:image:alt" content="AILIS open-source desktop AI companion">
     <link rel="icon" type="image/png" href="../favicon.png">
-    <title>AILIS 在线体验</title>
-  <script type="module" crossorigin src="../assets/test-3ASVGL59.js"></script>
-  <link rel="modulepreload" crossorigin href="../assets/modulepreload-polyfill-CGdBa_z4.js">
-  <link rel="stylesheet" crossorigin href="../assets/test-QOLewBOt.css">
+    <title>AILIS 在线体验 · 桌面 AI 伙伴与通用 Agent</title>
+  <script type="module" crossorigin src="../assets/test-SO3_kIoA.js"></script>
+  <link rel="modulepreload" crossorigin href="../assets/modulepreload-polyfill-DfS4ul37.js">
+  <link rel="modulepreload" crossorigin href="../assets/markdown-renderer-C_bTd4qb.js">
+  <link rel="stylesheet" crossorigin href="../assets/test-Cv0YuOJV.css">
 </head>
 <body>
     <div class="app-shell">
@@ -32,7 +50,7 @@
             </a>
 
             <div class="topbar-actions">
-                <span class="version-badge">v1.3.0</span>
+                <span class="version-badge">v1.4.0</span>
                 <a class="icon-link" href="../" aria-label="返回主页" title="返回主页">
                     <svg viewBox="0 0 24 24" aria-hidden="true">
                         <path d="m3 10 9-7 9 7"></path>
@@ -55,7 +73,7 @@
                 </a>
                 <a
                     class="download-link"
-                    href="https://github.com/haowenGuo/AILIS/releases/latest"
+                    href="https://github.com/haowenGuo/AILIS/releases"
                     target="_blank"
                     rel="noreferrer"
                 >
@@ -69,58 +87,114 @@
             </div>
         </header>
 
-        <main class="experience">
-            <section class="character-pane" aria-label="AILIS 3D 角色">
+        <main class="experience" data-history-open="false">
+            <section class="character-pane" data-scene="sakura" aria-label="AILIS 3D 角色与对话舞台">
                 <div class="stage-topline">
                     <div class="character-identity">
                         <span class="character-name">AILIS</span>
                         <span class="character-role">你的桌面搭档</span>
                     </div>
-                    <div id="model-status" class="status-chip" data-state="loading" aria-live="polite">
-                        <span class="status-dot"></span>
-                        <span id="model-status-text">载入角色</span>
-                    </div>
-                </div>
-
-                <iframe
-                    id="pet-frame"
-                    class="pet-frame"
-                    title="AILIS 3D 角色"
-                    allow="autoplay"
-                    loading="eager"
-                ></iframe>
-
-                <div class="stage-footer">
-                    <span>陪伴模式</span>
-                </div>
-            </section>
-
-            <section class="conversation-pane" aria-label="与 AILIS 对话">
-                <header class="conversation-header">
-                    <div>
-                        <p class="eyebrow">LIVE COMPANION</p>
-                        <h1>和 AILIS 说说话</h1>
-                    </div>
-                    <div id="backend-status" class="service-status" data-state="checking" aria-live="polite">
-                        <span class="status-dot"></span>
-                        <span id="backend-status-text">连接服务</span>
-                    </div>
-                </header>
-
-                <div id="message-list" class="message-list" aria-live="polite" aria-busy="false">
-                    <div class="empty-state" data-local-message="true">
-                        <img
-                            src="../assets/wave-nZidcOP8.png"
-                            alt=""
-                            width="54"
-                            height="54"
+                    <div class="stage-actions">
+                        <div id="model-status" class="status-chip" data-state="loading" aria-live="polite">
+                            <span class="status-dot"></span>
+                            <span id="model-status-text">载入角色</span>
+                        </div>
+                        <button
+                            id="history-toggle"
+                            class="stage-icon-button"
+                            type="button"
+                            aria-label="展开对话记录"
+                            aria-controls="history-drawer"
+                            aria-expanded="false"
+                            title="对话记录"
                         >
-                        <strong>AILIS 正在赶来</strong>
-                        <span>角色与在线服务就绪后，就可以开始聊天。</span>
+                            <svg viewBox="0 0 24 24" aria-hidden="true">
+                                <path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4Z"></path>
+                                <path d="M8 9h8"></path>
+                                <path d="M8 13h5"></path>
+                            </svg>
+                        </button>
                     </div>
                 </div>
 
-                <div class="composer-shell">
+                <div id="stage-visual" class="stage-visual" aria-label="AILIS 动漫场景">
+                    <iframe
+                        id="pet-frame"
+                        class="pet-frame"
+                        title="AILIS 3D 角色"
+                        allow="autoplay"
+                        loading="eager"
+                    ></iframe>
+                </div>
+
+                <div class="stage-customizer">
+                    <label class="speech-toggle" for="tts-enabled-toggle">
+                        <span>语音</span>
+                        <input
+                            id="tts-enabled-toggle"
+                            type="checkbox"
+                            role="switch"
+                            aria-label="开启 AILIS 远端语音"
+                            checked
+                        >
+                        <span class="speech-toggle__track" aria-hidden="true">
+                            <span class="speech-toggle__thumb"></span>
+                        </span>
+                    </label>
+                    <div class="render-picker" role="group" aria-label="角色渲染风格">
+                        <button
+                            type="button"
+                            data-render-profile="ailis_bright_companion_mtoon"
+                            aria-pressed="true"
+                        >明亮</button>
+                    </div>
+                    <div class="scene-picker" role="group" aria-label="切换背景场景">
+                        <button
+                            class="scene-option"
+                            type="button"
+                            data-scene-option="sakura"
+                            aria-label="樱花河畔"
+                            title="樱花河畔"
+                            aria-pressed="true"
+                        >
+                            <img src="../assets/sakura-thumb-DSdGKryZ.webp" alt="">
+                        </button>
+                        <button
+                            class="scene-option"
+                            type="button"
+                            data-scene-option="school"
+                            aria-label="清晨上学路"
+                            title="清晨上学路"
+                            aria-pressed="false"
+                        >
+                            <img src="../assets/school-thumb-B8wKCSoC.webp" alt="">
+                        </button>
+                        <button
+                            class="scene-option"
+                            type="button"
+                            data-scene-option="seaside"
+                            aria-label="海边放学路"
+                            title="海边放学路"
+                            aria-pressed="false"
+                        >
+                            <img src="../assets/seaside-thumb-ZXpkLYp3.webp" alt="">
+                        </button>
+                    </div>
+                </div>
+
+                <section class="dialogue-box" aria-label="当前对话">
+                    <div class="dialogue-heading">
+                        <span id="dialogue-speaker" class="dialogue-speaker">AILIS</span>
+                        <span id="composer-status" class="dialogue-status">正在准备在线体验</span>
+                    </div>
+                    <div
+                        id="dialogue-content"
+                        class="dialogue-content"
+                        data-enable-ailis-emotes="true"
+                        aria-live="polite"
+                    >
+                        角色与在线服务就绪后，就可以开始聊天。
+                    </div>
                     <div class="quick-actions" aria-label="快捷消息">
                         <button type="button" data-prompt="你好呀，今天也请多关照">打个招呼</button>
                         <button type="button" data-prompt="陪我聊聊今天发生的事情">聊聊今天</button>
@@ -128,14 +202,46 @@
                         <button type="button" data-prompt="开心地转一圈给我看看">看看动作</button>
                     </div>
 
+                    <div id="attachment-preview" class="attachment-preview" hidden aria-live="polite"></div>
+
                     <form id="composer" class="composer">
                         <label class="sr-only" for="chat-input">发送给 AILIS</label>
+                        <input id="file-input" type="file" multiple hidden>
+                        <button
+                            id="attach-button"
+                            class="attach-button"
+                            type="button"
+                            aria-label="添加文件"
+                            title="添加文件"
+                        >
+                            <svg viewBox="0 0 24 24" aria-hidden="true">
+                                <path d="m21.4 11.6-8.9 8.9a6 6 0 0 1-8.5-8.5l9.2-9.2a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5"></path>
+                            </svg>
+                        </button>
                         <textarea
                             id="chat-input"
                             rows="1"
                             maxlength="1200"
                             placeholder="想和 AILIS 说什么？"
                         ></textarea>
+                        <button
+                            id="voice-input-button"
+                            class="voice-input-button"
+                            type="button"
+                            aria-label="语音输入"
+                            aria-pressed="false"
+                            title="语音输入"
+                            data-state="idle"
+                        >
+                            <svg class="voice-icon voice-icon-mic" viewBox="0 0 24 24" aria-hidden="true">
+                                <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"></path>
+                                <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
+                                <path d="M12 19v3"></path>
+                            </svg>
+                            <svg class="voice-icon voice-icon-stop" viewBox="0 0 24 24" aria-hidden="true">
+                                <rect x="6" y="6" width="12" height="12" rx="1"></rect>
+                            </svg>
+                        </button>
                         <button
                             id="send-button"
                             class="send-button"
@@ -150,15 +256,52 @@
                             </svg>
                         </button>
                     </form>
+                </section>
+            </section>
 
-                    <div class="experience-boundary">
-                        <span id="composer-status">正在准备在线体验</span>
-                        <a href="https://github.com/haowenGuo/AILIS/releases/latest" target="_blank" rel="noreferrer">
-                            文件、网页和电脑操作请使用桌面版
-                        </a>
+            <button id="history-backdrop" class="history-backdrop" type="button" aria-label="关闭对话记录" disabled></button>
+            <aside id="history-drawer" class="history-drawer" aria-label="对话记录" aria-hidden="true" inert>
+                <header class="history-header">
+                    <div>
+                        <p class="eyebrow">DIALOGUE LOG</p>
+                        <h1>对话记录</h1>
+                    </div>
+                    <div class="history-header-actions">
+                        <div id="backend-status" class="service-status" data-state="checking" aria-live="polite">
+                            <span class="status-dot"></span>
+                            <span id="backend-status-text">连接服务</span>
+                        </div>
+                        <button
+                            id="history-close"
+                            class="drawer-close"
+                            type="button"
+                            aria-label="关闭对话记录"
+                            title="关闭"
+                        >
+                            <svg viewBox="0 0 24 24" aria-hidden="true">
+                                <path d="m18 6-12 12"></path>
+                                <path d="m6 6 12 12"></path>
+                            </svg>
+                        </button>
+                    </div>
+                </header>
+                <div id="message-list" class="message-list" aria-live="polite" aria-busy="false">
+                    <div class="empty-state" data-local-message="true">
+                        <img
+                            src="../assets/wave-nZidcOP8.png"
+                            alt=""
+                            width="54"
+                            height="54"
+                        >
+                        <strong>还没有对话</strong>
                     </div>
                 </div>
-            </section>
+                <footer class="history-footer">
+                    <a href="https://github.com/haowenGuo/AILIS/releases" target="_blank" rel="noreferrer">
+                        在桌面版中继续
+                    </a>
+                </footer>
+            </aside>
         </main>
     </div>
 

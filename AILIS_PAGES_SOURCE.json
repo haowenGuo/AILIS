@@ -1,0 +1,605 @@
+{
+  "schema": "ailis.pages-publication.v1",
+  "sourceCommit": "3e40611b5f7f7e77de462527742ded6b9aca1c5f",
+  "previousPagesCommit": "79d90bf0190e988c3aedb08d0a8f0050a04f65e6",
+  "build": "pnpm build:demo",
+  "site": "https://haowenguo.github.io/AILIS/",
+  "generatedAt": "2026-09-06T13:36:30.604Z",
+  "releaseBinariesChanged": false,
+  "knownUnresolvedIntegrationTests": 14,
+  "preservedLegacyRoutesAndAssets": true,
+  "generatedAliases": [
+    "zh-CN.html",
+    "about-aigl.html",
+    "about-ailis.html"
+  ],
+  "preservedLanguagePages": [
+    "en.html",
+    "ja.html"
+  ],
+  "buildFiles": [
+    {
+      "file": "agent-lab.html",
+      "sha256": "8d4fc50379fa13230e7c08c77af5582c15e78282b4ae0779bbfaf923ae9de3d3"
+    },
+    {
+      "file": "assets/agentLab-Ds0FnYU2.js",
+      "sha256": "f0c778e6e7f08cd216443880b013ea0e1240a1e7fea3dfa13d227426f1e749d6"
+    },
+    {
+      "file": "assets/ailis-user-flow-image2-B9_mZeOt.png",
+      "sha256": "6b69ce6948d85540144bd2c2a58ea41866135e8e0326517b6ebad76e4c73cd32"
+    },
+    {
+      "file": "assets/chat-attachments-KqhlJfe2.js",
+      "sha256": "52cf6601091c2e57f50653304bb96c3b6bbfbd0ba615dc94f3bfe6fe20181643"
+    },
+    {
+      "file": "assets/chat-EQX0IyY4.js",
+      "sha256": "f65654026c0c6e8286b64cc40926379b88f384d28c6ce13c7f366419b3dd82fa"
+    },
+    {
+      "file": "assets/control-BqHKXaJs.js",
+      "sha256": "3dca20fb0342975702395cdd1736211d3920c39995e3064cd12d698015d1d8ad"
+    },
+    {
+      "file": "assets/i18n-D7yMXoS4.js",
+      "sha256": "b86d810ff019675191b25450dc5565fef7feb74f5fbc0d5f7aeb91ad62a2d03a"
+    },
+    {
+      "file": "assets/markdown-renderer-C_bTd4qb.js",
+      "sha256": "dd7f2571d28111e10f4ba00219ec10b5fadac67e489364ca5b805a71717a4e14"
+    },
+    {
+      "file": "assets/modulepreload-polyfill-DfS4ul37.js",
+      "sha256": "785597bca2e7dd97a652a20a197c077079e635a5663433448e0e1d9fd8c98a64"
+    },
+    {
+      "file": "assets/pet-DG-8ulKL.js",
+      "sha256": "08f5fa88f4fa82badcdff842aa46bb97df0193ce205c3519b98d4ce5b32a8d08"
+    },
+    {
+      "file": "assets/sakura-CL-jf-_g.webp",
+      "sha256": "f2ee2e0305d8e6f54e5c00759bff3ad6ccf3431b9969f40d61e05b04fe30e058"
+    },
+    {
+      "file": "assets/sakura-thumb-DSdGKryZ.webp",
+      "sha256": "b2c8882270b66ece2952ccf2141bb19853b3c9123ab9c9392155998ae2e9c882"
+    },
+    {
+      "file": "assets/school-DgopU4F5.webp",
+      "sha256": "81d3b7cf100cf6c9985a10c60d32f78be5a4edf2ffd8dba6c43c26d286f7f933"
+    },
+    {
+      "file": "assets/school-thumb-B8wKCSoC.webp",
+      "sha256": "e288533ba0e09620b5e7ea8373ff70eb908dd22c3a9cf511b2a5872940fb9daf"
+    },
+    {
+      "file": "assets/seaside-D4w_Q2pf.webp",
+      "sha256": "a6f90ce097814774a396c57f1384f0845088aa78f9ef1a37fa7424df9440efd2"
+    },
+    {
+      "file": "assets/seaside-thumb-ZXpkLYp3.webp",
+      "sha256": "0ec0b71514693d11ad60f105c8c19c4a39b70ef659003a7839cc50e4282ef017"
+    },
+    {
+      "file": "assets/test-Cv0YuOJV.css",
+      "sha256": "ecdefe74f76b15202932f11a4528e9cf9082ccba40380808376993233f35aa12"
+    },
+    {
+      "file": "assets/test-SO3_kIoA.js",
+      "sha256": "6c5d54b4a445cfd4fe6227188288390f657e43c4f06cac036b7ffc7bbc3040ce"
+    },
+    {
+      "file": "assets/visionRegion-C0Bu8vVv.js",
+      "sha256": "d564e9d12aa211ebd2333a0e9444de9df80cafb2dec67fee16a82822d1901bd2"
+    },
+    {
+      "file": "assets/wave-nZidcOP8.png",
+      "sha256": "7c0f3962a0a4c8024b2b787bfe737aba293891462c815179763c9814e48d07b9"
+    },
+    {
+      "file": "chat.html",
+      "sha256": "c1cf8b5cbe94e9bc5e740b016d08ce68aca0e902a077e17f12d94b96dfd90bc6"
+    },
+    {
+      "file": "control.html",
+      "sha256": "ebd53d0f99cae3a1650b6bccb99867572eef34a534b8630bed1ec8a57144156f"
+    },
+    {
+      "file": "favicon.ico",
+      "sha256": "353722fa6a1f352b8998c2e0a7c643913c4fec5e9b9ddb65f2a99b5a39699649"
+    },
+    {
+      "file": "favicon.png",
+      "sha256": "7c0f3962a0a4c8024b2b787bfe737aba293891462c815179763c9814e48d07b9"
+    },
+    {
+      "file": "index.html",
+      "sha256": "ef849707ef0545df682fce434fd107b5bb7453c73564ff47e74325303f305c05"
+    },
+    {
+      "file": "og/ailis-social-card.png",
+      "sha256": "1f411c0038f121763741d55c8fea2351cb7cb63d184f2cd712a8bdffce12d84c"
+    },
+    {
+      "file": "pet.html",
+      "sha256": "a55e80e8218c5ba85513576cdc3ee56dca4da72d75a654f73df5fe353c4680c5"
+    },
+    {
+      "file": "Resources/AILIS.vrm",
+      "sha256": "5099922c83c903861ee799cdbfdf584251799fdae9ce5dabb3ae577db30ea823"
+    },
+    {
+      "file": "Resources/AILIS.vrm.gz",
+      "sha256": "d9e41ebf111b3d9717ce7db9a037d11769c3d925e45ee842da9a9052f629bcb4"
+    },
+    {
+      "file": "Resources/AILIS.web.vrm",
+      "sha256": "8651d96eec118008bbc9c87191f9a8650bda950f0d8e0a1ac94b7cce208f06c7"
+    },
+    {
+      "file": "Resources/AILIS.web.vrm.gz",
+      "sha256": "38b6b014864828d1addba69146493ba606c1d06b182d41f510680dabf0596a27"
+    },
+    {
+      "file": "Resources/Emotes/ailis/angry.png",
+      "sha256": "cb9426a2b803f9595724a2e30c448baef9adada09d64abc5edad6de035c3b545"
+    },
+    {
+      "file": "Resources/Emotes/ailis/calm.png",
+      "sha256": "f0be058d6b09cdc21796e8bf43c3089321ebbbddc544df879020d719e71b59cf"
+    },
+    {
+      "file": "Resources/Emotes/ailis/clap.png",
+      "sha256": "570a563229d45ff48311f4985244259fac94431a38757ad557634bada5829db4"
+    },
+    {
+      "file": "Resources/Emotes/ailis/confused.png",
+      "sha256": "55fa07be6d7aecdc004f75e09d374fa44697ae1dbbb53d252814813b89f7c3b9"
+    },
+    {
+      "file": "Resources/Emotes/ailis/cool.png",
+      "sha256": "5b9a80cee03ce75fef3f673c491d0240a2a88592490df677db6313d27d498941"
+    },
+    {
+      "file": "Resources/Emotes/ailis/cry.png",
+      "sha256": "e769cdc0c60db81b0b64447666062f8567bd2a5c7e556a69b4c3ff9995eca479"
+    },
+    {
+      "file": "Resources/Emotes/ailis/dizzy.png",
+      "sha256": "62540d7cfc52e3e5ed4986d2499156ee9bab96505ac399c422606b0c07f8877e"
+    },
+    {
+      "file": "Resources/Emotes/ailis/eyes.png",
+      "sha256": "acd943f4b0adc757f29cbc1be885fdbba09d64dd1aab83bdbc743810d28e4a52"
+    },
+    {
+      "file": "Resources/Emotes/ailis/facepalm.png",
+      "sha256": "a3c10192ea2a10601fa7de5f97943b304041ea288985a5dcf37815d479dc739b"
+    },
+    {
+      "file": "Resources/Emotes/ailis/happy.png",
+      "sha256": "f4f38dd514c8c9fa555a199eeca956a16bd78851c86e9c7078635ec5d11bd06f"
+    },
+    {
+      "file": "Resources/Emotes/ailis/happy.svg",
+      "sha256": "e589aba54cc472692451e3f0a86da47320ec9c727e594e6a0902b386293b31b9"
+    },
+    {
+      "file": "Resources/Emotes/ailis/hug.png",
+      "sha256": "2d8f8c16152923870674194c15bc8f3803dc42977ae48923eac443ae4bdfafa5"
+    },
+    {
+      "file": "Resources/Emotes/ailis/idea.png",
+      "sha256": "326bb1547029ea2c225b2c622effce984498b04b30024c542e31d3bd18e68cbe"
+    },
+    {
+      "file": "Resources/Emotes/ailis/kiss.png",
+      "sha256": "456d816e603d38e1c700d6d1377304012a539e3b64c213904a48a51300faf188"
+    },
+    {
+      "file": "Resources/Emotes/ailis/laugh.png",
+      "sha256": "e46c3bec3c0fd76b7c59a6d755ee90626f72cd14d8fce38a235fa732994825c6"
+    },
+    {
+      "file": "Resources/Emotes/ailis/love.png",
+      "sha256": "63603f12ccbebe816dd9f8187a213f752db6906637e3e29ed30173a2fb2a8d62"
+    },
+    {
+      "file": "Resources/Emotes/ailis/love.svg",
+      "sha256": "3ad729fbd536964f476b1a7b626728c530a78ca2447cb8769f53f3acbcc1d74f"
+    },
+    {
+      "file": "Resources/Emotes/ailis/neutral.png",
+      "sha256": "2b4faa5cc1c9998f2027cc98f0c0c0cc83f9ee1e6639be129a59411924b7a92d"
+    },
+    {
+      "file": "Resources/Emotes/ailis/party.png",
+      "sha256": "1a72aa80b90e61dfcafdc916ddb0b0bae128cc2fc289e1c1dbcd5f5fe88fbb2a"
+    },
+    {
+      "file": "Resources/Emotes/ailis/proud.png",
+      "sha256": "29ef6866c95b6aeabb4fae6301b28c3f24cfc1281d089fa53d0d33f7a52b4503"
+    },
+    {
+      "file": "Resources/Emotes/ailis/README.md",
+      "sha256": "8e242af26339a83f51053385441c4e6ac1c1bc2c4676d144ce1c88dbd24b1297"
+    },
+    {
+      "file": "Resources/Emotes/ailis/sad.png",
+      "sha256": "2775c7df5c702abaf351b80b94b229324c164d85cbfeeb63c05b5a20a688a450"
+    },
+    {
+      "file": "Resources/Emotes/ailis/sad.svg",
+      "sha256": "a628c5bdc1cf0ac783ed1e742f0ab86f1f16493d226be69c79c755887df60a93"
+    },
+    {
+      "file": "Resources/Emotes/ailis/shy.png",
+      "sha256": "59652903664dd7a2a44791b5406c0f79f6c3fc592a9867173afe7845b5fdd7a7"
+    },
+    {
+      "file": "Resources/Emotes/ailis/shy.svg",
+      "sha256": "26f5e7c54a4e70de66242f29184d676714e3526a0073e4c3ad4ecfd9139eef85"
+    },
+    {
+      "file": "Resources/Emotes/ailis/sleepy.png",
+      "sha256": "19a91fc86b90b9a1e99f55beb0b7babee840a23501d17313dd398d486681e99c"
+    },
+    {
+      "file": "Resources/Emotes/ailis/sparkle.png",
+      "sha256": "b76c05c333ec0a77383e43e29902f2a7905c5a8d6589576d726799079b920e7e"
+    },
+    {
+      "file": "Resources/Emotes/ailis/sparkle.svg",
+      "sha256": "fe2e5854fc39c382fca5e39895d4db1d30fc7cd8bf056851677710f3ed18473f"
+    },
+    {
+      "file": "Resources/Emotes/ailis/surprised.png",
+      "sha256": "3bcbb92345a9089305598f4ab4302ff129c67e1b61e4f04a53804e17bd159f7d"
+    },
+    {
+      "file": "Resources/Emotes/ailis/surprised.svg",
+      "sha256": "abaf07d285f52fa0e956e11eaca209003fda1cbec1d82fb996b7a140d72d42b0"
+    },
+    {
+      "file": "Resources/Emotes/ailis/sweat.png",
+      "sha256": "bf241a66d8896f5db243bac9c3b53039b4b71e95e653670d6c58f0c54cb8ee07"
+    },
+    {
+      "file": "Resources/Emotes/ailis/thanks.png",
+      "sha256": "ee33a3edd438d786bfc6fbe8d26c2bb52b7acef87fd6fcb9de52d5d3db581b87"
+    },
+    {
+      "file": "Resources/Emotes/ailis/thinking.png",
+      "sha256": "822fe9090e47a167ee39a47fa4d6c6311905ebce8588e300feeca5006badf1a9"
+    },
+    {
+      "file": "Resources/Emotes/ailis/thumbs_up.png",
+      "sha256": "ab37037dedda138d3e8d8c22240501b41e84720386861e819be7390a8e5799aa"
+    },
+    {
+      "file": "Resources/Emotes/ailis/wave.png",
+      "sha256": "5bccc3970b38e4fccc26f137aacd5c5df07be8824a1d67451e0f300a1977faed"
+    },
+    {
+      "file": "Resources/Emotes/ailis/wink.png",
+      "sha256": "27ef01560610c9e597edc2968df75449c5927226020de88e905a27a8283fb439"
+    },
+    {
+      "file": "Resources/Emotes/ailis/worried.png",
+      "sha256": "3ceae0ff08d993019ff5989281fa0a2eadc77081a0592350b355b7a899dadce2"
+    },
+    {
+      "file": "Resources/Emotes/ailis-small/angry.png",
+      "sha256": "6c6db8f44b3e8cf51d6df7985fb04e02d5a86a221cdc852c6198e0ff65df2e1c"
+    },
+    {
+      "file": "Resources/Emotes/ailis-small/calm.png",
+      "sha256": "9bd1f8a05c208a5c7b67fa8f34637d82860fb36d3d0b82033caf6f645b33a94e"
+    },
+    {
+      "file": "Resources/Emotes/ailis-small/clap.png",
+      "sha256": "f77803ea688ce74f56d00c04af99249862b83f5fff5c240416844f38668ac65e"
+    },
+    {
+      "file": "Resources/Emotes/ailis-small/confused.png",
+      "sha256": "fed763796f2ebfb07b42d2d2b05bb04b0b5d7a4500103fa0934f1df1dd00ceb6"
+    },
+    {
+      "file": "Resources/Emotes/ailis-small/cool.png",
+      "sha256": "e4a6eb63fdf998f64e4a6b220163337b4252b545235df303d8b21d5f06cdb680"
+    },
+    {
+      "file": "Resources/Emotes/ailis-small/cry.png",
+      "sha256": "3d26e3a4555f09bd58e60a2963dd5f8c1725bdc668e3a5123330e26c70d6d607"
+    },
+    {
+      "file": "Resources/Emotes/ailis-small/dizzy.png",
+      "sha256": "2023ff871825678b1b9e8a9f38907941c679988d8160485e848bc53ef32acd92"
+    },
+    {
+      "file": "Resources/Emotes/ailis-small/eyes.png",
+      "sha256": "1933f38892b0b096312c7afdb73b6fb0a9aa46b66cd38e2b799b40e6de786fc4"
+    },
+    {
+      "file": "Resources/Emotes/ailis-small/facepalm.png",
+      "sha256": "f4198b8e60323cadb63d9efe22307871bc5c9121409566aa7e175f8d2b3e2c3a"
+    },
+    {
+      "file": "Resources/Emotes/ailis-small/happy.png",
+      "sha256": "97666d2f850da4b5d6d6f8eb82c3523745bc19888fd9319f727565d99ccd6c93"
+    },
+    {
+      "file": "Resources/Emotes/ailis-small/hug.png",
+      "sha256": "bc89e97385609773f452471a4c58c7906720483647134b1a0122a316d034f38f"
+    },
+    {
+      "file": "Resources/Emotes/ailis-small/idea.png",
+      "sha256": "f696380ab6f6e7948167a101a0e447d89c922c1b343e7a70fe4b699519458201"
+    },
+    {
+      "file": "Resources/Emotes/ailis-small/kiss.png",
+      "sha256": "cf6bd229c83056af3ee31ebe77bf91fb5d7418f58e73322c26ec3c82da01fb9f"
+    },
+    {
+      "file": "Resources/Emotes/ailis-small/laugh.png",
+      "sha256": "9783ea8b75899bdb8ea4561a313bb545f2fa4f7b8a719d0c20fca031e4b7c9cd"
+    },
+    {
+      "file": "Resources/Emotes/ailis-small/love.png",
+      "sha256": "ece85964a6c43cb08803113d86482014e5dc36754877fae4ecb5feac0b2fb326"
+    },
+    {
+      "file": "Resources/Emotes/ailis-small/neutral.png",
+      "sha256": "01e9bd8007409b04856b1a42bca0221d67a9532080ea3feaf39ee029577ecfef"
+    },
+    {
+      "file": "Resources/Emotes/ailis-small/party.png",
+      "sha256": "878a70df241f4359b82799992d9d899b29437e1d59b9f6b68c57d4f5f130724b"
+    },
+    {
+      "file": "Resources/Emotes/ailis-small/proud.png",
+      "sha256": "7289ea5ed487c454051e0ee9742c3df57901b22ba1c47943f23feea45f27da00"
+    },
+    {
+      "file": "Resources/Emotes/ailis-small/sad.png",
+      "sha256": "d623759df398d6ccfeed5599ec5718a3051ccd864c095a11224a9a34f402656e"
+    },
+    {
+      "file": "Resources/Emotes/ailis-small/shy.png",
+      "sha256": "3353f7ddda2f78039108879d9bed3cf9c777638b3df25bc1a56c95c47271ee90"
+    },
+    {
+      "file": "Resources/Emotes/ailis-small/sleepy.png",
+      "sha256": "472567f3265f4b5f75024323489d94cbc8a5de2398dc79b11b9c5ba0554fbeed"
+    },
+    {
+      "file": "Resources/Emotes/ailis-small/sparkle.png",
+      "sha256": "66d75bb0a9bffacfe8f3a330897b398dc26bbc0d6020df7af735444a31fcb8f7"
+    },
+    {
+      "file": "Resources/Emotes/ailis-small/surprised.png",
+      "sha256": "2ff847c46a7d7303fb95471a8c0b0f22e132ed1be119c7288d0baabb64e300c5"
+    },
+    {
+      "file": "Resources/Emotes/ailis-small/sweat.png",
+      "sha256": "ce0a419ea2f9f16b4419abfa60b98fa10bdc064e35eefb49f5aee586fa024804"
+    },
+    {
+      "file": "Resources/Emotes/ailis-small/thanks.png",
+      "sha256": "3e9c71fae5e181ab65fb8b6d04f312dd420d0bea48545e1d86e100ae6845ebc9"
+    },
+    {
+      "file": "Resources/Emotes/ailis-small/thinking.png",
+      "sha256": "0d61c25680bafbbfd78bb23cb75c51d7da6bca3148e0dde349eb24f7d3f7995e"
+    },
+    {
+      "file": "Resources/Emotes/ailis-small/thumbs_up.png",
+      "sha256": "18a66628720220057dfdf8b392dcc76d3e2ad4833884248a0ab7852f0340c9d3"
+    },
+    {
+      "file": "Resources/Emotes/ailis-small/wave.png",
+      "sha256": "7c0f3962a0a4c8024b2b787bfe737aba293891462c815179763c9814e48d07b9"
+    },
+    {
+      "file": "Resources/Emotes/ailis-small/wink.png",
+      "sha256": "8e28f68ae27fc2400bcc96b579bedc2f4c6c5e3a652e2dcec52cd19c85672575"
+    },
+    {
+      "file": "Resources/Emotes/ailis-small/worried.png",
+      "sha256": "cc571498ca19b53ef31100d52365a9a1cdf0fdc978890f12464e9614a3ec4627"
+    },
+    {
+      "file": "Resources/MotionIntake/candidates/fumi2kick-vrma-motion-pack/extracted/fm_vrma_motion_pack_01/vrma/001_motion_pose.vrma",
+      "sha256": "e3b06f78b21df2fe1f26d80dd1826fd47941a891d44b46a6197f8a87de05ff2c"
+    },
+    {
+      "file": "Resources/MotionIntake/candidates/fumi2kick-vrma-motion-pack/extracted/fm_vrma_motion_pack_01/vrma/001_motion_pose.vrma.gz",
+      "sha256": "bdf4f7e3a6ab052d289d0221fdcbebe1534e99f703dc4dd31b1ff7bc5bdc4c1f"
+    },
+    {
+      "file": "Resources/MotionIntake/candidates/fumi2kick-vrma-motion-pack/extracted/fm_vrma_motion_pack_01/vrma/002_dogeza.vrma",
+      "sha256": "fdc0cdeca81c8130c8fd4c257cae4392c58f48e3b016fe2db696b6d40823f504"
+    },
+    {
+      "file": "Resources/MotionIntake/candidates/fumi2kick-vrma-motion-pack/extracted/fm_vrma_motion_pack_01/vrma/002_dogeza.vrma.gz",
+      "sha256": "dab2c8eae9c4313979517df5fb0ca2a6aad258530c7af0036e48c6a1a0271829"
+    },
+    {
+      "file": "Resources/MotionIntake/candidates/fumi2kick-vrma-motion-pack/extracted/fm_vrma_motion_pack_01/vrma/003_humidai.vrma",
+      "sha256": "62c3f543c0386feadf475d81f5d6a77f7dd21cd638892d1e0fed811cd9dedd5f"
+    },
+    {
+      "file": "Resources/MotionIntake/candidates/fumi2kick-vrma-motion-pack/extracted/fm_vrma_motion_pack_01/vrma/003_humidai.vrma.gz",
+      "sha256": "3b10838c75f59a5ec1a74d2d857e56fd52d0a61231a17655c739daa9a7a3b87a"
+    },
+    {
+      "file": "Resources/MotionIntake/candidates/fumi2kick-vrma-motion-pack/extracted/fm_vrma_motion_pack_01/vrma/004_hello_1.vrma",
+      "sha256": "bde5b9d83745ad520b64ff13c05fa640185dc8ba42f76392e16404572de7c3e3"
+    },
+    {
+      "file": "Resources/MotionIntake/candidates/fumi2kick-vrma-motion-pack/extracted/fm_vrma_motion_pack_01/vrma/004_hello_1.vrma.gz",
+      "sha256": "719798d74817a584c3fe89a2d4037b081e1e364924b250e34711648b28c479ca"
+    },
+    {
+      "file": "Resources/MotionIntake/candidates/fumi2kick-vrma-motion-pack/extracted/fm_vrma_motion_pack_01/vrma/005_smartphone.vrma",
+      "sha256": "54a37ca48a1d4ffb60cfc539013f59fecd48d93375b2069c6c35b5e9f416b726"
+    },
+    {
+      "file": "Resources/MotionIntake/candidates/fumi2kick-vrma-motion-pack/extracted/fm_vrma_motion_pack_01/vrma/005_smartphone.vrma.gz",
+      "sha256": "95a17ec656c4cb460ea821f25bfc1efe7f0b2c681be2e4994d9ae33fcebe91a4"
+    },
+    {
+      "file": "Resources/MotionIntake/candidates/fumi2kick-vrma-motion-pack/extracted/fm_vrma_motion_pack_01/vrma/006_drinkwater.vrma",
+      "sha256": "ba56122fecb5014f019096dcd014c0c35f1d560dcb0f6b1d55d3d66e5d69740c"
+    },
+    {
+      "file": "Resources/MotionIntake/candidates/fumi2kick-vrma-motion-pack/extracted/fm_vrma_motion_pack_01/vrma/006_drinkwater.vrma.gz",
+      "sha256": "7bcc55404444361325bf2808ff5230fcbdf9c4bfa417dcc3ff19ba5d2a4c596e"
+    },
+    {
+      "file": "Resources/MotionIntake/candidates/fumi2kick-vrma-motion-pack/extracted/fm_vrma_motion_pack_01/vrma/007_gekirei.vrma",
+      "sha256": "88123be97c20633b926b911c1904aae3cdc790c5416b39788b753749ba087afb"
+    },
+    {
+      "file": "Resources/MotionIntake/candidates/fumi2kick-vrma-motion-pack/extracted/fm_vrma_motion_pack_01/vrma/007_gekirei.vrma.gz",
+      "sha256": "3da242e812ee3b63c40b793a9f7f061c8ae5893cf04a0f1efb02f4b407715df1"
+    },
+    {
+      "file": "Resources/MotionIntake/candidates/fumi2kick-vrma-motion-pack/extracted/fm_vrma_motion_pack_01/vrma/008_gatan.vrma",
+      "sha256": "ad2a5118837bfa6789cb89383d4e0bd98bed7685158b692bbfb6662ee42ae6c9"
+    },
+    {
+      "file": "Resources/MotionIntake/candidates/fumi2kick-vrma-motion-pack/extracted/fm_vrma_motion_pack_01/vrma/008_gatan.vrma.gz",
+      "sha256": "23c4244ba71a00c73656021a66ceca43b5c1e2fe963a7250fdc6b31d0523c529"
+    },
+    {
+      "file": "Resources/VRMA_MotionPack/vrma/Idle.vrma",
+      "sha256": "0403146a700190fa91afb240baa98deaab65a5897dfefd3b649be90be66f2156"
+    },
+    {
+      "file": "Resources/VRMA_MotionPack/vrma/Idle.vrma.gz",
+      "sha256": "208b19f23f66a20e0dadbe6372104abe0e6c2f3dfa6d1511578258dbee303803"
+    },
+    {
+      "file": "Resources/VRMA_MotionPack/vrma/Idle1.vrma",
+      "sha256": "a3a962ff071205d82850342d2cc0d4585740356e6048ab1fd4e0a06c25d6ba11"
+    },
+    {
+      "file": "Resources/VRMA_MotionPack/vrma/Idle1.vrma.gz",
+      "sha256": "a0838e2f9cbf2e8322d940750ce5f5b96d7aadeebbe02825c7afff96512f64c9"
+    },
+    {
+      "file": "Resources/VRMA_MotionPack/vrma/Idle2.vrma",
+      "sha256": "932b86ae1c8287c2c3e162e09c1bd9008eaac75383225cfcc8dd9d9529a35033"
+    },
+    {
+      "file": "Resources/VRMA_MotionPack/vrma/Idle2.vrma.gz",
+      "sha256": "52d7699c8626438812b72eddf147bf752e0d26d38d77df058cf487599bc90f39"
+    },
+    {
+      "file": "Resources/VRMA_MotionPack/vrma/Jump.vrma",
+      "sha256": "844e47e6f9a1166edcf2c9ce30be50405e693f59da1cf4be88ecadd6ffda667a"
+    },
+    {
+      "file": "Resources/VRMA_MotionPack/vrma/Jump.vrma.gz",
+      "sha256": "2f7cf04eb17554a5a29ed9ed6679243d336395ad89a8704e113597951472943e"
+    },
+    {
+      "file": "Resources/VRMA_MotionPack/vrma/VRMA_01.vrma",
+      "sha256": "f45abc44800c647fa106537a2e31a84cb83b74cf3dd8a0ee71c6915f1555ac57"
+    },
+    {
+      "file": "Resources/VRMA_MotionPack/vrma/VRMA_01.vrma.gz",
+      "sha256": "e0e9cab2c6956c757ff7a66cb570e404c0bc60e028b19173870636692363f342"
+    },
+    {
+      "file": "Resources/VRMA_MotionPack/vrma/VRMA_02.vrma",
+      "sha256": "6322bbe2df7716529dd53e2a61816e67b946416d3761c672b8d50ee2829825bb"
+    },
+    {
+      "file": "Resources/VRMA_MotionPack/vrma/VRMA_02.vrma.gz",
+      "sha256": "e47751f2518f42f4915c0d23df47bad5e08f00ce58b6381f7528c006be71d953"
+    },
+    {
+      "file": "Resources/VRMA_MotionPack/vrma/VRMA_03.vrma",
+      "sha256": "6f66b6b5c0214a7b825498050380ea43a3f782b5ea24ce46f7096acf15866d75"
+    },
+    {
+      "file": "Resources/VRMA_MotionPack/vrma/VRMA_03.vrma.gz",
+      "sha256": "3daa974cc107818ea950cf0f9f4d09136cf99f58e64a4095da9dd9c86bc93f9b"
+    },
+    {
+      "file": "Resources/VRMA_MotionPack/vrma/VRMA_04.vrma",
+      "sha256": "c40c1a7b0dbcac5aa9582f45498474255e4b0ca5642a71ffaf43878c27bedf70"
+    },
+    {
+      "file": "Resources/VRMA_MotionPack/vrma/VRMA_04.vrma.gz",
+      "sha256": "212b9cdcf39a3a77e004a0b4d9c00c55be5079711113ff6d3b8fb579a90a4b5b"
+    },
+    {
+      "file": "Resources/VRMA_MotionPack/vrma/VRMA_05.vrma",
+      "sha256": "cc508712ca4db8833ffe982d2eecd427e9374a04c005db2a7a45775f0ca45586"
+    },
+    {
+      "file": "Resources/VRMA_MotionPack/vrma/VRMA_05.vrma.gz",
+      "sha256": "97fa83a3fc41b66767e0f9dcdd68e59c72d0353460772e06d1426bbedd1b7874"
+    },
+    {
+      "file": "Resources/VRMA_MotionPack/vrma/VRMA_06.vrma",
+      "sha256": "a2c86633690e911cf935c5b8cae6553aea0445567f88c2861f7597fc1bf08af1"
+    },
+    {
+      "file": "Resources/VRMA_MotionPack/vrma/VRMA_06.vrma.gz",
+      "sha256": "2222a3b43b532c1335e797c745ebbe534afdeb56d49dd7d674a001c25a8962a2"
+    },
+    {
+      "file": "Resources/VRMA_MotionPack/vrma/VRMA_07.vrma",
+      "sha256": "b0096525231e9f49947a6fad0295575b1c2bfbc33c042d07f125c7c2fbe88995"
+    },
+    {
+      "file": "Resources/VRMA_MotionPack/vrma/VRMA_07.vrma.gz",
+      "sha256": "e98c769768b13d4d5daacb66f22e6b7053490324291de7cec3dd94f8b139a79a"
+    },
+    {
+      "file": "Resources/VRMA_MotionPack/vrma/VRMA_17.vrma",
+      "sha256": "fe23490f20116f0c4d980874a0cbaee10bb4ad50824f91b71a29185c4dcc404f"
+    },
+    {
+      "file": "Resources/VRMA_MotionPack/vrma/VRMA_17.vrma.gz",
+      "sha256": "560cd68e5070ee55bc6f868f003c3b197d74df6387065e0f1fcf0aa6e610e2c2"
+    },
+    {
+      "file": "Resources/VRMA_MotionPack/vrma/VRMA_25.vrma",
+      "sha256": "ec830d244c3f8f2a510b911a740735a78249a9d263094495250b803396c0a8b6"
+    },
+    {
+      "file": "Resources/VRMA_MotionPack/vrma/VRMA_25.vrma.gz",
+      "sha256": "b9bfe033409170918aef3160ea4600cd016d54f461b5975097fd3707ce920bfd"
+    },
+    {
+      "file": "robots.txt",
+      "sha256": "e93106c9002c5f695d46b69357c6530cc7245c0e4a0065baf050628cccd3fc3f"
+    },
+    {
+      "file": "sitemap.xml",
+      "sha256": "b7934fa923e9a302bc01f90d679eb1bf0325da0b1882b471698c6be0907712b7"
+    },
+    {
+      "file": "Test/index.html",
+      "sha256": "a6542a6d877354f6e7babb07ffef42a17af80f4ad0d67babcd2c180ad8ae2a91"
+    },
+    {
+      "file": "vision-region.html",
+      "sha256": "9140d5a8f83f59334a347946756d6a9aacb2c5ab71f06a7aed2848c339cccabd"
+    }
+  ],
+  "transforms": [
+    "Pages base URL and canonical metadata",
+    "source/manual and binary release distinction",
+    "historical benchmark attribution",
+    "language navigation and compatibility aliases",
+    "HTML LF line endings and trailing whitespace normalization"
+  ]
+}

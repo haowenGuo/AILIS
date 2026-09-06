@@ -1,15 +1,7 @@
-# AILIS Emote Stickers
+# 对话贴纸
 
-These AILIS emote stickers are generated from the project character reference and used by the program-level emoji replacement pipeline.
+本目录存放对话呈现使用的图片。[AILIS_EMOTE_STICKERS](../../../src/ailis-emote-stickers.js)定义实际映射。
 
-The active assets are transparent PNG files referenced by `src/ailis-emote-stickers.js`. The SVG files are lightweight placeholders/fallback references.
+增加图片时，为它建立映射并核对资源路径；在真实显示尺寸下检查透明背景、辨识度和布局。资源文件可以存在于目录中，而未被当前映射引用。
 
-Current set: 30 transparent PNG stickers covering common LLM emoji output, including smile, shy, sparkle, love, sad, surprised, laugh, wink, kiss, cool, thinking, confused, sweat, worried, cry, angry, sleepy, calm, proud, party, thumbs up, clap, thanks, wave, hug, dizzy, neutral, eyes, idea, and facepalm.
-
-Recommended final asset specs:
-
-- Transparent PNG or WebP.
-- 512x512 source size.
-- Keep the face readable at 28-36 CSS pixels.
-- No text, watermark, speech bubble, or hard background.
-- Keep expression categories stable: `happy`, `shy`, `sparkle`, `love`, `sad`, `surprised`.
+保留素材来源和许可记录。贴纸属于呈现资源，通用渲染流程见[媒体系统](../../../docs/design/media.md)。
