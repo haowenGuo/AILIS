@@ -1,21 +1,17 @@
 # 截图理解评测
 
-驱动：[run-ailis-screen-understanding-eval.mjs](../../scripts/run-ailis-screen-understanding-eval.mjs)。评估从已保存截图理解应用、活动、状态、可见问题和置信度；不评估点击、任务规划或最终操作完成。
+该驱动从保存的截图评估应用、活动和界面状态理解，并可调用评审模型分析结果。
 
-它只读源截图，但会请求视觉／评审模型、消耗额度并写结果，因此不能简称“无副作用只读测试”。默认源是旧 OSWorld run 的目录，不保证新 checkout 自带这些文件。
-
-## 先看参数
+在仓库根查看参数：
 
 ```powershell
 node scripts/run-ailis-screen-understanding-eval.mjs --help
 ```
 
-实际评测前明确 `--source-run`、`--output-dir` 和 `--state-path`；状态文件可含模型凭据，不公开复制。默认评测视觉路径使用 Codex bridge；`--use-configured-vision` 切换为配置的视觉模型。默认开启主模型 judge，`--no-judge` 关闭，不应再引用固定某个 judge 品牌的旧说明。
+运行前指定 --source-run、--output-dir 和 --state-path。--use-configured-vision 使用配置的视觉模型；--no-judge 关闭评审。默认 limit=20、concurrency=2、maxAttempts=2，并发范围为 1–4，尝试范围为 1–2。
 
-默认 20 个样本、并发 2；并发被限制到 1–4。`--limit`、`--only-id`、`--samples-per-domain` 用于选择样本，`--max-attempts` 限为 1–2 次基础设施尝试。真实请求前取得相应授权，不因 help 能运行就自动开跑。
+执行会读取截图、请求模型并写报告，需准备数据与服务额度。结果包含样本记录、report.json 和 summary.json。
 
-## 输出与解释
+它测量截图理解，不执行点击或完整电脑任务。报告应区分模型请求失败、数据缺失和有效评审。
 
-输出包括样本配置与结果、`report.json` 和 `summary.json`。应用／活动／状态、可用性和 hallucination 汇总来自 judge；未评审时不应假造分数。模型失败、缺数据和无有效评审要分别报告。
-
-这些是截图描述的辅助模型评分，不是 OSWorld 官方任务完成率。通用质量、usage、缓存和时延口径见 [评估手册](../../docs/evaluation.md)。
+实现：[驱动](../../scripts/run-ailis-screen-understanding-eval.mjs)。评估口径：[运行观测](../../docs/engineering/measurement.md)。

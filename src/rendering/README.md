@@ -1,12 +1,7 @@
-# 浏览器侧角色渲染
+# 角色渲染模块
 
-[index.js](index.js)是公共导出边界，暴露 `VRMModelSystem`、对话气泡事件／安装方法和鼠标命中测试安装方法。
+[index.js](index.js)提供页面使用的公共接口：VRMModelSystem、对话气泡和桌宠鼠标命中测试。
 
-- [vrm-model-system.js](vrm-model-system.js)：场景、VRM、相机、灯光、动画与渲染。
-- [../character/](../character)：状态机、动作／表情调度、screenplay 与渲染 profile。
-- [../pet-app.js](../pet-app.js)：桌宠页面消费入口。
-- [../../Test/app.js](../../Test/app.js)：独立浏览器演示入口，不属于默认桌面包。
+[vrm-model-system.js](vrm-model-system.js)管理场景、模型、相机与绘制；[character](../character)组织角色状态、动作和表情；[pet-app.js](../pet-app.js)将它们接入桌宠页面。
 
-角色呈现不是另一个模型改写主 Agent 答案。修改时分别验证正文保持、语音文本和动作映射，并进行实际画面验收；结构测试不能证明没有穿模或掉帧。
-
-配置、资源、许可与验证范围统一在 [语音和角色手册](../../docs/voice-and-avatar.md)维护，不在这里复制第二套架构。
+修改渲染时，先验证资源加载和状态变化，再检查实际画面中的动作、遮挡、穿模与帧率。文本、播报和动作数据的衔接见[媒体系统](../../docs/design/media.md)。
