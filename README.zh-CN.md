@@ -50,7 +50,7 @@ AILIS 希望成为真正生活在桌面上的个人 AI。她有可见的 3D 角�
 | :---: | :---: | :---: | :---: |
 | 用自然语言描述目标 | 读取获准的屏幕与文件 | 搜索、代码、文件与电脑操作 | 保存有价值的偏好与项目背景 |
 
-## 已验证的任务执行能力
+## 评测成绩
 
 端到端 Agent 评测 · **2026-09-07** · 成绩单位 %。浅色突出 AILIS；每列明确标注系统、模型与推理档位。
 
@@ -72,17 +72,24 @@ AILIS 希望成为真正生活在桌面上的个人 AI。她有可见的 3D 角�
 
 </details>
 
+### 记忆与拟人陪伴
+
+![AILIS 历史记忆与陪伴评测：LongMemEval-S 问答准确率 71.60%，LoCoMo token-F1 24.69，Humanlike 78.46 / 100](docs/assets/benchmarks/ailis-memory-companion-20260907.zh.svg)
+
+LongMemEval-S、LoCoMo 来自 **8 月 5 日记忆基线记录**；Humanlike 来自 **7 月 20 日内部长程评测汇总**。这些是独立的历史评测，不是上表 Luna Max 任务执行成绩，也不是当前统一 Agent 的重评测。LoCoMo 是 token-F1，不是题目通过率；Humanlike 是内部量表评分，不是外部榜单排名。
+
 <details>
-<summary>记忆与有状态任务：历史基线</summary>
+<summary>展开文本表格：记忆、有状态工具与陪伴体验</summary>
 
-| 能力 | 评测集 | AILIS 历史成绩 |
-| :--- | :--- | ---: |
-| 有状态工具调用 | ToolSandbox | 71.51% |
-| 长期记忆问答 | LongMemEval-S | 71.60% |
-| 个性化记忆 | PersonaMem Balanced-140 | 65.71% |
-| 对话记忆 | LoCoMo | 24.69 token-F1 |
+| 能力 | 评测集 | AILIS 历史成绩 | 指标 / 覆盖范围 |
+| :--- | :--- | ---: | :--- |
+| 长期记忆问答 | **LongMemEval-S** | **71.60%** | 问答准确率 · 358 / 500 |
+| 对话记忆 | **LoCoMo** | **24.69** | token-F1，0–100 标度 · 1,986 题 |
+| 拟人陪伴 | **Humanlike · 长程 Agent 评测** | **78.46 / 100** | 171 个已评分检查点 · 通过率 61.4% · 硬失败 16 个 |
+| 有状态工具调用 | ToolSandbox | 71.51% | 冻结 holdout 均值 |
+| 个性化记忆 | PersonaMem Balanced-140 | 65.71% | 92 / 140 |
 
-这些是此前单独评测的历史基线，不是当前统一 Agent 的重新评测结果。
+Humanlike 检查点来自 30 天陪伴场景，不代表真实用户连续使用 30 天的实验。召回率、时延、体验分项及历史来源见[完整评测页](docs/evaluation.zh-CN.md#记忆与陪伴体验--历史基线)。这三项暂无同口径的 Codex 对照成绩。
 
 </details>
 

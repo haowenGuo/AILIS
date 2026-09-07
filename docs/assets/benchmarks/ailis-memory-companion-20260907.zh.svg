@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="564" viewBox="0 0 1120 564" role="img" aria-labelledby="title desc">
+<title id="title">AILIS · 记忆与陪伴体验 · 历史评测成绩</title>
+<desc id="desc">LongMemEval-S 问答准确率 71.60%，358/500 题正确。LoCoMo token-F1 为 24.69，0–100 标度，覆盖 1,986 题。内部 Humanlike 加权平均分 78.46/100，171 个已评分检查点，通过率 61.4%，硬失败 16 个。这些是不同历史配置的结果，不是当前版本认证或与 Codex 的同条件对照。</desc>
+<style>text{font-family:Arial,"Microsoft YaHei","Noto Sans CJK SC",sans-serif;font-variant-numeric:tabular-nums}.head{font-size:21px;fill:#3038c9;font-weight:600}.body{font-size:21px;fill:#182033}.muted{font-size:15px;fill:#5b6479}.group{font-size:20px;fill:#3038c9;font-weight:600}.score{font-size:28px;fill:#101827;font-weight:700}.count{font-size:16px;fill:#667085}.note{font-size:15px;fill:#4b5568}</style>
+<rect width="1120" height="564" rx="14" fill="#ffffff"/>
+<rect x="350" y="1" width="240" height="445" fill="#eef0ff"/>
+<rect x="1" y="1" width="1118" height="445" rx="12" fill="none" stroke="#e3e6ef"/>
+<path d="M350 1V446 M590 1V446 M820 1V446" fill="none" stroke="#e8eaf2"/>
+<text x="25" y="44" class="head">能力 / 评测集</text>
+<text x="25" y="72" class="muted">独立的历史评测记录</text>
+<text x="470" y="44" class="head" text-anchor="middle">AILIS</text>
+<text x="470" y="72" class="muted" text-anchor="middle">历史基线</text>
+<text x="705" y="53" class="head" text-anchor="middle">指标</text>
+<text x="970" y="53" class="head" text-anchor="middle">覆盖范围</text>
+<line x1="1" y1="96" x2="1119" y2="96" stroke="#5c68ff" stroke-width="2"/>
+<rect x="1" y="96" width="1118" height="42" fill="#dce0ff"/>
+<text x="25" y="124" class="group">Memory · 记忆能力 · 2026-08-05 基线记录</text>
+<text x="28" y="178" class="body">长期记忆问答</text>
+<text x="28" y="205" class="muted">LongMemEval-S</text>
+<text x="470" y="190" class="score" text-anchor="middle">71.60%</text>
+<text x="705" y="187" class="body" text-anchor="middle">问答准确率</text>
+<text x="970" y="176" class="body" text-anchor="middle">358 / 500 题正确</text>
+<text x="970" y="204" class="count" text-anchor="middle">500 / 500 题完成</text>
+<line x1="1" y1="228" x2="1119" y2="228" stroke="#e3e6ef"/>
+<text x="28" y="268" class="body">对话记忆</text>
+<text x="28" y="295" class="muted">LoCoMo</text>
+<text x="470" y="280" class="score" text-anchor="middle">24.69</text>
+<text x="705" y="266" class="body" text-anchor="middle">token-F1</text>
+<text x="705" y="294" class="count" text-anchor="middle">0–100 标度 · 不是通过率</text>
+<text x="970" y="277" class="body" text-anchor="middle">1,986 / 1,986 题完成</text>
+<rect x="1" y="318" width="1118" height="42" fill="#dce0ff"/>
+<text x="25" y="346" class="group">Companion · 陪伴体验 · 2026-07-20 内部成绩汇总</text>
+<text x="28" y="399" class="body">拟人陪伴</text>
+<text x="28" y="426" class="muted">Humanlike · 长程 Agent 评测</text>
+<text x="470" y="411" class="score" text-anchor="middle">78.46 / 100</text>
+<text x="705" y="396" class="body" text-anchor="middle">加权平均分</text>
+<text x="705" y="424" class="count" text-anchor="middle">171 个已评分检查点</text>
+<text x="970" y="396" class="body" text-anchor="middle">通过率 61.4%</text>
+<text x="970" y="424" class="count" text-anchor="middle">硬失败 16 个</text>
+<text x="6" y="477" class="note">此处采用各自历史配置，不沿用任务执行表的 Luna Max 配置，也不是当前统一 Agent 的重评测。</text>
+<text x="6" y="506" class="note">Humanlike 来自 30 天陪伴场景，不是真实用户 30 天实验；这三项暂无同口径的 Codex 对照成绩。</text>
+<text x="6" y="535" class="note">问答准确率、token-F1、内部体验评分是不同指标，不能平均成一个总分。完整协议与历史来源见评测文档。</text>
+</svg>

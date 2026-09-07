@@ -2,7 +2,7 @@
 
 [Manual](README.md) · [简体中文](evaluation.zh-CN.md) · [Per-task index and exact statistics](evaluation/20260907-snapshot.json)
 
-Updated **2026-09-07**. Capabilities are rows; systems and model settings are columns. AILIS is highlighted and bold marks the highest reported score per row. Luna means gpt-5.6-luna throughout. These are existing frozen-run results—**not an equal-budget ranking or certification of the current GitHub source or installer**.
+Updated **2026-09-07**. Results are grouped by capability. In the task-execution comparison, columns identify systems and model settings, AILIS is highlighted, and bold marks the highest reported score per row; Luna means gpt-5.6-luna. Memory and companion results retain their own historical configurations. These are existing frozen-run results—**not an equal-budget ranking or certification of the current GitHub source or installer**.
 
 ## Task execution
 
@@ -88,16 +88,60 @@ The September 3 pre-fix batch and September 4 output-integrity batch share **84 
 
 Model requests decreased about 20%, but input tokens increased about 32% and total Agent time decreased only about 1.9%. Concurrency, timeouts and infrastructure also changed; the entire difference cannot be attributed solely to removing output truncation.
 
-## Memory and stateful tasks · historical baselines
+## Memory and companion experience · historical baselines
+
+![AILIS historical results for LongMemEval-S, LoCoMo and Humanlike](assets/benchmarks/ailis-memory-companion-20260907.en.svg)
 
 | Capability | Benchmark | AILIS historical score | Metric / sample |
 | :--- | :--- | ---: | :--- |
-| Stateful tool use | Apple ToolSandbox | **71.51%** | Frozen holdout mean |
-| Long-term question answering | LongMemEval-S | **71.60%** | 358 / 500, QA accuracy |
-| Personalized memory | PersonaMem Balanced-140 | **65.71%** | 92 / 140 |
-| Conversational memory | LoCoMo | **24.69** | token-F1, 1,986 tasks |
+| Long-term question answering | **LongMemEval-S** | **71.60%** | 358 / 500, QA accuracy |
+| Conversational memory | **LoCoMo** | **24.69** | token-F1 on a 0–100 scale, 1,986 questions |
+| Humanlike companion | **Humanlike · Longitudinal Agent Eval** | **78.46 / 100** | Mean weighted score, 171 judged checkpoints |
+| Stateful tool use | Apple ToolSandbox | 71.51% | Frozen holdout mean |
+| Personalized memory | PersonaMem Balanced-140 | 65.71% | 92 / 140 |
 
-These are earlier independent runs, not re-evaluations of the current unified Agent. LoCoMo F1 is not directly rankable against pass rates. Earlier A6 GAIA 119 / 165 (72.12%) and A7 Terminal-Bench 60 / 89 (67.42%) also belong to their own frozen sources and scoring protocols; see the [historical scorecard](https://github.com/haowenGuo/AILIS/blob/659bf61f2b340d2313b3bae386704265c8d2bba2/docs/evaluation.md).
+These are earlier independent runs, not re-evaluations of the current unified Agent or results under the Luna Max configuration above. **QA accuracy, token-F1 and internal rubric scores measure different things; they must not be averaged into an overall score.** No matched Codex results are available for LongMemEval-S, LoCoMo or Humanlike.
+
+### LongMemEval-S and LoCoMo: memory retrieval and answering
+
+The August 5, 2026 baseline record uses **BM25 phrase v2 + soft session-diversity MMR (penalty 0.2), Top-8 retrieval**. The retrieval stage is local and deterministic, with no dense retrieval or retrieval-time LLM query planner; answer generation and judging are separate from retrieval.
+
+| Metric | LongMemEval-S | LoCoMo |
+| :--- | ---: | ---: |
+| Completed questions | 500 / 500 | 1,986 / 1,986 |
+| Answer score | 71.60% QA accuracy · 358 correct | 24.69 token-F1 · 0–100 scale |
+| Session recall @8 | 93.53% | 89.67% |
+| Turn recall @8 | 83.31% | 71.75% |
+| End-to-end p50 | 18.6s | 12.72s |
+| End-to-end p95 | 39.1s | 30.44s |
+
+LongMemEval-S records Reader / Judge as **Luna / Luna medium**, with zero generation or Judge failures. Judging uses the verbatim official LongMemEval prompt and binary aggregation, but this is a local result, not an official leaderboard submission. The archived LoCoMo summary does not specify the Reader model and reasoning setting, so no current model configuration is inferred. LoCoMo's token-F1 measures answer overlap; **24.69 does not mean 24.69% of questions passed**. Protocol and scores: [archived memory baseline](https://github.com/haowenGuo/AILIS/blob/659bf61f2b340d2313b3bae386704265c8d2bba2/docs/ailis-memory-bm25-mmr-baseline.md).
+
+### Humanlike: internal companion-experience evaluation
+
+The July 20, 2026 scorecard reports **171 judged checkpoints from 30-day companion scenarios**. This is scenario-based internal product evaluation, not a 30-day real-user study or an external public benchmark ranking.
+
+| Metric | Historical result |
+| :--- | ---: |
+| Mean weighted score · 0–100 | **78.46** |
+| Checkpoint pass rate | **61.4%** |
+| Hard failures | **16** |
+| Judged checkpoints | **171** |
+
+| Experience dimension · 1–5 | Mean score |
+| :--- | ---: |
+| Persona consistency | 4.21 |
+| Naturalness | 4.19 |
+| Memory usefulness | 3.41 |
+| Emotional fit | 4.21 |
+| Multimodal sync | 3.57 |
+| Low tool feeling | 4.38 |
+| Relationship-stage fit | 4.16 |
+| Task completion | 3.84 |
+
+The suite uses per-dimension Judge rubrics, weighted aggregation and hard-failure checks. The scorecard does not fully specify the candidate / Judge model versions for this run; it is not relabeled as a current Luna Max result. **1,000 / 1,000 valid scenarios is dataset-validation coverage, not a model pass rate**, and the separate six-checkpoint tool-feel smoke test is not pooled into this score. Sources: [archived Humanlike scorecard](https://github.com/haowenGuo/AILIS/blob/659bf61f2b340d2313b3bae386704265c8d2bba2/docs/ailis-demo-benchmark-scorecard.md#humanlike-companion) and [rubric and evaluation workflow](https://github.com/haowenGuo/AILIS/blob/659bf61f2b340d2313b3bae386704265c8d2bba2/docs/ailis-humanlike-eval.md).
+
+This documentation update checks the historical summaries, not a fresh replay or re-judging of every underlying answer. Earlier A6 GAIA 119 / 165 (72.12%) and A7 Terminal-Bench 60 / 89 (67.42%) also belong to their own frozen sources and scoring protocols; see the [historical scorecard](https://github.com/haowenGuo/AILIS/blob/659bf61f2b340d2313b3bae386704265c8d2bba2/docs/evaluation.md).
 
 ## Protocols and evidence
 

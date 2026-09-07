@@ -2,7 +2,7 @@
 
 [文档中心](README.md) · [English](evaluation.md) · [逐题索引与原始统计数](evaluation/20260907-snapshot.json)
 
-更新于 **2026-09-07**。下表按能力组织、按系统与模型横向对照；浅色突出 AILIS，粗体表示本行最高观测值。Luna 均指 gpt-5.6-luna。成绩来自已有冻结运行，**不是等预算排名，也不自动属于当前 GitHub 源码或安装包**。
+更新于 **2026-09-07**。成绩按能力组织；任务执行表按系统与模型横向对照，浅色突出 AILIS，粗体表示本行最高观测值，其中 Luna 指 gpt-5.6-luna。记忆与陪伴评测保留各自历史配置。成绩来自已有冻结运行，**不是等预算排名，也不自动属于当前 GitHub 源码或安装包**。
 
 ## 任务执行能力
 
@@ -88,16 +88,60 @@ Codex 存档 cost 为 445 次合计 $241.45，不是核对过的发票。AILIS �
 
 模型请求减少约 20%，但输入 Token 增加约 32%，累计 Agent 时间仅降低约 1.9%。并发、时限与基础设施也有变化，不能将全部变化单独归因于取消裁剪。
 
-## 记忆与有状态任务 · 历史基线
+## 记忆与陪伴体验 · 历史基线
+
+![AILIS LongMemEval-S、LoCoMo 与 Humanlike 历史评测成绩](assets/benchmarks/ailis-memory-companion-20260907.zh.svg)
 
 | 能力 | 评测集 | AILIS 历史成绩 | 指标 / 样本 |
 | :--- | :--- | ---: | :--- |
-| 有状态工具调用 | Apple ToolSandbox | **71.51%** | 冻结 holdout 均值 |
-| 长期记忆问答 | LongMemEval-S | **71.60%** | 358 / 500，QA accuracy |
-| 个性化记忆 | PersonaMem Balanced-140 | **65.71%** | 92 / 140 |
-| 对话记忆 | LoCoMo | **24.69** | token-F1，1,986 题 |
+| 长期记忆问答 | **LongMemEval-S** | **71.60%** | 358 / 500，问答准确率 |
+| 对话记忆 | **LoCoMo** | **24.69** | token-F1，0–100 标度，1,986 题 |
+| 拟人陪伴 | **Humanlike · 长程 Agent 评测** | **78.46 / 100** | 加权平均分，171 个已评分检查点 |
+| 有状态工具调用 | Apple ToolSandbox | 71.51% | 冻结 holdout 均值 |
+| 个性化记忆 | PersonaMem Balanced-140 | 65.71% | 92 / 140 |
 
-此处是此前独立运行的结果，不是当前统一 Agent 的重评测。LoCoMo 的 F1 不能与其他表的通过率直接排名。更早的 A6 GAIA 119 / 165（72.12%）与 A7 Terminal-Bench 60 / 89（67.42%）也属于各自冻结源及评分协议，详见[历史评测存档](https://github.com/haowenGuo/AILIS/blob/659bf61f2b340d2313b3bae386704265c8d2bba2/docs/evaluation.zh-CN.md)。
+此处是此前独立运行的结果，不是当前统一 Agent 的重评测，也不沿用上表的 Luna Max 配置。**问答准确率、token-F1 与内部量表评分衡量的对象不同，不能平均成一个总分。**LongMemEval-S、LoCoMo、Humanlike 暂无同口径的 Codex 对照成绩。
+
+### LongMemEval-S 与 LoCoMo：记忆检索和问答
+
+2026-08-05 的基线记录使用 **BM25 phrase v2 + soft session-diversity MMR（penalty 0.2），Top-8 检索**。检索阶段是本地确定性流程，不使用稠密检索或检索时的 LLM 查询规划器；答案生成和评分是检索之外的环节。
+
+| 指标 | LongMemEval-S | LoCoMo |
+| :--- | ---: | ---: |
+| 已完成题数 | 500 / 500 | 1,986 / 1,986 |
+| 答案成绩 | 问答准确率 71.60% · 358 题正确 | token-F1 24.69 · 0–100 标度 |
+| Session recall @8 | 93.53% | 89.67% |
+| Turn recall @8 | 83.31% | 71.75% |
+| 端到端 p50 | 18.6s | 12.72s |
+| 端到端 p95 | 39.1s | 30.44s |
+
+LongMemEval-S 记录的 Reader / Judge 为 **Luna / Luna medium**，生成和 Judge 失败均为 0。评分采用官方 LongMemEval 原始提示词及二值汇总，但这是本地成绩，不是官方榜单提交。LoCoMo 的历史汇总未注明 Reader 模型与推理档位，因此不推定它使用当前模型配置。LoCoMo 的 token-F1 衡量答案重合程度，**24.69 不代表通过了 24.69% 的题目**。协议与成绩来源：[历史记忆基线](https://github.com/haowenGuo/AILIS/blob/659bf61f2b340d2313b3bae386704265c8d2bba2/docs/ailis-memory-bm25-mmr-baseline.md)。
+
+### Humanlike：内部陪伴体验评测
+
+2026-07-20 的成绩汇总覆盖 **30 天陪伴场景中的 171 个已评分检查点**。这是场景式内部产品评测，不是真实用户连续使用 30 天的实验，也不是外部公开榜单排名。
+
+| 指标 | 历史结果 |
+| :--- | ---: |
+| 加权平均分 · 0–100 | **78.46** |
+| 检查点通过率 | **61.4%** |
+| 硬失败 | **16** |
+| 已评分检查点 | **171** |
+
+| 体验维度 · 1–5 分 | 平均分 |
+| :--- | ---: |
+| 人设一致性 | 4.21 |
+| 自然度 | 4.19 |
+| 记忆实用性 | 3.41 |
+| 情绪匹配 | 4.21 |
+| 多模态同步 | 3.57 |
+| 低工具感 | 4.38 |
+| 关系阶段匹配 | 4.16 |
+| 任务完成 | 3.84 |
+
+该套评测使用逐维度 Judge 量表、加权汇总与硬失败检查。历史成绩页未完整注明本次候选模型 / Judge 的具体版本，因此不将其改标为当前 Luna Max 成绩。**1,000 / 1,000 场景有效属于数据集结构校验，不是模型通过率**；另一次 6 个检查点的低工具感烟测也未合并进来。来源：[历史 Humanlike 成绩](https://github.com/haowenGuo/AILIS/blob/659bf61f2b340d2313b3bae386704265c8d2bba2/docs/ailis-demo-benchmark-scorecard.md#humanlike-companion)、[评分量表与执行流程](https://github.com/haowenGuo/AILIS/blob/659bf61f2b340d2313b3bae386704265c8d2bba2/docs/ailis-humanlike-eval.md)。
+
+本次文档更新核对的是历史汇总，不是重新回放或逐题重新判分。更早的 A6 GAIA 119 / 165（72.12%）与 A7 Terminal-Bench 60 / 89（67.42%）也属于各自冻结源及评分协议，详见[历史评测存档](https://github.com/haowenGuo/AILIS/blob/659bf61f2b340d2313b3bae386704265c8d2bba2/docs/evaluation.zh-CN.md)。
 
 ## 评测设置与证据
 

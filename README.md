@@ -50,7 +50,7 @@ Talk to AILIS naturally, like a companion. When there is work to do, she can und
 | :---: | :---: | :---: | :---: |
 | Explain the goal naturally | Read approved screen and file context | Use search, code, file, and computer tools | Keep useful preferences and project background |
 
-## Evaluated Agent Capability
+## Evaluation Results
 
 End-to-end Agent evaluation · **2026-09-07** · scores in %. AILIS is highlighted; columns identify both the system and its model / reasoning setting.
 
@@ -72,17 +72,24 @@ Scores are percentages. Bold indicates the highest reported value in a row, not 
 
 </details>
 
+### Memory & Humanlike Companion
+
+![AILIS historical memory and companion scorecard: LongMemEval-S 71.60% QA accuracy, LoCoMo 24.69 token-F1, Humanlike 78.46 out of 100](docs/assets/benchmarks/ailis-memory-companion-20260907.en.svg)
+
+LongMemEval-S and LoCoMo use the **August 5 memory baseline**; Humanlike uses the **July 20 internal longitudinal summary**. These are separate historical evaluations, not Luna Max results from the task-execution table or reruns of the current unified Agent. LoCoMo is token-F1, not a task pass rate; Humanlike is an internal rubric score, not an external benchmark ranking.
+
 <details>
-<summary>Memory &amp; stateful tasks · historical baselines</summary>
+<summary>Text table · memory, stateful tools, and companion experience</summary>
 
-| Capability | Benchmark | AILIS historical result |
-| :--- | :--- | ---: |
-| Stateful tool use | ToolSandbox | 71.51% |
-| Long-term question answering | LongMemEval-S | 71.60% |
-| Personalized memory | PersonaMem Balanced-140 | 65.71% |
-| Conversational memory | LoCoMo | 24.69 token-F1 |
+| Capability | Benchmark | AILIS historical result | Metric / coverage |
+| :--- | :--- | ---: | :--- |
+| Long-term question answering | **LongMemEval-S** | **71.60%** | QA accuracy · 358 / 500 |
+| Conversational memory | **LoCoMo** | **24.69** | token-F1 on a 0–100 scale · 1,986 questions |
+| Humanlike companion | **Humanlike · Longitudinal Agent Eval** | **78.46 / 100** | 171 judged checkpoints · 61.4% pass rate · 16 hard failures |
+| Stateful tool use | ToolSandbox | 71.51% | Frozen holdout mean |
+| Personalized memory | PersonaMem Balanced-140 | 65.71% | 92 / 140 |
 
-These are earlier, separately scored baselines—not reruns of the current unified Agent.
+Humanlike checkpoints come from 30-day companion scenarios, not a 30-day real-user study. See the [full scorecard](docs/evaluation.md#memory-and-companion-experience--historical-baselines) for retrieval recall, latency, experience dimensions and archived sources. No matched Codex results are available for these three evaluations.
 
 </details>
 
