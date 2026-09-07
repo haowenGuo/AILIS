@@ -52,27 +52,45 @@ Talk to AILIS naturally, like a companion. When there is work to do, she can und
 
 ## Evaluated Agent Capability
 
-AILIS is tested on complete end-to-end tasks, not only feature demos. Updated **2026-09-07** from audited, frozen-source runs; these results do not automatically certify the current source branch or the v1.4.1 installer. Source identities, scoring rules and comparison limits are documented in the [evaluation report](docs/evaluation.md).
+End-to-end Agent evaluation · **2026-09-07** · scores in %. AILIS is highlighted; columns identify both the system and its model / reasoning setting.
 
-| Benchmark | AILIS | Codex reference |
-| :--- | ---: | ---: |
-| **GAIA public validation · same 122 completed tasks** | **94 / 122 · 77.05%** | 82 / 122 · 67.21% |
-| **Terminal-Bench 2.1 · 89 planned tasks** | **65 / 87 · 74.71%** | 337 / 445 · 75.73% ± 1.32% |
+![AILIS and Codex benchmark matrix: Terminal-Bench and GAIA overall / L1 / L2 / L3](docs/assets/benchmarks/ailis-evaluation-20260907.en.svg)
 
-GAIA has **43 of 165 tasks unresolved** due to infrastructure interruptions. The 94 matches include manual review of saved answers; automatic matching alone is 76 / 122. AILIS uses Luna Max / 3000s, while the same-task native Codex reference uses Luna Medium / 600s: this is not an equal-budget comparison or a full-165 score.
+**[1] Terminal-Bench:** 65 passes / 87 valid tasks, with 2 of 89 unresolved. Codex is an official archived 89 × 5-trial result. **[2] GAIA:** reviewed answers on 122 completed tasks, with 43 of 165 unresolved; AILIS uses Max / 3000s, the Codex references use Medium / 600s. These are different-budget frozen-run results, not full-suite certification of the current release.
 
-Terminal-Bench has **2 infrastructure-unresolved tasks**, excluded from the 87 valid outcomes. Across all 89 planned tasks, confirmed passes are 65 / 89 = 73.03%. Both systems use Luna Max, but the official Codex archive aggregates five attempts per task; AILIS uses different execution budgets and infrastructure recovery. Weighted input cache rates are **95.79% for AILIS** and **97.17% for the Codex archive**.
+<details>
+<summary>Text table · scores, sample counts, and missing values</summary>
+
+| Capability / Benchmark | AILIS<br>Luna Max | Codex<br>Luna Max | Codex<br>Luna Medium | Codex<br>GPT-5.5 Medium |
+| :--- | ---: | ---: | ---: | ---: |
+| **Coding** | | | | |
+| **Agentic terminal coding**<br>Terminal-Bench 2.1 [1] | 74.71<br><sub>65 / 87</sub> | **75.73**<br><sub>337 / 445 · ± 1.32 SE</sub> | — | — |
+| **Agent** | | | | |
+| **General-purpose tasks**<br>GAIA · Overall [2] | 77.05<br><sub>94 / 122</sub> | — | 67.21<br><sub>82 / 122</sub> | **79.51**<br><sub>97 / 122</sub> |
+| **General-purpose tasks · L1**<br>GAIA · L1 [2] | **89.36**<br><sub>42 / 47</sub> | — | 78.72<br><sub>37 / 47</sub> | 87.23<br><sub>41 / 47</sub> |
+| **General-purpose tasks · L2**<br>GAIA · L2 [2] | 69.64<br><sub>39 / 56</sub> | — | 67.86<br><sub>38 / 56</sub> | **71.43**<br><sub>40 / 56</sub> |
+| **General-purpose tasks · L3**<br>GAIA · L3 [2] | 68.42<br><sub>13 / 19</sub> | — | 36.84<br><sub>7 / 19</sub> | **84.21**<br><sub>16 / 19</sub> |
+
+Scores are percentages. Bold indicates the highest reported value in a row, not a controlled ranking. — means no corresponding evidence, not failure or zero.
+
+</details>
+
+<details>
+<summary>Memory &amp; stateful tasks · historical baselines</summary>
+
+| Capability | Benchmark | AILIS historical result |
+| :--- | :--- | ---: |
+| Stateful tool use | ToolSandbox | 71.51% |
+| Long-term question answering | LongMemEval-S | 71.60% |
+| Personalized memory | PersonaMem Balanced-140 | 65.71% |
+| Conversational memory | LoCoMo | 24.69 token-F1 |
+
+These are earlier, separately scored baselines—not reruns of the current unified Agent.
+
+</details>
 
 <p align="center">
-  <strong>ToolSandbox 71.51%</strong> ·
-  <strong>LongMemEval-S 71.60%</strong> ·
-  <strong>PersonaMem 65.71%</strong>
-</p>
-
-These memory and stateful-task results are historical baselines, not rerun in the current batch.
-
-<p align="center">
-  <a href="docs/evaluation.md"><strong>View scores, efficiency metrics, comparison protocols, and audited evidence</strong></a>
+  <a href="docs/evaluation.md"><strong>Full scorecard, efficiency, historical comparisons, and evaluation protocols →</strong></a>
 </p>
 
 ## What Works Today

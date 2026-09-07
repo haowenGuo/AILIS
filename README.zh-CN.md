@@ -52,27 +52,45 @@ AILIS 希望成为真正生活在桌面上的个人 AI。她有可见的 3D 角�
 
 ## 已验证的任务执行能力
 
-AILIS 不只展示功能，也持续用完整端到端任务检验 Agent Harness。以下于 **2026-09-07** 更新自已审计的冻结运行，不自动代表当前源码分支或 v1.4.1 安装包的认证成绩。源码归属、计分口径与比较边界见[完整评测报告](docs/evaluation.zh-CN.md)。
+端到端 Agent 评测 · **2026-09-07** · 成绩单位 %。浅色突出 AILIS；每列明确标注系统、模型与推理档位。
 
-| Benchmark | AILIS | Codex 对照 |
-| :--- | ---: | ---: |
-| **GAIA public validation · 相同的 122 道已完成题** | **94 / 122 · 77.05%** | 82 / 122 · 67.21% |
-| **Terminal-Bench 2.1 · 计划 89 题** | **65 / 87 · 74.71%** | 337 / 445 · 75.73% ± 1.32% |
+![AILIS 与 Codex 评测矩阵：Terminal-Bench、GAIA 总体与 L1/L2/L3](docs/assets/benchmarks/ailis-evaluation-20260907.zh.svg)
 
-GAIA 计划 165 题，仍有 **43 题基础设施中断未决**。94 题为保存答案经人工复核后的明确匹配；纯自动匹配为 76 / 122。AILIS 使用 Luna Max / 3000s，同题原生 Codex 对照使用 Luna Medium / 600s，**不是等预算比较，也不是完整 165 题成绩**。
+**[1] Terminal-Bench：**65 通过 / 87 有效，计划 89 题中 2 题未决；Codex 为官方存档的 89 × 5 次结果。**[2] GAIA：**相同 122 道已完成题的答案复核，计划 165 题中 43 题未决；AILIS 为 Max / 3000s，Codex 对照为 Medium / 600s。这是不同预算的冻结运行对照，不是当前版本的全量评测认证。
 
-Terminal-Bench 仍有 **2 题基础设施未决**，不计入 87 道有效结果；全 89 题的已确认通过比例为 65 / 89 = 73.03%。双方均为 Luna Max，但 Codex 官方存档聚合每题五次，AILIS 的时限和基础设施恢复条件不同。加权输入缓存率：**AILIS 95.79%**，**Codex 存档 97.17%**。
+<details>
+<summary>展开文本表格：成绩、样本量与缺失数据</summary>
+
+| 能力 / 评测集 | AILIS<br>Luna Max | Codex<br>Luna Max | Codex<br>Luna Medium | Codex<br>GPT-5.5 Medium |
+| :--- | ---: | ---: | ---: | ---: |
+| **Coding · 编码** | | | | |
+| **终端编码与环境任务**<br>Terminal-Bench 2.1 [1] | 74.71<br><sub>65 / 87</sub> | **75.73**<br><sub>337 / 445 · ± 1.32 SE</sub> | — | — |
+| **Agent · 通用任务** | | | | |
+| **通用任务执行**<br>GAIA · Overall [2] | 77.05<br><sub>94 / 122</sub> | — | 67.21<br><sub>82 / 122</sub> | **79.51**<br><sub>97 / 122</sub> |
+| **通用任务执行 · L1**<br>GAIA · L1 [2] | **89.36**<br><sub>42 / 47</sub> | — | 78.72<br><sub>37 / 47</sub> | 87.23<br><sub>41 / 47</sub> |
+| **通用任务执行 · L2**<br>GAIA · L2 [2] | 69.64<br><sub>39 / 56</sub> | — | 67.86<br><sub>38 / 56</sub> | **71.43**<br><sub>40 / 56</sub> |
+| **通用任务执行 · L3**<br>GAIA · L3 [2] | 68.42<br><sub>13 / 19</sub> | — | 36.84<br><sub>7 / 19</sub> | **84.21**<br><sub>16 / 19</sub> |
+
+成绩单位为 %；粗体仅表示本行最高观测值，不代表等条件排名。— 表示无对应证据，不是失败或 0 分。
+
+</details>
+
+<details>
+<summary>记忆与有状态任务：历史基线</summary>
+
+| 能力 | 评测集 | AILIS 历史成绩 |
+| :--- | :--- | ---: |
+| 有状态工具调用 | ToolSandbox | 71.51% |
+| 长期记忆问答 | LongMemEval-S | 71.60% |
+| 个性化记忆 | PersonaMem Balanced-140 | 65.71% |
+| 对话记忆 | LoCoMo | 24.69 token-F1 |
+
+这些是此前单独评测的历史基线，不是当前统一 Agent 的重新评测结果。
+
+</details>
 
 <p align="center">
-  <strong>ToolSandbox 71.51%</strong> ·
-  <strong>LongMemEval-S 71.60%</strong> ·
-  <strong>PersonaMem 65.71%</strong>
-</p>
-
-以上记忆与有状态任务成绩为历史基线，本批没有重新评测。
-
-<p align="center">
-  <a href="docs/evaluation.zh-CN.md"><strong>查看评测成绩、效率指标、比较口径与审计证据</strong></a>
+  <a href="docs/evaluation.zh-CN.md"><strong>完整成绩、效率、历史对照与评测口径 →</strong></a>
 </p>
 
 ## 现在可以做什么

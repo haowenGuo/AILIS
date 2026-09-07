@@ -1,0 +1,80 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="744" viewBox="0 0 1120 744" role="img" aria-labelledby="title desc">
+<title id="title">AILIS 与 Codex 评测对照 · 2026-09-07</title>
+<desc id="desc">各列为 AILIS Luna Max、Codex Luna Max、Codex Luna Medium、Codex GPT-5.5 Medium。终端评测 AILIS 65/87，Codex 337/445；GAIA 122 题复核分别为 94、82、97 道明确匹配。终端另 2 题、GAIA 另 43 题未决。不同预算的描述性对照。</desc>
+<style>text{font-family:Arial,"Microsoft YaHei","Noto Sans CJK SC",sans-serif;font-variant-numeric:tabular-nums}.head{font-size:21px;fill:#3038c9;font-weight:600}.model{font-size:16px;fill:#58628b}.body{font-size:21px;fill:#182033}.muted{font-size:15px;fill:#5b6479}.group{font-size:20px;fill:#3038c9;font-weight:600}.score{font-size:26px;fill:#4b5568}.best{font-size:26px;fill:#101827;font-weight:700}.count{font-size:14px;fill:#667085}.note{font-size:15px;fill:#4b5568}.missing{font-size:24px;fill:#8c94a5}</style>
+<rect width="1120" height="744" rx="14" fill="#ffffff"/>
+<rect x="350" y="0" width="192" height="636" fill="#eef0ff"/>
+<rect x="1" y="1" width="1118" height="635" rx="12" fill="none" stroke="#e3e6ef"/>
+<line x1="350" y1="1" x2="350" y2="636" stroke="#e8eaf2"/>
+<line x1="542" y1="1" x2="542" y2="636" stroke="#e8eaf2"/>
+<line x1="734" y1="1" x2="734" y2="636" stroke="#e8eaf2"/>
+<line x1="926" y1="1" x2="926" y2="636" stroke="#e8eaf2"/>
+<text x="25" y="47" class="head" text-anchor="start">能力 / 评测集</text>
+<text x="25" y="77" class="muted" text-anchor="start">成绩 % ↑</text>
+<text x="446" y="45" class="head" text-anchor="middle">AILIS</text>
+<text x="446" y="75" class="model" text-anchor="middle">Luna · Max</text>
+<text x="638" y="45" class="head" text-anchor="middle">Codex</text>
+<text x="638" y="75" class="model" text-anchor="middle">Luna · Max</text>
+<text x="830" y="45" class="head" text-anchor="middle">Codex</text>
+<text x="830" y="75" class="model" text-anchor="middle">Luna · Medium</text>
+<text x="1022" y="45" class="head" text-anchor="middle">Codex</text>
+<text x="1022" y="75" class="model" text-anchor="middle">GPT-5.5 · Medium</text>
+<line x1="1" y1="108" x2="1119" y2="108" stroke="#5c68ff" stroke-width="2"/>
+<rect x="1" y="108" width="1118" height="44" fill="#dce0ff"/>
+<text x="25" y="137" class="group" text-anchor="start">Coding · 编码</text>
+<text x="28" y="187" class="body" text-anchor="start">终端编码与环境任务</text>
+<text x="28" y="214" class="muted" text-anchor="start">Terminal-Bench 2.1 [1]</text>
+<text x="446" y="195" class="score" text-anchor="middle">74.71</text>
+<text x="446" y="218" class="count" text-anchor="middle">65 / 87</text>
+<text x="638" y="195" class="best" text-anchor="middle">75.73</text>
+<text x="638" y="218" class="count" text-anchor="middle">337 / 445</text>
+<text x="638" y="238" class="count" text-anchor="middle">± 1.32 SE</text>
+<text x="830" y="204" class="missing" text-anchor="middle">—</text>
+<text x="1022" y="204" class="missing" text-anchor="middle">—</text>
+<line x1="1" y1="248" x2="1119" y2="248" stroke="#e3e6ef"/>
+<rect x="1" y="248" width="1118" height="44" fill="#dce0ff"/>
+<text x="25" y="277" class="group" text-anchor="start">Agent · 通用任务</text>
+<text x="28" y="327" class="body" text-anchor="start">通用任务执行</text>
+<text x="28" y="354" class="muted" text-anchor="start">GAIA · Overall [2]</text>
+<text x="446" y="335" class="score" text-anchor="middle">77.05</text>
+<text x="446" y="358" class="count" text-anchor="middle">94 / 122</text>
+<text x="638" y="344" class="missing" text-anchor="middle">—</text>
+<text x="830" y="335" class="score" text-anchor="middle">67.21</text>
+<text x="830" y="358" class="count" text-anchor="middle">82 / 122</text>
+<text x="1022" y="335" class="best" text-anchor="middle">79.51</text>
+<text x="1022" y="358" class="count" text-anchor="middle">97 / 122</text>
+<line x1="1" y1="378" x2="1119" y2="378" stroke="#e3e6ef"/>
+<text x="28" y="413" class="body" text-anchor="start">通用任务执行 · L1</text>
+<text x="28" y="440" class="muted" text-anchor="start">GAIA · L1 [2]</text>
+<text x="446" y="421" class="best" text-anchor="middle">89.36</text>
+<text x="446" y="444" class="count" text-anchor="middle">42 / 47</text>
+<text x="638" y="430" class="missing" text-anchor="middle">—</text>
+<text x="830" y="421" class="score" text-anchor="middle">78.72</text>
+<text x="830" y="444" class="count" text-anchor="middle">37 / 47</text>
+<text x="1022" y="421" class="score" text-anchor="middle">87.23</text>
+<text x="1022" y="444" class="count" text-anchor="middle">41 / 47</text>
+<line x1="1" y1="464" x2="1119" y2="464" stroke="#e3e6ef"/>
+<text x="28" y="499" class="body" text-anchor="start">通用任务执行 · L2</text>
+<text x="28" y="526" class="muted" text-anchor="start">GAIA · L2 [2]</text>
+<text x="446" y="507" class="score" text-anchor="middle">69.64</text>
+<text x="446" y="530" class="count" text-anchor="middle">39 / 56</text>
+<text x="638" y="516" class="missing" text-anchor="middle">—</text>
+<text x="830" y="507" class="score" text-anchor="middle">67.86</text>
+<text x="830" y="530" class="count" text-anchor="middle">38 / 56</text>
+<text x="1022" y="507" class="best" text-anchor="middle">71.43</text>
+<text x="1022" y="530" class="count" text-anchor="middle">40 / 56</text>
+<line x1="1" y1="550" x2="1119" y2="550" stroke="#e3e6ef"/>
+<text x="28" y="585" class="body" text-anchor="start">通用任务执行 · L3</text>
+<text x="28" y="612" class="muted" text-anchor="start">GAIA · L3 [2]</text>
+<text x="446" y="593" class="score" text-anchor="middle">68.42</text>
+<text x="446" y="616" class="count" text-anchor="middle">13 / 19</text>
+<text x="638" y="602" class="missing" text-anchor="middle">—</text>
+<text x="830" y="593" class="score" text-anchor="middle">36.84</text>
+<text x="830" y="616" class="count" text-anchor="middle">7 / 19</text>
+<text x="1022" y="593" class="best" text-anchor="middle">84.21</text>
+<text x="1022" y="616" class="count" text-anchor="middle">16 / 19</text>
+<line x1="1" y1="636" x2="1119" y2="636" stroke="#e3e6ef"/>
+<text x="6" y="661" class="note" text-anchor="start">[1] 89 题中 87 题有效；Codex 为 89 × 5 次。 [2] 165 题中相同 122 题的人工复核结果。</text>
+<text x="6" y="689" class="note" text-anchor="start">时限、推理档位及环境不同；不是等预算排名。— 表示无对应数据，不是 0 分。</text>
+<text x="6" y="717" class="note" text-anchor="start">AILIS 列浅色突出；粗体表示本行最高观测值。冻结运行快照 · 2026-09-07</text>
+</svg>
