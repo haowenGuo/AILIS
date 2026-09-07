@@ -1,0 +1,2732 @@
+{
+  "schema": "ailis.public-evaluation-snapshot.v1",
+  "asOf": "2026-09-07",
+  "scope": "Read-only republication of existing audited runs; not a new run or certification of the current source branch.",
+  "paidCallsForPublication": 0,
+  "sources": [
+    {
+      "artifactId": "eval-results/engineering/terminal-bench-comparison-20260905/full89-codex-summary.json",
+      "sha256": "e7ca2e422d4189367e4c01fa71f8afeada03bb8d16b400f31ecb182b53015704"
+    },
+    {
+      "artifactId": "longrun/jobs/ailis-gaia165-unified-luna-max-20260905-v1/comparison-codex-122-20260907/results.json",
+      "sha256": "e3388a3a50820e8a23da217e38ee5ace791fb426eb7605a9924a1874972e9c8e"
+    },
+    {
+      "artifactId": "longrun/jobs/ailis-gaia165-unified-luna-max-20260905-v1/source-lock.json",
+      "sha256": "21b048a7b06659b481a3198730f10dd18d9499b664c47af526561aeae924bdeb"
+    },
+    {
+      "artifactId": "longrun/jobs/ailis-terminal89-output-integrity-parallel20-luna-max-20260904-v1/source-integrity.json",
+      "sha256": "d2dfef8e53c1b2e7c76634843dfff92622168ddf29b56727774442a7da070605"
+    },
+    {
+      "artifactId": "longrun/jobs/ailis-terminal89-output-integrity-parallel20-luna-max-20260904-v1/source-delta.json",
+      "sha256": "b270f99ac71bac3089df170f17b6c551a9b4b12f7ace49a971562158d29c075b"
+    }
+  ],
+  "terminal": {
+    "runId": "ailis-terminal89-output-integrity-parallel20-luna-max-20260904-v1",
+    "source": "07c1e85 frozen snapshot plus seven output-integrity files; independent September 5 transport experiment excluded",
+    "planned": 89,
+    "passed": 65,
+    "failed": 22,
+    "unresolved": 2,
+    "valid": 87,
+    "rawProjection": {
+      "passed": 65,
+      "failed": 23,
+      "valid": 88,
+      "unresolved": 1
+    },
+    "protocol": {
+      "model": "gpt-5.6-luna",
+      "reasoning": "max",
+      "concurrency": "20, then 10; later recovery at 3 or 1",
+      "timeout": "outer 3000s; inner original-task budget remained",
+      "verifier": "official; infrastructure-invalid attempts excluded; valid outcomes retained"
+    },
+    "resourcesSelected89": {
+      "n": 89,
+      "calls": 3976,
+      "prompt": 266935258,
+      "cached": 255692288,
+      "output": 2343869,
+      "agentSec": 110480.22199999998,
+      "trialSec": 140749.97600000005,
+      "workerSec": 144581.828,
+      "llmMs": 92776610,
+      "exec": 3364,
+      "exec_wait": 556,
+      "nestedTools": 4866,
+      "uncached": 11242970,
+      "cachePct": 95.78812852066174,
+      "agentSecMean": 1241.350808988764,
+      "agentSecMedian": 768.334,
+      "agentSecP95": 3137.57,
+      "trialSecMean": 1581.4604044943826,
+      "trialSecMedian": 1264.867,
+      "trialSecP95": 3515.292,
+      "workerSecMean": 1624.5149213483146,
+      "workerSecMedian": 1286.1,
+      "workerSecP95": 3547.047
+    },
+    "codexOfficial": {
+      "n": 445,
+      "passed": 337,
+      "prompt": 1416590787,
+      "cached": 1376567117,
+      "uncached": 40023670,
+      "output": 10628905,
+      "cost": 241.45,
+      "trialMean": 457.3,
+      "failed": 108,
+      "cachePct": 97.17464843289285,
+      "model": {
+        "agent": "codex",
+        "agent_version": "0.144.1",
+        "model_name": "openai/gpt-5.6-luna",
+        "reasoning_effort": "max"
+      },
+      "trialsPerTask": 5,
+      "standardErrorPercentagePoints": 1.32,
+      "disqualificationsIncludedInFailed": 4,
+      "sourceJob": "4860a28f-bc1a-5367-9885-57ff9ccc3a15",
+      "artifactId": "2026-07-11-openai-gpt-5-6-luna-max-codex.json",
+      "artifactSha256": "75cfaba215d435d50a9eca94bfde1824400fa0828c455bc34f41f52e84246ef0",
+      "individualResultsAvailable": false
+    },
+    "localCodexCoverage": {
+      "distinctTasks": 16,
+      "missingTasks": 73,
+      "note": "Separate local samples, not the official 445-trial per-task results."
+    },
+    "tasks": [
+      {
+        "task": "adaptive-rejection-sampler",
+        "status": "执行链无效",
+        "agentSec": 1614.42,
+        "trialSec": 1730.657,
+        "calls": 9,
+        "prompt": 69385,
+        "cached": 50688,
+        "uncached": 18697,
+        "output": 980,
+        "localCodexSamples": [
+          {
+            "group": "20260901",
+            "status": "failed",
+            "valid": true,
+            "score": 0,
+            "agentSec": 913.749,
+            "trialSec": 992.634
+          }
+        ]
+      },
+      {
+        "task": "bn-fit-modify",
+        "status": "判分无效",
+        "agentSec": 406.864,
+        "trialSec": 516.619,
+        "calls": 10,
+        "prompt": 107865,
+        "cached": 83456,
+        "uncached": 24409,
+        "output": 10916,
+        "localCodexSamples": [
+          {
+            "group": "20260901",
+            "status": "passed",
+            "valid": true,
+            "score": 1,
+            "agentSec": 215.373,
+            "trialSec": 315.666
+          }
+        ]
+      },
+      {
+        "task": "break-filter-js-from-html",
+        "status": "通过",
+        "agentSec": 721.118,
+        "trialSec": 754.217,
+        "calls": 29,
+        "prompt": 1001226,
+        "cached": 905728,
+        "uncached": 95498,
+        "output": 23090,
+        "localCodexSamples": [
+          {
+            "group": "20260901",
+            "status": "passed",
+            "valid": true,
+            "score": 1,
+            "agentSec": 459.516,
+            "trialSec": 515.234
+          }
+        ]
+      },
+      {
+        "task": "build-cython-ext",
+        "status": "通过",
+        "agentSec": 931.427,
+        "trialSec": 962.478,
+        "calls": 54,
+        "prompt": 3417301,
+        "cached": 3274240,
+        "uncached": 143061,
+        "output": 21460,
+        "localCodexSamples": [
+          {
+            "group": "20260901",
+            "status": "passed",
+            "valid": true,
+            "score": 1,
+            "agentSec": 642.065,
+            "trialSec": 688.168
+          }
+        ]
+      },
+      {
+        "task": "build-pmars",
+        "status": "通过",
+        "agentSec": 768.334,
+        "trialSec": 822.07,
+        "calls": 39,
+        "prompt": 1628385,
+        "cached": 1515520,
+        "uncached": 112865,
+        "output": 11475,
+        "localCodexSamples": [
+          {
+            "group": "20260901",
+            "status": "passed",
+            "valid": true,
+            "score": 1,
+            "agentSec": 368.931,
+            "trialSec": 426.438
+          }
+        ]
+      },
+      {
+        "task": "build-pov-ray",
+        "status": "失败",
+        "agentSec": 1191.365,
+        "trialSec": 1267.824,
+        "calls": 67,
+        "prompt": 7736011,
+        "cached": 7494656,
+        "uncached": 241355,
+        "output": 25277,
+        "localCodexSamples": [
+          {
+            "group": "20260901",
+            "status": "passed",
+            "valid": true,
+            "score": 1,
+            "agentSec": 1265.015,
+            "trialSec": 1349.73
+          }
+        ]
+      },
+      {
+        "task": "caffe-cifar-10",
+        "status": "通过",
+        "agentSec": 1488.48,
+        "trialSec": 2169.232,
+        "calls": 99,
+        "prompt": 6584340,
+        "cached": 6372864,
+        "uncached": 211476,
+        "output": 26368,
+        "localCodexSamples": [
+          {
+            "group": "20260901",
+            "status": "passed",
+            "valid": true,
+            "score": 1,
+            "agentSec": 1380.369,
+            "trialSec": 1457.364
+          },
+          {
+            "group": "202608",
+            "status": null,
+            "valid": null,
+            "score": null,
+            "agentSec": null,
+            "trialSec": null
+          }
+        ]
+      },
+      {
+        "task": "cancel-async-tasks",
+        "status": "通过",
+        "agentSec": 136.963,
+        "trialSec": 236.07,
+        "calls": 4,
+        "prompt": 40330,
+        "cached": 18432,
+        "uncached": 21898,
+        "output": 4517,
+        "localCodexSamples": []
+      },
+      {
+        "task": "chess-best-move",
+        "status": "通过",
+        "agentSec": 520.627,
+        "trialSec": 587.07,
+        "calls": 29,
+        "prompt": 642472,
+        "cached": 542208,
+        "uncached": 100264,
+        "output": 14544,
+        "localCodexSamples": []
+      },
+      {
+        "task": "circuit-fibsqrt",
+        "status": "通过",
+        "agentSec": 1385.432,
+        "trialSec": 1418.98,
+        "calls": 48,
+        "prompt": 1903741,
+        "cached": 1807360,
+        "uncached": 96381,
+        "output": 49197,
+        "localCodexSamples": []
+      },
+      {
+        "task": "cobol-modernization",
+        "status": "通过",
+        "agentSec": 847.702,
+        "trialSec": 915.391,
+        "calls": 31,
+        "prompt": 867610,
+        "cached": 794112,
+        "uncached": 73498,
+        "output": 28263,
+        "localCodexSamples": []
+      },
+      {
+        "task": "code-from-image",
+        "status": "通过",
+        "agentSec": 501.604,
+        "trialSec": 571.977,
+        "calls": 27,
+        "prompt": 376434,
+        "cached": 306176,
+        "uncached": 70258,
+        "output": 9378,
+        "localCodexSamples": []
+      },
+      {
+        "task": "compile-compcert",
+        "status": "通过",
+        "agentSec": 3133.218,
+        "trialSec": 3399.514,
+        "calls": 155,
+        "prompt": 18595674,
+        "cached": 18297344,
+        "uncached": 298330,
+        "output": 24972,
+        "localCodexSamples": []
+      },
+      {
+        "task": "configure-git-webserver",
+        "status": "通过",
+        "agentSec": 715.909,
+        "trialSec": 798.638,
+        "calls": 29,
+        "prompt": 793999,
+        "cached": 723456,
+        "uncached": 70543,
+        "output": 24344,
+        "localCodexSamples": []
+      },
+      {
+        "task": "constraints-scheduling",
+        "status": "通过",
+        "agentSec": 133.128,
+        "trialSec": 315.85,
+        "calls": 6,
+        "prompt": 56310,
+        "cached": 41472,
+        "uncached": 14838,
+        "output": 3812,
+        "localCodexSamples": []
+      },
+      {
+        "task": "count-dataset-tokens",
+        "status": "失败",
+        "agentSec": 409.181,
+        "trialSec": 572.785,
+        "calls": 23,
+        "prompt": 352169,
+        "cached": 302592,
+        "uncached": 49577,
+        "output": 6088,
+        "localCodexSamples": []
+      },
+      {
+        "task": "crack-7z-hash",
+        "status": "通过",
+        "agentSec": 731.663,
+        "trialSec": 1109.031,
+        "calls": 38,
+        "prompt": 835398,
+        "cached": 762880,
+        "uncached": 72518,
+        "output": 9614,
+        "localCodexSamples": [
+          {
+            "group": "202608",
+            "status": null,
+            "valid": null,
+            "score": null,
+            "agentSec": null,
+            "trialSec": null
+          }
+        ]
+      },
+      {
+        "task": "custom-memory-heap-crash",
+        "status": "通过",
+        "agentSec": 526.043,
+        "trialSec": 867.341,
+        "calls": 25,
+        "prompt": 806060,
+        "cached": 736768,
+        "uncached": 69292,
+        "output": 12169,
+        "localCodexSamples": []
+      },
+      {
+        "task": "db-wal-recovery",
+        "status": "失败",
+        "agentSec": 3137.57,
+        "trialSec": 3312.666,
+        "calls": 48,
+        "prompt": 3295766,
+        "cached": 3069440,
+        "uncached": 226326,
+        "output": 32856,
+        "localCodexSamples": []
+      },
+      {
+        "task": "distribution-search",
+        "status": "通过",
+        "agentSec": 155.213,
+        "trialSec": 253.74,
+        "calls": 7,
+        "prompt": 70467,
+        "cached": 40448,
+        "uncached": 30019,
+        "output": 5406,
+        "localCodexSamples": []
+      },
+      {
+        "task": "dna-assembly",
+        "status": "失败",
+        "agentSec": 3108.635,
+        "trialSec": 3376.597,
+        "calls": 92,
+        "prompt": 8404071,
+        "cached": 8076288,
+        "uncached": 327783,
+        "output": 64181,
+        "localCodexSamples": []
+      },
+      {
+        "task": "dna-insert",
+        "status": "通过",
+        "agentSec": 584.183,
+        "trialSec": 638.31,
+        "calls": 37,
+        "prompt": 846022,
+        "cached": 746496,
+        "uncached": 99526,
+        "output": 14002,
+        "localCodexSamples": []
+      },
+      {
+        "task": "extract-elf",
+        "status": "失败",
+        "agentSec": 433.342,
+        "trialSec": 520.211,
+        "calls": 15,
+        "prompt": 414138,
+        "cached": 353792,
+        "uncached": 60346,
+        "output": 18833,
+        "localCodexSamples": []
+      },
+      {
+        "task": "extract-moves-from-video",
+        "status": "失败",
+        "agentSec": 3122.79,
+        "trialSec": 3515.292,
+        "calls": 152,
+        "prompt": 13531143,
+        "cached": 12990464,
+        "uncached": 540679,
+        "output": 38258,
+        "localCodexSamples": []
+      },
+      {
+        "task": "feal-differential-cryptanalysis",
+        "status": "通过",
+        "agentSec": 407.067,
+        "trialSec": 509.95,
+        "calls": 13,
+        "prompt": 239502,
+        "cached": 200192,
+        "uncached": 39310,
+        "output": 16316,
+        "localCodexSamples": []
+      },
+      {
+        "task": "feal-linear-cryptanalysis",
+        "status": "通过",
+        "agentSec": 3122.95,
+        "trialSec": 3217.906,
+        "calls": 53,
+        "prompt": 2863768,
+        "cached": 2720256,
+        "uncached": 143512,
+        "output": 52477,
+        "localCodexSamples": []
+      },
+      {
+        "task": "filter-js-from-html",
+        "status": "失败",
+        "agentSec": 3139.887,
+        "trialSec": 3579.315,
+        "calls": 39,
+        "prompt": 2081227,
+        "cached": 2000896,
+        "uncached": 80331,
+        "output": 59231,
+        "localCodexSamples": []
+      },
+      {
+        "task": "financial-document-processor",
+        "status": "通过",
+        "agentSec": 886.844,
+        "trialSec": 931.321,
+        "calls": 52,
+        "prompt": 2393317,
+        "cached": 2128896,
+        "uncached": 264421,
+        "output": 14583,
+        "localCodexSamples": []
+      },
+      {
+        "task": "fix-code-vulnerability",
+        "status": "通过",
+        "agentSec": 183.069,
+        "trialSec": 207.071,
+        "calls": 15,
+        "prompt": 296949,
+        "cached": 262656,
+        "uncached": 34293,
+        "output": 4261,
+        "localCodexSamples": []
+      },
+      {
+        "task": "fix-git",
+        "status": "通过",
+        "agentSec": 278.11,
+        "trialSec": 488.067,
+        "calls": 17,
+        "prompt": 281191,
+        "cached": 243200,
+        "uncached": 37991,
+        "output": 8022,
+        "localCodexSamples": []
+      },
+      {
+        "task": "fix-ocaml-gc",
+        "status": "通过",
+        "agentSec": 1301.074,
+        "trialSec": 3442.467,
+        "calls": 67,
+        "prompt": 7792034,
+        "cached": 7537152,
+        "uncached": 254882,
+        "output": 16960,
+        "localCodexSamples": []
+      },
+      {
+        "task": "gcode-to-text",
+        "status": "失败",
+        "agentSec": 2613.054,
+        "trialSec": 2782.146,
+        "calls": 71,
+        "prompt": 7694938,
+        "cached": 7273984,
+        "uncached": 420954,
+        "output": 87588,
+        "localCodexSamples": []
+      },
+      {
+        "task": "git-leak-recovery",
+        "status": "通过",
+        "agentSec": 158.906,
+        "trialSec": 393.784,
+        "calls": 8,
+        "prompt": 73165,
+        "cached": 56320,
+        "uncached": 16845,
+        "output": 5041,
+        "localCodexSamples": []
+      },
+      {
+        "task": "git-multibranch",
+        "status": "通过",
+        "agentSec": 727.224,
+        "trialSec": 1055.707,
+        "calls": 26,
+        "prompt": 661897,
+        "cached": 587776,
+        "uncached": 74121,
+        "output": 26198,
+        "localCodexSamples": [
+          {
+            "group": "202608",
+            "status": null,
+            "valid": null,
+            "score": null,
+            "agentSec": null,
+            "trialSec": null
+          }
+        ]
+      },
+      {
+        "task": "gpt2-codegolf",
+        "status": "失败",
+        "agentSec": 3131.488,
+        "trialSec": 3394.014,
+        "calls": 100,
+        "prompt": 6112948,
+        "cached": 5941248,
+        "uncached": 171700,
+        "output": 64312,
+        "localCodexSamples": []
+      },
+      {
+        "task": "headless-terminal",
+        "status": "通过",
+        "agentSec": 665.262,
+        "trialSec": 817.663,
+        "calls": 25,
+        "prompt": 662741,
+        "cached": 567808,
+        "uncached": 94933,
+        "output": 20397,
+        "localCodexSamples": []
+      },
+      {
+        "task": "hf-model-inference",
+        "status": "失败",
+        "agentSec": 550.978,
+        "trialSec": 1522.349,
+        "calls": 39,
+        "prompt": 1179837,
+        "cached": 1093632,
+        "uncached": 86205,
+        "output": 10122,
+        "localCodexSamples": []
+      },
+      {
+        "task": "install-windows-3.11",
+        "status": "失败",
+        "agentSec": 3145.691,
+        "trialSec": 3274.148,
+        "calls": 145,
+        "prompt": 15057126,
+        "cached": 14666240,
+        "uncached": 390886,
+        "output": 69985,
+        "localCodexSamples": []
+      },
+      {
+        "task": "kv-store-grpc",
+        "status": "失败",
+        "agentSec": 204.992,
+        "trialSec": 301.257,
+        "calls": 16,
+        "prompt": 156015,
+        "cached": 119808,
+        "uncached": 36207,
+        "output": 5332,
+        "localCodexSamples": []
+      },
+      {
+        "task": "large-scale-text-editing",
+        "status": "通过",
+        "agentSec": 477.127,
+        "trialSec": 697.357,
+        "calls": 26,
+        "prompt": 437952,
+        "cached": 379904,
+        "uncached": 58048,
+        "output": 13955,
+        "localCodexSamples": []
+      },
+      {
+        "task": "largest-eigenval",
+        "status": "通过",
+        "agentSec": 2837.261,
+        "trialSec": 2877.647,
+        "calls": 115,
+        "prompt": 8085909,
+        "cached": 7862272,
+        "uncached": 223637,
+        "output": 61336,
+        "localCodexSamples": []
+      },
+      {
+        "task": "llm-inference-batching-scheduler",
+        "status": "通过",
+        "agentSec": 777.524,
+        "trialSec": 1146.052,
+        "calls": 26,
+        "prompt": 1442145,
+        "cached": 1353728,
+        "uncached": 88417,
+        "output": 28372,
+        "localCodexSamples": []
+      },
+      {
+        "task": "log-summary-date-ranges",
+        "status": "通过",
+        "agentSec": 90.857,
+        "trialSec": 130.251,
+        "calls": 6,
+        "prompt": 63499,
+        "cached": 47616,
+        "uncached": 15883,
+        "output": 2501,
+        "localCodexSamples": []
+      },
+      {
+        "task": "mailman",
+        "status": "通过",
+        "agentSec": 3135.551,
+        "trialSec": 3333.018,
+        "calls": 54,
+        "prompt": 3354385,
+        "cached": 3151360,
+        "uncached": 203025,
+        "output": 23295,
+        "localCodexSamples": [
+          {
+            "group": "202608",
+            "status": null,
+            "valid": null,
+            "score": null,
+            "agentSec": null,
+            "trialSec": null
+          }
+        ]
+      },
+      {
+        "task": "make-doom-for-mips",
+        "status": "失败",
+        "agentSec": 3122.893,
+        "trialSec": 3318.66,
+        "calls": 71,
+        "prompt": 8935892,
+        "cached": 8679936,
+        "uncached": 255956,
+        "output": 52607,
+        "localCodexSamples": []
+      },
+      {
+        "task": "make-mips-interpreter",
+        "status": "通过",
+        "agentSec": 1860.211,
+        "trialSec": 1977.946,
+        "calls": 37,
+        "prompt": 4436328,
+        "cached": 4240896,
+        "uncached": 195432,
+        "output": 57925,
+        "localCodexSamples": []
+      },
+      {
+        "task": "mcmc-sampling-stan",
+        "status": "通过",
+        "agentSec": 2508.62,
+        "trialSec": 3189.829,
+        "calls": 153,
+        "prompt": 14227098,
+        "cached": 13950464,
+        "uncached": 276634,
+        "output": 28233,
+        "localCodexSamples": []
+      },
+      {
+        "task": "merge-diff-arc-agi-task",
+        "status": "通过",
+        "agentSec": 441.39,
+        "trialSec": 513.327,
+        "calls": 29,
+        "prompt": 735751,
+        "cached": 675328,
+        "uncached": 60423,
+        "output": 12170,
+        "localCodexSamples": []
+      },
+      {
+        "task": "model-extraction-relu-logits",
+        "status": "通过",
+        "agentSec": 1147.959,
+        "trialSec": 1406.299,
+        "calls": 42,
+        "prompt": 2239849,
+        "cached": 2140672,
+        "uncached": 99177,
+        "output": 40343,
+        "localCodexSamples": [
+          {
+            "group": "202608",
+            "status": null,
+            "valid": null,
+            "score": null,
+            "agentSec": null,
+            "trialSec": null
+          }
+        ]
+      },
+      {
+        "task": "modernize-scientific-stack",
+        "status": "通过",
+        "agentSec": 105.467,
+        "trialSec": 252.879,
+        "calls": 5,
+        "prompt": 53190,
+        "cached": 37888,
+        "uncached": 15302,
+        "output": 3595,
+        "localCodexSamples": []
+      },
+      {
+        "task": "mteb-leaderboard",
+        "status": "失败",
+        "agentSec": 3138.097,
+        "trialSec": 3388.989,
+        "calls": 164,
+        "prompt": 16813720,
+        "cached": 16266752,
+        "uncached": 546968,
+        "output": 40694,
+        "localCodexSamples": []
+      },
+      {
+        "task": "mteb-retrieve",
+        "status": "通过",
+        "agentSec": 546.726,
+        "trialSec": 1267.262,
+        "calls": 37,
+        "prompt": 585862,
+        "cached": 509440,
+        "uncached": 76422,
+        "output": 8829,
+        "localCodexSamples": []
+      },
+      {
+        "task": "multi-source-data-merger",
+        "status": "通过",
+        "agentSec": 176.603,
+        "trialSec": 1108.731,
+        "calls": 6,
+        "prompt": 62610,
+        "cached": 49152,
+        "uncached": 13458,
+        "output": 6118,
+        "localCodexSamples": []
+      },
+      {
+        "task": "nginx-request-logging",
+        "status": "通过",
+        "agentSec": 471.036,
+        "trialSec": 612.67,
+        "calls": 28,
+        "prompt": 473683,
+        "cached": 412672,
+        "uncached": 61011,
+        "output": 11641,
+        "localCodexSamples": []
+      },
+      {
+        "task": "openssl-selfsigned-cert",
+        "status": "通过",
+        "agentSec": 290.784,
+        "trialSec": 414.686,
+        "calls": 10,
+        "prompt": 124402,
+        "cached": 105472,
+        "uncached": 18930,
+        "output": 11767,
+        "localCodexSamples": []
+      },
+      {
+        "task": "overfull-hbox",
+        "status": "失败",
+        "agentSec": 638.626,
+        "trialSec": 1008.506,
+        "calls": 36,
+        "prompt": 1226033,
+        "cached": 1105408,
+        "uncached": 120625,
+        "output": 17621,
+        "localCodexSamples": []
+      },
+      {
+        "task": "password-recovery",
+        "status": "通过",
+        "agentSec": 416.053,
+        "trialSec": 486.735,
+        "calls": 15,
+        "prompt": 623273,
+        "cached": 556544,
+        "uncached": 66729,
+        "output": 12435,
+        "localCodexSamples": []
+      },
+      {
+        "task": "path-tracing",
+        "status": "通过",
+        "agentSec": 3051.663,
+        "trialSec": 3123.026,
+        "calls": 132,
+        "prompt": 17392474,
+        "cached": 17028096,
+        "uncached": 364378,
+        "output": 83640,
+        "localCodexSamples": []
+      },
+      {
+        "task": "path-tracing-reverse",
+        "status": "通过",
+        "agentSec": 1955.625,
+        "trialSec": 2026.739,
+        "calls": 56,
+        "prompt": 7689540,
+        "cached": 7452672,
+        "uncached": 236868,
+        "output": 69017,
+        "localCodexSamples": []
+      },
+      {
+        "task": "polyglot-c-py",
+        "status": "通过",
+        "agentSec": 308.572,
+        "trialSec": 496.673,
+        "calls": 10,
+        "prompt": 136548,
+        "cached": 113152,
+        "uncached": 23396,
+        "output": 11704,
+        "localCodexSamples": []
+      },
+      {
+        "task": "polyglot-rust-c",
+        "status": "通过",
+        "agentSec": 262.559,
+        "trialSec": 1534.978,
+        "calls": 6,
+        "prompt": 76793,
+        "cached": 47616,
+        "uncached": 29177,
+        "output": 11571,
+        "localCodexSamples": []
+      },
+      {
+        "task": "portfolio-optimization",
+        "status": "通过",
+        "agentSec": 358.81,
+        "trialSec": 612.327,
+        "calls": 27,
+        "prompt": 422940,
+        "cached": 391680,
+        "uncached": 31260,
+        "output": 8774,
+        "localCodexSamples": []
+      },
+      {
+        "task": "protein-assembly",
+        "status": "失败",
+        "agentSec": 1378.297,
+        "trialSec": 1477.894,
+        "calls": 49,
+        "prompt": 2670857,
+        "cached": 2296320,
+        "uncached": 374537,
+        "output": 43766,
+        "localCodexSamples": []
+      },
+      {
+        "task": "prove-plus-comm",
+        "status": "通过",
+        "agentSec": 95.586,
+        "trialSec": 315.922,
+        "calls": 8,
+        "prompt": 58862,
+        "cached": 45568,
+        "uncached": 13294,
+        "output": 1923,
+        "localCodexSamples": [
+          {
+            "group": "202608",
+            "status": null,
+            "valid": null,
+            "score": null,
+            "agentSec": null,
+            "trialSec": null
+          }
+        ]
+      },
+      {
+        "task": "pypi-server",
+        "status": "失败",
+        "agentSec": 298.217,
+        "trialSec": 389.894,
+        "calls": 15,
+        "prompt": 161099,
+        "cached": 143872,
+        "uncached": 17227,
+        "output": 8193,
+        "localCodexSamples": [
+          {
+            "group": "202608",
+            "status": null,
+            "valid": null,
+            "score": null,
+            "agentSec": null,
+            "trialSec": null
+          }
+        ]
+      },
+      {
+        "task": "pytorch-model-cli",
+        "status": "通过",
+        "agentSec": 1069.315,
+        "trialSec": 2075.785,
+        "calls": 66,
+        "prompt": 1882455,
+        "cached": 1755136,
+        "uncached": 127319,
+        "output": 19018,
+        "localCodexSamples": [
+          {
+            "group": "202608",
+            "status": null,
+            "valid": null,
+            "score": null,
+            "agentSec": null,
+            "trialSec": null
+          }
+        ]
+      },
+      {
+        "task": "pytorch-model-recovery",
+        "status": "通过",
+        "agentSec": 476.974,
+        "trialSec": 2162.414,
+        "calls": 16,
+        "prompt": 331291,
+        "cached": 266240,
+        "uncached": 65051,
+        "output": 17877,
+        "localCodexSamples": []
+      },
+      {
+        "task": "qemu-alpine-ssh",
+        "status": "失败",
+        "agentSec": 975.245,
+        "trialSec": 1645.648,
+        "calls": 43,
+        "prompt": 784855,
+        "cached": 695296,
+        "uncached": 89559,
+        "output": 10838,
+        "localCodexSamples": []
+      },
+      {
+        "task": "qemu-startup",
+        "status": "失败",
+        "agentSec": 1237.314,
+        "trialSec": 1287.754,
+        "calls": 47,
+        "prompt": 1737783,
+        "cached": 1637888,
+        "uncached": 99895,
+        "output": 32910,
+        "localCodexSamples": []
+      },
+      {
+        "task": "query-optimize",
+        "status": "通过",
+        "agentSec": 889.382,
+        "trialSec": 1657.107,
+        "calls": 32,
+        "prompt": 834681,
+        "cached": 744448,
+        "uncached": 90233,
+        "output": 31205,
+        "localCodexSamples": []
+      },
+      {
+        "task": "raman-fitting",
+        "status": "失败",
+        "agentSec": 3134.97,
+        "trialSec": 3313.062,
+        "calls": 73,
+        "prompt": 6833717,
+        "cached": 6600704,
+        "uncached": 233013,
+        "output": 97865,
+        "localCodexSamples": []
+      },
+      {
+        "task": "regex-chess",
+        "status": "通过",
+        "agentSec": 3168.176,
+        "trialSec": 3359.388,
+        "calls": 64,
+        "prompt": 4070186,
+        "cached": 3955200,
+        "uncached": 114986,
+        "output": 53247,
+        "localCodexSamples": [
+          {
+            "group": "202608",
+            "status": null,
+            "valid": null,
+            "score": null,
+            "agentSec": null,
+            "trialSec": null
+          }
+        ]
+      },
+      {
+        "task": "regex-log",
+        "status": "通过",
+        "agentSec": 215.243,
+        "trialSec": 689.761,
+        "calls": 6,
+        "prompt": 63556,
+        "cached": 47616,
+        "uncached": 15940,
+        "output": 8601,
+        "localCodexSamples": []
+      },
+      {
+        "task": "reshard-c4-data",
+        "status": "通过",
+        "agentSec": 1461.301,
+        "trialSec": 4255.214,
+        "calls": 32,
+        "prompt": 1542478,
+        "cached": 1451008,
+        "uncached": 91470,
+        "output": 44844,
+        "localCodexSamples": []
+      },
+      {
+        "task": "rstan-to-pystan",
+        "status": "通过",
+        "agentSec": 2509.238,
+        "trialSec": 2873.802,
+        "calls": 136,
+        "prompt": 8894629,
+        "cached": 8703488,
+        "uncached": 191141,
+        "output": 21423,
+        "localCodexSamples": []
+      },
+      {
+        "task": "sam-cell-seg",
+        "status": "通过",
+        "agentSec": 1533.613,
+        "trialSec": 1774.136,
+        "calls": 25,
+        "prompt": 922265,
+        "cached": 850944,
+        "uncached": 71321,
+        "output": 40761,
+        "localCodexSamples": []
+      },
+      {
+        "task": "sanitize-git-repo",
+        "status": "通过",
+        "agentSec": 731.908,
+        "trialSec": 781.607,
+        "calls": 23,
+        "prompt": 1080939,
+        "cached": 1001984,
+        "uncached": 78955,
+        "output": 28598,
+        "localCodexSamples": []
+      },
+      {
+        "task": "schemelike-metacircular-eval",
+        "status": "通过",
+        "agentSec": 2064.451,
+        "trialSec": 2219.833,
+        "calls": 49,
+        "prompt": 2716672,
+        "cached": 2607104,
+        "uncached": 109568,
+        "output": 41372,
+        "localCodexSamples": [
+          {
+            "group": "202608",
+            "status": null,
+            "valid": null,
+            "score": null,
+            "agentSec": null,
+            "trialSec": null
+          }
+        ]
+      },
+      {
+        "task": "sparql-university",
+        "status": "通过",
+        "agentSec": 198.402,
+        "trialSec": 314.333,
+        "calls": 9,
+        "prompt": 130504,
+        "cached": 87552,
+        "uncached": 42952,
+        "output": 8246,
+        "localCodexSamples": []
+      },
+      {
+        "task": "sqlite-db-truncate",
+        "status": "通过",
+        "agentSec": 126.914,
+        "trialSec": 190.256,
+        "calls": 9,
+        "prompt": 88426,
+        "cached": 68608,
+        "uncached": 19818,
+        "output": 4683,
+        "localCodexSamples": []
+      },
+      {
+        "task": "sqlite-with-gcov",
+        "status": "通过",
+        "agentSec": 1176.949,
+        "trialSec": 1307.454,
+        "calls": 68,
+        "prompt": 2269221,
+        "cached": 2119680,
+        "uncached": 149541,
+        "output": 16913,
+        "localCodexSamples": []
+      },
+      {
+        "task": "torch-pipeline-parallelism",
+        "status": "通过",
+        "agentSec": 1785.886,
+        "trialSec": 2540.901,
+        "calls": 20,
+        "prompt": 772772,
+        "cached": 643072,
+        "uncached": 129700,
+        "output": 53872,
+        "localCodexSamples": []
+      },
+      {
+        "task": "torch-tensor-parallelism",
+        "status": "通过",
+        "agentSec": 417.567,
+        "trialSec": 2020.413,
+        "calls": 15,
+        "prompt": 298397,
+        "cached": 250368,
+        "uncached": 48029,
+        "output": 15747,
+        "localCodexSamples": []
+      },
+      {
+        "task": "train-fasttext",
+        "status": "失败",
+        "agentSec": 3130.895,
+        "trialSec": 4567.193,
+        "calls": 116,
+        "prompt": 4876554,
+        "cached": 4688384,
+        "uncached": 188170,
+        "output": 22459,
+        "localCodexSamples": []
+      },
+      {
+        "task": "tune-mjcf",
+        "status": "通过",
+        "agentSec": 1148.722,
+        "trialSec": 1264.867,
+        "calls": 46,
+        "prompt": 1383116,
+        "cached": 1270784,
+        "uncached": 112332,
+        "output": 26994,
+        "localCodexSamples": []
+      },
+      {
+        "task": "video-processing",
+        "status": "失败",
+        "agentSec": 3130.105,
+        "trialSec": 3608.87,
+        "calls": 69,
+        "prompt": 7971274,
+        "cached": 7703040,
+        "uncached": 268234,
+        "output": 69649,
+        "localCodexSamples": []
+      },
+      {
+        "task": "vulnerable-secret",
+        "status": "通过",
+        "agentSec": 143.863,
+        "trialSec": 307.158,
+        "calls": 9,
+        "prompt": 112237,
+        "cached": 93696,
+        "uncached": 18541,
+        "output": 2600,
+        "localCodexSamples": []
+      },
+      {
+        "task": "winning-avg-corewars",
+        "status": "通过",
+        "agentSec": 2216.203,
+        "trialSec": 2282.752,
+        "calls": 72,
+        "prompt": 4751766,
+        "cached": 4593664,
+        "uncached": 158102,
+        "output": 41933,
+        "localCodexSamples": []
+      },
+      {
+        "task": "write-compressor",
+        "status": "通过",
+        "agentSec": 423.665,
+        "trialSec": 592.246,
+        "calls": 9,
+        "prompt": 131818,
+        "cached": 104960,
+        "uncached": 26858,
+        "output": 19364,
+        "localCodexSamples": []
+      }
+    ]
+  },
+  "gaia": {
+    "runId": "ailis-gaia165-unified-luna-max-20260905-v1",
+    "source": "659bf61 plus frozen unified-agent worktree changes and documented preflight overlays; see source-lock hash",
+    "planned": 165,
+    "completed": 122,
+    "unresolved": 43,
+    "protocols": {
+      "current": {
+        "model": "gpt-5.6-luna",
+        "effort": "max",
+        "timeoutSeconds": 3000,
+        "concurrency": 10
+      },
+      "codexLuna": {
+        "model": "gpt-5.6-luna",
+        "effort": "medium",
+        "timeoutSeconds": 600,
+        "concurrency": 4,
+        "date": "2026-08-03"
+      },
+      "codex55": {
+        "model": "gpt-5.5",
+        "effort": "medium",
+        "timeoutSeconds": 600,
+        "concurrency": "mixed original and network recovery",
+        "date": "2026-07-28"
+      }
+    },
+    "aggregates": {
+      "current": {
+        "tasks": 122,
+        "clear": 94,
+        "automatic": 76,
+        "equivalent": 1,
+        "ambiguous": 3,
+        "mismatch": 24,
+        "noAnswer": 0,
+        "input": 115024091,
+        "cached": 103147264,
+        "uncached": 11876827,
+        "output": 726785,
+        "cacheRate": 0.8967448740803351,
+        "usageCoverage": 122,
+        "meanSeconds": 336.56226229508195,
+        "medianSeconds": 172.1195,
+        "p90Seconds": 885.175,
+        "over600": [
+          27,
+          45,
+          56,
+          58,
+          68,
+          86,
+          104,
+          113,
+          131,
+          132,
+          133,
+          139,
+          141,
+          143,
+          144,
+          150,
+          155,
+          157,
+          159,
+          160,
+          162
+        ],
+        "clearOver600": [
+          45,
+          56,
+          58,
+          68,
+          104,
+          131,
+          133,
+          139,
+          144,
+          155,
+          157,
+          159,
+          160
+        ],
+        "modelCalls": 2044,
+        "toolEvents": 4409
+      },
+      "codexLuna": {
+        "tasks": 122,
+        "clear": 82,
+        "automatic": 81,
+        "equivalent": 0,
+        "ambiguous": 1,
+        "mismatch": 38,
+        "noAnswer": 1,
+        "input": 41016520,
+        "cached": 35873536,
+        "uncached": 5142984,
+        "output": 321143,
+        "cacheRate": 0.8746118880880192,
+        "usageCoverage": 121,
+        "meanSeconds": 219.49329508196723,
+        "medianSeconds": 171.0905,
+        "p90Seconds": 463.242,
+        "over600": [
+          131
+        ],
+        "clearOver600": [],
+        "modelCalls": null,
+        "toolEvents": 1167
+      },
+      "codex55": {
+        "tasks": 122,
+        "clear": 97,
+        "automatic": 96,
+        "equivalent": 1,
+        "ambiguous": 1,
+        "mismatch": 18,
+        "noAnswer": 5,
+        "input": 6790616,
+        "cached": 4140800,
+        "uncached": 2649816,
+        "output": 130800,
+        "cacheRate": 0.6097826765642469,
+        "usageCoverage": 117,
+        "meanSeconds": 179.86588524590164,
+        "medianSeconds": 133.2705,
+        "p90Seconds": 465.988,
+        "over600": [
+          16,
+          55,
+          78,
+          86,
+          159
+        ],
+        "clearOver600": [],
+        "modelCalls": null,
+        "toolEvents": 632
+      }
+    },
+    "levels": {
+      "current": {
+        "L1": {
+          "tasks": 47,
+          "clear": 42,
+          "automatic": 35,
+          "equivalent": 0,
+          "ambiguous": 0,
+          "mismatch": 5,
+          "noAnswer": 0,
+          "input": 17796792,
+          "cached": 15237248,
+          "uncached": 2559544,
+          "output": 167285,
+          "cacheRate": 0.8561794732443915,
+          "usageCoverage": 47,
+          "meanSeconds": 158.23297872340427,
+          "medianSeconds": 105.07,
+          "p90Seconds": 326.401,
+          "over600": [
+            27,
+            45
+          ],
+          "clearOver600": [
+            45
+          ],
+          "modelCalls": 415,
+          "toolEvents": 837
+        },
+        "L2": {
+          "tasks": 56,
+          "clear": 39,
+          "automatic": 31,
+          "equivalent": 1,
+          "ambiguous": 3,
+          "mismatch": 13,
+          "noAnswer": 0,
+          "input": 39206810,
+          "cached": 34574080,
+          "uncached": 4632730,
+          "output": 295846,
+          "cacheRate": 0.881838639766918,
+          "usageCoverage": 56,
+          "meanSeconds": 302.8108571428572,
+          "medianSeconds": 159.3895,
+          "p90Seconds": 781.252,
+          "over600": [
+            56,
+            58,
+            68,
+            86,
+            104,
+            113,
+            131,
+            132,
+            133
+          ],
+          "clearOver600": [
+            56,
+            58,
+            68,
+            104,
+            131,
+            133
+          ],
+          "modelCalls": 858,
+          "toolEvents": 1864
+        },
+        "L3": {
+          "tasks": 19,
+          "clear": 13,
+          "automatic": 10,
+          "equivalent": 0,
+          "ambiguous": 0,
+          "mismatch": 6,
+          "noAnswer": 0,
+          "input": 58020489,
+          "cached": 53335936,
+          "uncached": 4684553,
+          "output": 263654,
+          "cacheRate": 0.9192603667990458,
+          "usageCoverage": 19,
+          "meanSeconds": 877.1704210526316,
+          "medianSeconds": 621.281,
+          "p90Seconds": 1704.249,
+          "over600": [
+            139,
+            141,
+            143,
+            144,
+            150,
+            155,
+            157,
+            159,
+            160,
+            162
+          ],
+          "clearOver600": [
+            139,
+            144,
+            155,
+            157,
+            159,
+            160
+          ],
+          "modelCalls": 771,
+          "toolEvents": 1708
+        }
+      },
+      "codexLuna": {
+        "L1": {
+          "tasks": 47,
+          "clear": 37,
+          "automatic": 37,
+          "equivalent": 0,
+          "ambiguous": 0,
+          "mismatch": 10,
+          "noAnswer": 0,
+          "input": 11070149,
+          "cached": 9494016,
+          "uncached": 1576133,
+          "output": 92715,
+          "cacheRate": 0.857623144909793,
+          "usageCoverage": 47,
+          "meanSeconds": 161.97870212765957,
+          "medianSeconds": 126.069,
+          "p90Seconds": 330.675,
+          "over600": [],
+          "clearOver600": [],
+          "modelCalls": null,
+          "toolEvents": 309
+        },
+        "L2": {
+          "tasks": 56,
+          "clear": 38,
+          "automatic": 37,
+          "equivalent": 0,
+          "ambiguous": 1,
+          "mismatch": 16,
+          "noAnswer": 1,
+          "input": 19366068,
+          "cached": 16913920,
+          "uncached": 2452148,
+          "output": 148378,
+          "cacheRate": 0.8733791495516797,
+          "usageCoverage": 55,
+          "meanSeconds": 235.14685714285713,
+          "medianSeconds": 188.2225,
+          "p90Seconds": 459.964,
+          "over600": [
+            131
+          ],
+          "clearOver600": [],
+          "modelCalls": null,
+          "toolEvents": 574
+        },
+        "L3": {
+          "tasks": 19,
+          "clear": 7,
+          "automatic": 7,
+          "equivalent": 0,
+          "ambiguous": 0,
+          "mismatch": 12,
+          "noAnswer": 0,
+          "input": 10580303,
+          "cached": 9465600,
+          "uncached": 1114703,
+          "output": 80050,
+          "cacheRate": 0.8946435655009124,
+          "usageCoverage": 19,
+          "meanSeconds": 315.6294210526316,
+          "medianSeconds": 272.872,
+          "p90Seconds": 597.741,
+          "over600": [],
+          "clearOver600": [],
+          "modelCalls": null,
+          "toolEvents": 284
+        }
+      },
+      "codex55": {
+        "L1": {
+          "tasks": 47,
+          "clear": 41,
+          "automatic": 40,
+          "equivalent": 0,
+          "ambiguous": 0,
+          "mismatch": 5,
+          "noAnswer": 1,
+          "input": 1659196,
+          "cached": 868352,
+          "uncached": 790844,
+          "output": 32874,
+          "cacheRate": 0.523357095846422,
+          "usageCoverage": 46,
+          "meanSeconds": 162.7117659574468,
+          "medianSeconds": 117.261,
+          "p90Seconds": 398.353,
+          "over600": [
+            16
+          ],
+          "clearOver600": [],
+          "modelCalls": null,
+          "toolEvents": 137
+        },
+        "L2": {
+          "tasks": 56,
+          "clear": 40,
+          "automatic": 40,
+          "equivalent": 1,
+          "ambiguous": 1,
+          "mismatch": 11,
+          "noAnswer": 3,
+          "input": 2959347,
+          "cached": 1844736,
+          "uncached": 1114611,
+          "output": 54921,
+          "cacheRate": 0.6233591397021032,
+          "usageCoverage": 53,
+          "meanSeconds": 189.45117857142858,
+          "medianSeconds": 130.234,
+          "p90Seconds": 517.822,
+          "over600": [
+            55,
+            78,
+            86
+          ],
+          "clearOver600": [],
+          "modelCalls": null,
+          "toolEvents": 308
+        },
+        "L3": {
+          "tasks": 19,
+          "clear": 16,
+          "automatic": 16,
+          "equivalent": 0,
+          "ambiguous": 0,
+          "mismatch": 2,
+          "noAnswer": 1,
+          "input": 2172073,
+          "cached": 1427712,
+          "uncached": 744361,
+          "output": 43005,
+          "cacheRate": 0.6573038751460011,
+          "usageCoverage": 18,
+          "meanSeconds": 194.04836842105263,
+          "medianSeconds": 146.248,
+          "p90Seconds": 552.491,
+          "over600": [
+            159
+          ],
+          "clearOver600": [],
+          "modelCalls": null,
+          "toolEvents": 187
+        }
+      }
+    },
+    "paired": {
+      "codexLuna": {
+        "bothClear": 75,
+        "ailisOnly": 19,
+        "codexOnly": 7,
+        "neitherClear": 21
+      },
+      "codex55": {
+        "bothClear": 84,
+        "ailisOnly": 10,
+        "codexOnly": 13,
+        "neitherClear": 15
+      }
+    },
+    "integrity": {
+      "filesHashed": 293,
+      "unchanged": true,
+      "questionGoldLevelMatched": 122,
+      "prior79Preserved": true,
+      "paidCalls": 0
+    },
+    "limitations": [
+      "122 are the nonrandom completed AILIS subset, not a full165 capability score.",
+      "Reasoning effort, budget, date, concurrency and historical retry selection differ; no Harness-only causal claim.",
+      "Clear matches preserve previous79 independent reviews. Newly included43 historical answers reviewed against saved finals; #119 semantics separated for GPT-5.5.",
+      "CLI command/MCP items are not comparable to nested AILIS tool event counts. CLI turn.completed is not a count of model decisions.",
+      "Token totals exclude unreported timed-out usage, prior retries and tool-internal provider calls; no verified monetary cost.",
+      "Codex product supports additional tools; observed historical165 Luna run had command_execution, node_repl.js and file_change, not AILIS research tools."
+    ],
+    "tasks": [
+      {
+        "index": 0,
+        "taskId": "e1fc63a2-da7a-432f-be78-7c4a95598703",
+        "level": "L1",
+        "ailis": "clear_match",
+        "codexLuna": "answer_mismatch",
+        "codex55": "clear_match"
+      },
+      {
+        "index": 1,
+        "taskId": "8e867cd7-cff9-4e6c-867a-ff5ddc2550be",
+        "level": "L1",
+        "ailis": "clear_match",
+        "codexLuna": "clear_match",
+        "codex55": "clear_match"
+      },
+      {
+        "index": 2,
+        "taskId": "ec09fa32-d03f-4bf8-84b0-1f16922c3ae4",
+        "level": "L1",
+        "ailis": "clear_match",
+        "codexLuna": "answer_mismatch",
+        "codex55": "answer_mismatch"
+      },
+      {
+        "index": 3,
+        "taskId": "5d0080cb-90d7-4712-bc33-848150e917d3",
+        "level": "L1",
+        "ailis": "clear_match",
+        "codexLuna": "clear_match",
+        "codex55": "clear_match"
+      },
+      {
+        "index": 6,
+        "taskId": "4b6bb5f7-f634-410e-815d-e673ab7f8632",
+        "level": "L1",
+        "ailis": "clear_match",
+        "codexLuna": "clear_match",
+        "codex55": "answer_mismatch"
+      },
+      {
+        "index": 7,
+        "taskId": "cffe0e32-c9a6-4c52-9877-78ceb4aaa9fb",
+        "level": "L1",
+        "ailis": "clear_match",
+        "codexLuna": "clear_match",
+        "codex55": "clear_match"
+      },
+      {
+        "index": 8,
+        "taskId": "2d83110e-a098-4ebb-9987-066c06fa42d0",
+        "level": "L1",
+        "ailis": "clear_match",
+        "codexLuna": "clear_match",
+        "codex55": "clear_match"
+      },
+      {
+        "index": 9,
+        "taskId": "5cfb274c-0207-4aa7-9575-6ac0bd95d9b2",
+        "level": "L1",
+        "ailis": "clear_match",
+        "codexLuna": "clear_match",
+        "codex55": "clear_match"
+      },
+      {
+        "index": 10,
+        "taskId": "27d5d136-8563-469e-92bf-fd103c28b57c",
+        "level": "L1",
+        "ailis": "clear_match",
+        "codexLuna": "clear_match",
+        "codex55": "clear_match"
+      },
+      {
+        "index": 11,
+        "taskId": "dc28cf18-6431-458b-83ef-64b3ce566c10",
+        "level": "L1",
+        "ailis": "clear_match",
+        "codexLuna": "clear_match",
+        "codex55": "clear_match"
+      },
+      {
+        "index": 12,
+        "taskId": "b816bfce-3d80-4913-a07d-69b752ce6377",
+        "level": "L1",
+        "ailis": "clear_match",
+        "codexLuna": "answer_mismatch",
+        "codex55": "clear_match"
+      },
+      {
+        "index": 14,
+        "taskId": "42576abe-0deb-4869-8c63-225c2d75a95a",
+        "level": "L1",
+        "ailis": "clear_match",
+        "codexLuna": "clear_match",
+        "codex55": "clear_match"
+      },
+      {
+        "index": 16,
+        "taskId": "cca530fc-4052-43b2-b130-b30968d8aa44",
+        "level": "L1",
+        "ailis": "clear_match",
+        "codexLuna": "answer_mismatch",
+        "codex55": "no_final_answer"
+      },
+      {
+        "index": 17,
+        "taskId": "935e2cff-ae78-4218-b3f5-115589b19dae",
+        "level": "L1",
+        "ailis": "answer_mismatch",
+        "codexLuna": "clear_match",
+        "codex55": "clear_match"
+      },
+      {
+        "index": 18,
+        "taskId": "4fc2f1ae-8625-45b5-ab34-ad4433bc21f8",
+        "level": "L1",
+        "ailis": "clear_match",
+        "codexLuna": "clear_match",
+        "codex55": "clear_match"
+      },
+      {
+        "index": 19,
+        "taskId": "5188369a-3bbe-43d8-8b94-11558f909a08",
+        "level": "L1",
+        "ailis": "clear_match",
+        "codexLuna": "clear_match",
+        "codex55": "clear_match"
+      },
+      {
+        "index": 20,
+        "taskId": "6f37996b-2ac7-44b0-8e68-6d28256631b4",
+        "level": "L1",
+        "ailis": "clear_match",
+        "codexLuna": "answer_mismatch",
+        "codex55": "clear_match"
+      },
+      {
+        "index": 21,
+        "taskId": "9318445f-fe6a-4e1b-acbf-c68228c9906a",
+        "level": "L1",
+        "ailis": "answer_mismatch",
+        "codexLuna": "answer_mismatch",
+        "codex55": "answer_mismatch"
+      },
+      {
+        "index": 22,
+        "taskId": "389793a7-ca17-4e82-81cb-2b3a2391b4b9",
+        "level": "L1",
+        "ailis": "clear_match",
+        "codexLuna": "clear_match",
+        "codex55": "clear_match"
+      },
+      {
+        "index": 23,
+        "taskId": "4b650a35-8529-4695-89ed-8dc7a500a498",
+        "level": "L1",
+        "ailis": "clear_match",
+        "codexLuna": "clear_match",
+        "codex55": "clear_match"
+      },
+      {
+        "index": 24,
+        "taskId": "a3fbeb63-0e8c-4a11-bff6-0e3b484c3e9c",
+        "level": "L1",
+        "ailis": "clear_match",
+        "codexLuna": "clear_match",
+        "codex55": "clear_match"
+      },
+      {
+        "index": 25,
+        "taskId": "c714ab3a-da30-4603-bacd-d008800188b9",
+        "level": "L1",
+        "ailis": "clear_match",
+        "codexLuna": "clear_match",
+        "codex55": "clear_match"
+      },
+      {
+        "index": 26,
+        "taskId": "9d191bce-651d-4746-be2d-7ef8ecadb9c2",
+        "level": "L1",
+        "ailis": "clear_match",
+        "codexLuna": "clear_match",
+        "codex55": "clear_match"
+      },
+      {
+        "index": 27,
+        "taskId": "65afbc8a-89ca-4ad5-8d62-355bb401f61d",
+        "level": "L1",
+        "ailis": "answer_mismatch",
+        "codexLuna": "clear_match",
+        "codex55": "clear_match"
+      },
+      {
+        "index": 28,
+        "taskId": "cabe07ed-9eca-40ea-8ead-410ef5e83f91",
+        "level": "L1",
+        "ailis": "clear_match",
+        "codexLuna": "clear_match",
+        "codex55": "clear_match"
+      },
+      {
+        "index": 29,
+        "taskId": "3cef3a44-215e-4aed-8e3b-b1e3f08063b7",
+        "level": "L1",
+        "ailis": "clear_match",
+        "codexLuna": "answer_mismatch",
+        "codex55": "clear_match"
+      },
+      {
+        "index": 31,
+        "taskId": "d0633230-7067-47a9-9dbf-ee11e0a2cdd6",
+        "level": "L1",
+        "ailis": "clear_match",
+        "codexLuna": "clear_match",
+        "codex55": "clear_match"
+      },
+      {
+        "index": 32,
+        "taskId": "305ac316-eef6-4446-960a-92d80d542f82",
+        "level": "L1",
+        "ailis": "clear_match",
+        "codexLuna": "clear_match",
+        "codex55": "clear_match"
+      },
+      {
+        "index": 33,
+        "taskId": "0383a3ee-47a7-41a4-b493-519bdefe0488",
+        "level": "L1",
+        "ailis": "clear_match",
+        "codexLuna": "clear_match",
+        "codex55": "clear_match"
+      },
+      {
+        "index": 34,
+        "taskId": "f918266a-b3e0-4914-865d-4faa564f1aef",
+        "level": "L1",
+        "ailis": "clear_match",
+        "codexLuna": "clear_match",
+        "codex55": "clear_match"
+      },
+      {
+        "index": 35,
+        "taskId": "11af4e1a-5f45-467d-9aeb-46f4bb0bf034",
+        "level": "L1",
+        "ailis": "clear_match",
+        "codexLuna": "clear_match",
+        "codex55": "clear_match"
+      },
+      {
+        "index": 36,
+        "taskId": "e142056d-56ab-4352-b091-b56054bd1359",
+        "level": "L1",
+        "ailis": "answer_mismatch",
+        "codexLuna": "answer_mismatch",
+        "codex55": "answer_mismatch"
+      },
+      {
+        "index": 37,
+        "taskId": "50ad0280-0819-4bd9-b275-5de32d3b5bcb",
+        "level": "L1",
+        "ailis": "clear_match",
+        "codexLuna": "clear_match",
+        "codex55": "clear_match"
+      },
+      {
+        "index": 38,
+        "taskId": "7673d772-ef80-4f0f-a602-1bf4485c9b43",
+        "level": "L1",
+        "ailis": "clear_match",
+        "codexLuna": "answer_mismatch",
+        "codex55": "clear_match"
+      },
+      {
+        "index": 39,
+        "taskId": "c365c1c7-a3db-4d5e-a9a1-66f56eae7865",
+        "level": "L1",
+        "ailis": "answer_mismatch",
+        "codexLuna": "answer_mismatch",
+        "codex55": "answer_mismatch"
+      },
+      {
+        "index": 40,
+        "taskId": "7d4a7d1d-cac6-44a8-96e8-ea9584a70825",
+        "level": "L1",
+        "ailis": "clear_match",
+        "codexLuna": "clear_match",
+        "codex55": "clear_match"
+      },
+      {
+        "index": 42,
+        "taskId": "3f57289b-8c60-48be-bd80-01f8099ca449",
+        "level": "L1",
+        "ailis": "clear_match",
+        "codexLuna": "clear_match",
+        "codex55": "clear_match"
+      },
+      {
+        "index": 43,
+        "taskId": "23dd907f-1261-4488-b21c-e9185af91d5e",
+        "level": "L1",
+        "ailis": "clear_match",
+        "codexLuna": "clear_match",
+        "codex55": "clear_match"
+      },
+      {
+        "index": 44,
+        "taskId": "1f975693-876d-457b-a649-393859e79bf3",
+        "level": "L1",
+        "ailis": "clear_match",
+        "codexLuna": "clear_match",
+        "codex55": "clear_match"
+      },
+      {
+        "index": 45,
+        "taskId": "840bfca7-4f7b-481a-8794-c560c340185d",
+        "level": "L1",
+        "ailis": "clear_match",
+        "codexLuna": "clear_match",
+        "codex55": "clear_match"
+      },
+      {
+        "index": 46,
+        "taskId": "a0068077-79f4-461a-adfe-75c1a4148545",
+        "level": "L1",
+        "ailis": "clear_match",
+        "codexLuna": "clear_match",
+        "codex55": "clear_match"
+      },
+      {
+        "index": 47,
+        "taskId": "bda648d7-d618-4883-88f4-3466eabd860e",
+        "level": "L1",
+        "ailis": "clear_match",
+        "codexLuna": "clear_match",
+        "codex55": "clear_match"
+      },
+      {
+        "index": 48,
+        "taskId": "50ec8903-b81f-4257-9450-1085afd2c319",
+        "level": "L1",
+        "ailis": "clear_match",
+        "codexLuna": "clear_match",
+        "codex55": "clear_match"
+      },
+      {
+        "index": 49,
+        "taskId": "cf106601-ab4f-4af9-b045-5295fe67b37d",
+        "level": "L1",
+        "ailis": "clear_match",
+        "codexLuna": "clear_match",
+        "codex55": "clear_match"
+      },
+      {
+        "index": 50,
+        "taskId": "a0c07678-e491-4bbc-8f0b-07405144218f",
+        "level": "L1",
+        "ailis": "clear_match",
+        "codexLuna": "clear_match",
+        "codex55": "clear_match"
+      },
+      {
+        "index": 51,
+        "taskId": "7bd855d8-463d-4ed5-93ca-5fe35145f733",
+        "level": "L1",
+        "ailis": "clear_match",
+        "codexLuna": "clear_match",
+        "codex55": "clear_match"
+      },
+      {
+        "index": 52,
+        "taskId": "5a0c1adf-205e-4841-a666-7c3ef95def9d",
+        "level": "L1",
+        "ailis": "clear_match",
+        "codexLuna": "clear_match",
+        "codex55": "clear_match"
+      },
+      {
+        "index": 53,
+        "taskId": "c61d22de-5f6c-4958-a7f6-5e9707bd3466",
+        "level": "L2",
+        "ailis": "ambiguous",
+        "codexLuna": "clear_match",
+        "codex55": "clear_match"
+      },
+      {
+        "index": 55,
+        "taskId": "04a04a9b-226c-43fd-b319-d5e89743676f",
+        "level": "L2",
+        "ailis": "clear_match",
+        "codexLuna": "answer_mismatch",
+        "codex55": "no_final_answer"
+      },
+      {
+        "index": 56,
+        "taskId": "14569e28-c88c-43e4-8c32-097d35b9a67d",
+        "level": "L2",
+        "ailis": "clear_match",
+        "codexLuna": "clear_match",
+        "codex55": "answer_mismatch"
+      },
+      {
+        "index": 57,
+        "taskId": "32102e3e-d12a-4209-9163-7b3a104efe5d",
+        "level": "L2",
+        "ailis": "clear_match",
+        "codexLuna": "clear_match",
+        "codex55": "clear_match"
+      },
+      {
+        "index": 58,
+        "taskId": "3627a8be-a77f-41bb-b807-7e1bd4c0ebdf",
+        "level": "L2",
+        "ailis": "clear_match",
+        "codexLuna": "clear_match",
+        "codex55": "clear_match"
+      },
+      {
+        "index": 59,
+        "taskId": "7619a514-5fa8-43ef-9143-83b66a43d7a4",
+        "level": "L2",
+        "ailis": "clear_match",
+        "codexLuna": "clear_match",
+        "codex55": "clear_match"
+      },
+      {
+        "index": 60,
+        "taskId": "7dd30055-0198-452e-8c25-f73dbe27dcb8",
+        "level": "L2",
+        "ailis": "ambiguous",
+        "codexLuna": "ambiguous",
+        "codex55": "ambiguous"
+      },
+      {
+        "index": 65,
+        "taskId": "df6561b2-7ee5-4540-baab-5095f742716a",
+        "level": "L2",
+        "ailis": "clear_match",
+        "codexLuna": "answer_mismatch",
+        "codex55": "clear_match"
+      },
+      {
+        "index": 66,
+        "taskId": "f0f46385-fc03-4599-b5d3-f56496c3e69f",
+        "level": "L2",
+        "ailis": "answer_mismatch",
+        "codexLuna": "answer_mismatch",
+        "codex55": "answer_mismatch"
+      },
+      {
+        "index": 67,
+        "taskId": "e4e91f1c-1dcd-439e-9fdd-cb976f5293fd",
+        "level": "L2",
+        "ailis": "answer_mismatch",
+        "codexLuna": "answer_mismatch",
+        "codex55": "clear_match"
+      },
+      {
+        "index": 68,
+        "taskId": "56137764-b4e0-45b8-9c52-1866420c3df5",
+        "level": "L2",
+        "ailis": "clear_match",
+        "codexLuna": "clear_match",
+        "codex55": "clear_match"
+      },
+      {
+        "index": 70,
+        "taskId": "0ff53813-3367-4f43-bcbd-3fd725c1bf4b",
+        "level": "L2",
+        "ailis": "clear_match",
+        "codexLuna": "clear_match",
+        "codex55": "clear_match"
+      },
+      {
+        "index": 72,
+        "taskId": "b4cc024b-3f5e-480e-b96a-6656493255b5",
+        "level": "L2",
+        "ailis": "format_equivalent",
+        "codexLuna": "clear_match",
+        "codex55": "clear_match"
+      },
+      {
+        "index": 73,
+        "taskId": "33d8ea3b-6c6b-4ff1-803d-7e270dea8a57",
+        "level": "L2",
+        "ailis": "clear_match",
+        "codexLuna": "clear_match",
+        "codex55": "clear_match"
+      },
+      {
+        "index": 74,
+        "taskId": "e8cb5b03-41e0-4086-99e5-f6806cd97211",
+        "level": "L2",
+        "ailis": "clear_match",
+        "codexLuna": "clear_match",
+        "codex55": "clear_match"
+      },
+      {
+        "index": 75,
+        "taskId": "f46b4380-207e-4434-820b-f32ce04ae2a4",
+        "level": "L2",
+        "ailis": "clear_match",
+        "codexLuna": "clear_match",
+        "codex55": "clear_match"
+      },
+      {
+        "index": 76,
+        "taskId": "05407167-39ec-4d3a-a234-73a9120c325d",
+        "level": "L2",
+        "ailis": "clear_match",
+        "codexLuna": "clear_match",
+        "codex55": "clear_match"
+      },
+      {
+        "index": 77,
+        "taskId": "b9763138-c053-4832-9f55-86200cb1f99c",
+        "level": "L2",
+        "ailis": "clear_match",
+        "codexLuna": "answer_mismatch",
+        "codex55": "clear_match"
+      },
+      {
+        "index": 78,
+        "taskId": "16d825ff-1623-4176-a5b5-42e0f5c2b0ac",
+        "level": "L2",
+        "ailis": "clear_match",
+        "codexLuna": "answer_mismatch",
+        "codex55": "no_final_answer"
+      },
+      {
+        "index": 80,
+        "taskId": "bfcd99e1-0690-4b53-a85c-0174a8629083",
+        "level": "L2",
+        "ailis": "clear_match",
+        "codexLuna": "clear_match",
+        "codex55": "clear_match"
+      },
+      {
+        "index": 81,
+        "taskId": "544b7f0c-173a-4377-8d56-57b36eb26ddf",
+        "level": "L2",
+        "ailis": "clear_match",
+        "codexLuna": "clear_match",
+        "codex55": "clear_match"
+      },
+      {
+        "index": 83,
+        "taskId": "076c8171-9b3b-49b9-a477-244d2a532826",
+        "level": "L2",
+        "ailis": "clear_match",
+        "codexLuna": "clear_match",
+        "codex55": "clear_match"
+      },
+      {
+        "index": 85,
+        "taskId": "2dfc4c37-fec1-4518-84a7-10095d30ad75",
+        "level": "L2",
+        "ailis": "answer_mismatch",
+        "codexLuna": "answer_mismatch",
+        "codex55": "answer_mismatch"
+      },
+      {
+        "index": 86,
+        "taskId": "9f41b083-683e-4dcf-9185-ccfeaa88fa45",
+        "level": "L2",
+        "ailis": "ambiguous",
+        "codexLuna": "answer_mismatch",
+        "codex55": "no_final_answer"
+      },
+      {
+        "index": 87,
+        "taskId": "ecbc4f94-95a3-4cc7-b255-6741a458a625",
+        "level": "L2",
+        "ailis": "answer_mismatch",
+        "codexLuna": "answer_mismatch",
+        "codex55": "answer_mismatch"
+      },
+      {
+        "index": 88,
+        "taskId": "e9a2c537-8232-4c3f-85b0-b52de6bcba99",
+        "level": "L2",
+        "ailis": "clear_match",
+        "codexLuna": "clear_match",
+        "codex55": "clear_match"
+      },
+      {
+        "index": 89,
+        "taskId": "71345b0a-9c7d-4b50-b2bf-937ec5879845",
+        "level": "L2",
+        "ailis": "clear_match",
+        "codexLuna": "clear_match",
+        "codex55": "clear_match"
+      },
+      {
+        "index": 90,
+        "taskId": "7b5377b0-3f38-4103-8ad2-90fe89864c04",
+        "level": "L2",
+        "ailis": "clear_match",
+        "codexLuna": "clear_match",
+        "codex55": "clear_match"
+      },
+      {
+        "index": 92,
+        "taskId": "8f80e01c-1296-4371-9486-bb3d68651a60",
+        "level": "L2",
+        "ailis": "answer_mismatch",
+        "codexLuna": "answer_mismatch",
+        "codex55": "answer_mismatch"
+      },
+      {
+        "index": 93,
+        "taskId": "ad37a656-079a-49f9-a493-7b739c9167d1",
+        "level": "L2",
+        "ailis": "clear_match",
+        "codexLuna": "clear_match",
+        "codex55": "clear_match"
+      },
+      {
+        "index": 94,
+        "taskId": "366e2f2b-8632-4ef2-81eb-bc3877489217",
+        "level": "L2",
+        "ailis": "clear_match",
+        "codexLuna": "clear_match",
+        "codex55": "clear_match"
+      },
+      {
+        "index": 96,
+        "taskId": "48eb8242-1099-4c26-95d4-ef22b002457a",
+        "level": "L2",
+        "ailis": "answer_mismatch",
+        "codexLuna": "answer_mismatch",
+        "codex55": "answer_mismatch"
+      },
+      {
+        "index": 99,
+        "taskId": "08f3a05f-5947-4089-a4c4-d4bcfaa6b7a0",
+        "level": "L2",
+        "ailis": "clear_match",
+        "codexLuna": "clear_match",
+        "codex55": "answer_mismatch"
+      },
+      {
+        "index": 100,
+        "taskId": "54612da3-fd56-4941-80f4-5eb82330de25",
+        "level": "L2",
+        "ailis": "clear_match",
+        "codexLuna": "clear_match",
+        "codex55": "clear_match"
+      },
+      {
+        "index": 101,
+        "taskId": "ded28325-3447-4c56-860f-e497d6fb3577",
+        "level": "L2",
+        "ailis": "answer_mismatch",
+        "codexLuna": "answer_mismatch",
+        "codex55": "answer_mismatch"
+      },
+      {
+        "index": 102,
+        "taskId": "6359a0b1-8f7b-499b-9336-840f9ab90688",
+        "level": "L2",
+        "ailis": "clear_match",
+        "codexLuna": "clear_match",
+        "codex55": "clear_match"
+      },
+      {
+        "index": 104,
+        "taskId": "d700d50d-c707-4dca-90dc-4528cddd0c80",
+        "level": "L2",
+        "ailis": "clear_match",
+        "codexLuna": "clear_match",
+        "codex55": "clear_match"
+      },
+      {
+        "index": 105,
+        "taskId": "0a3cd321-3e76-4622-911b-0fda2e5d6b1a",
+        "level": "L2",
+        "ailis": "answer_mismatch",
+        "codexLuna": "answer_mismatch",
+        "codex55": "answer_mismatch"
+      },
+      {
+        "index": 108,
+        "taskId": "ed58682d-bc52-4baa-9eb0-4eb81e1edacc",
+        "level": "L2",
+        "ailis": "answer_mismatch",
+        "codexLuna": "clear_match",
+        "codex55": "clear_match"
+      },
+      {
+        "index": 109,
+        "taskId": "cca70ce6-1952-45d2-acd4-80c903b0bc49",
+        "level": "L2",
+        "ailis": "clear_match",
+        "codexLuna": "clear_match",
+        "codex55": "clear_match"
+      },
+      {
+        "index": 111,
+        "taskId": "d8152ad6-e4d5-4c12-8bb7-8d57dc10c6de",
+        "level": "L2",
+        "ailis": "answer_mismatch",
+        "codexLuna": "clear_match",
+        "codex55": "clear_match"
+      },
+      {
+        "index": 112,
+        "taskId": "67e8878b-5cef-4375-804e-e6291fdbe78a",
+        "level": "L2",
+        "ailis": "clear_match",
+        "codexLuna": "clear_match",
+        "codex55": "clear_match"
+      },
+      {
+        "index": 113,
+        "taskId": "023e9d44-96ae-4eed-b912-244ee8c3b994",
+        "level": "L2",
+        "ailis": "answer_mismatch",
+        "codexLuna": "clear_match",
+        "codex55": "clear_match"
+      },
+      {
+        "index": 116,
+        "taskId": "4d51c4bf-4b0e-4f3d-897b-3f6687a7d9f2",
+        "level": "L2",
+        "ailis": "answer_mismatch",
+        "codexLuna": "answer_mismatch",
+        "codex55": "answer_mismatch"
+      },
+      {
+        "index": 118,
+        "taskId": "3ff6b7a9-a5bd-4412-ad92-0cd0d45c0fee",
+        "level": "L2",
+        "ailis": "clear_match",
+        "codexLuna": "clear_match",
+        "codex55": "clear_match"
+      },
+      {
+        "index": 119,
+        "taskId": "708b99c5-e4a7-49cb-a5cf-933c8d46470d",
+        "level": "L2",
+        "ailis": "clear_match",
+        "codexLuna": "clear_match",
+        "codex55": "semantic_equivalent"
+      },
+      {
+        "index": 120,
+        "taskId": "0a65cb96-cb6e-4a6a-8aae-c1084f613456",
+        "level": "L2",
+        "ailis": "clear_match",
+        "codexLuna": "clear_match",
+        "codex55": "clear_match"
+      },
+      {
+        "index": 121,
+        "taskId": "65da0822-a48a-4a68-bbad-8ed1b835a834",
+        "level": "L2",
+        "ailis": "clear_match",
+        "codexLuna": "answer_mismatch",
+        "codex55": "clear_match"
+      },
+      {
+        "index": 125,
+        "taskId": "a56f1527-3abf-41d6-91f8-7296d6336c3f",
+        "level": "L2",
+        "ailis": "clear_match",
+        "codexLuna": "clear_match",
+        "codex55": "clear_match"
+      },
+      {
+        "index": 127,
+        "taskId": "edd4d4f2-1a58-45c4-b038-67337af4e029",
+        "level": "L2",
+        "ailis": "clear_match",
+        "codexLuna": "clear_match",
+        "codex55": "clear_match"
+      },
+      {
+        "index": 129,
+        "taskId": "4d0aa727-86b1-406b-9b33-f870dd14a4a5",
+        "level": "L2",
+        "ailis": "clear_match",
+        "codexLuna": "clear_match",
+        "codex55": "clear_match"
+      },
+      {
+        "index": 131,
+        "taskId": "1dcc160f-c187-48c2-b68e-319bd4354f3d",
+        "level": "L2",
+        "ailis": "clear_match",
+        "codexLuna": "no_final_answer",
+        "codex55": "clear_match"
+      },
+      {
+        "index": 132,
+        "taskId": "b2c257e0-3ad7-4f05-b8e3-d9da973be36e",
+        "level": "L2",
+        "ailis": "answer_mismatch",
+        "codexLuna": "answer_mismatch",
+        "codex55": "answer_mismatch"
+      },
+      {
+        "index": 133,
+        "taskId": "e0c10771-d627-4fd7-9694-05348e54ee36",
+        "level": "L2",
+        "ailis": "clear_match",
+        "codexLuna": "clear_match",
+        "codex55": "clear_match"
+      },
+      {
+        "index": 134,
+        "taskId": "e29834fd-413a-455c-a33e-c3915b07401c",
+        "level": "L2",
+        "ailis": "clear_match",
+        "codexLuna": "clear_match",
+        "codex55": "clear_match"
+      },
+      {
+        "index": 135,
+        "taskId": "08c0b6e9-1b43-4c2e-ae55-4e3fce2c2715",
+        "level": "L2",
+        "ailis": "clear_match",
+        "codexLuna": "clear_match",
+        "codex55": "clear_match"
+      },
+      {
+        "index": 139,
+        "taskId": "676e5e31-a554-4acc-9286-b60d90a92d26",
+        "level": "L3",
+        "ailis": "clear_match",
+        "codexLuna": "answer_mismatch",
+        "codex55": "clear_match"
+      },
+      {
+        "index": 140,
+        "taskId": "bec74516-02fc-48dc-b202-55e78d0e17cf",
+        "level": "L3",
+        "ailis": "answer_mismatch",
+        "codexLuna": "answer_mismatch",
+        "codex55": "answer_mismatch"
+      },
+      {
+        "index": 141,
+        "taskId": "00d579ea-0889-4fd9-a771-2c8d79835c8d",
+        "level": "L3",
+        "ailis": "answer_mismatch",
+        "codexLuna": "answer_mismatch",
+        "codex55": "clear_match"
+      },
+      {
+        "index": 143,
+        "taskId": "de9887f5-ead8-4727-876f-5a4078f8598c",
+        "level": "L3",
+        "ailis": "answer_mismatch",
+        "codexLuna": "answer_mismatch",
+        "codex55": "clear_match"
+      },
+      {
+        "index": 144,
+        "taskId": "983bba7c-c092-455f-b6c9-7857003d48fc",
+        "level": "L3",
+        "ailis": "clear_match",
+        "codexLuna": "clear_match",
+        "codex55": "answer_mismatch"
+      },
+      {
+        "index": 145,
+        "taskId": "9b54f9d9-35ee-4a14-b62f-d130ea00317f",
+        "level": "L3",
+        "ailis": "clear_match",
+        "codexLuna": "clear_match",
+        "codex55": "clear_match"
+      },
+      {
+        "index": 146,
+        "taskId": "56db2318-640f-477a-a82f-bc93ad13e882",
+        "level": "L3",
+        "ailis": "clear_match",
+        "codexLuna": "clear_match",
+        "codex55": "clear_match"
+      },
+      {
+        "index": 150,
+        "taskId": "c526d8d6-5987-4da9-b24c-83466fa172f3",
+        "level": "L3",
+        "ailis": "answer_mismatch",
+        "codexLuna": "answer_mismatch",
+        "codex55": "clear_match"
+      },
+      {
+        "index": 152,
+        "taskId": "8d46b8d6-b38a-47ff-ac74-cda14cf2d19b",
+        "level": "L3",
+        "ailis": "answer_mismatch",
+        "codexLuna": "answer_mismatch",
+        "codex55": "clear_match"
+      },
+      {
+        "index": 153,
+        "taskId": "e961a717-6b25-4175-8a68-874d28190ee4",
+        "level": "L3",
+        "ailis": "clear_match",
+        "codexLuna": "clear_match",
+        "codex55": "clear_match"
+      },
+      {
+        "index": 154,
+        "taskId": "851e570a-e3de-4d84-bcfa-cc85578baa59",
+        "level": "L3",
+        "ailis": "clear_match",
+        "codexLuna": "clear_match",
+        "codex55": "clear_match"
+      },
+      {
+        "index": 155,
+        "taskId": "50f58759-7bd6-406f-9b0d-5692beb2a926",
+        "level": "L3",
+        "ailis": "clear_match",
+        "codexLuna": "answer_mismatch",
+        "codex55": "clear_match"
+      },
+      {
+        "index": 157,
+        "taskId": "c3a79cfe-8206-451f-aca8-3fec8ebe51d3",
+        "level": "L3",
+        "ailis": "clear_match",
+        "codexLuna": "answer_mismatch",
+        "codex55": "clear_match"
+      },
+      {
+        "index": 158,
+        "taskId": "da52d699-e8d2-4dc5-9191-a2199e0b6a9b",
+        "level": "L3",
+        "ailis": "clear_match",
+        "codexLuna": "clear_match",
+        "codex55": "clear_match"
+      },
+      {
+        "index": 159,
+        "taskId": "ad2b4d70-9314-4fe6-bfbe-894a45f6055f",
+        "level": "L3",
+        "ailis": "clear_match",
+        "codexLuna": "answer_mismatch",
+        "codex55": "no_final_answer"
+      },
+      {
+        "index": 160,
+        "taskId": "5b2a14e8-6e59-479c-80e3-4696e8980152",
+        "level": "L3",
+        "ailis": "clear_match",
+        "codexLuna": "answer_mismatch",
+        "codex55": "clear_match"
+      },
+      {
+        "index": 161,
+        "taskId": "9e1fc53b-46ff-49a1-9d05-9e6faac34cc5",
+        "level": "L3",
+        "ailis": "clear_match",
+        "codexLuna": "clear_match",
+        "codex55": "clear_match"
+      },
+      {
+        "index": 162,
+        "taskId": "5f982798-16b9-4051-ab57-cfc7ebdb2a91",
+        "level": "L3",
+        "ailis": "answer_mismatch",
+        "codexLuna": "answer_mismatch",
+        "codex55": "clear_match"
+      },
+      {
+        "index": 164,
+        "taskId": "0bdb7c40-671d-4ad1-9ce3-986b159c0ddc",
+        "level": "L3",
+        "ailis": "clear_match",
+        "codexLuna": "answer_mismatch",
+        "codex55": "clear_match"
+      }
+    ],
+    "publicationScope": "Task identifiers and outcome labels only. Questions, answers, raw transcripts, local account data and attachments are not published."
+  }
+}

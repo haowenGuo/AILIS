@@ -26,6 +26,15 @@ pnpm desktop:dev
 
 [English](README.md) · [日本語](README.ja.md) · [한국어](README.ko.md) · [Français](README.fr.md) · [Deutsch](README.de.md)
 
+## 评测摘要 · 2026-09-07
+
+| 评测 | AILIS 审计结果 | 范围 |
+| --- | --- | --- |
+| Terminal-Bench 2.1 | **65 / 87 · 74.71%** | 计划 89 题；2 题基础设施未决 |
+| GAIA public validation | **94 / 122 · 77.05%** | 计划 165 题；43 题基础设施未决；人工复核答案匹配 |
+
+成绩属于已标识的冻结运行，不是当前源码分支或 v1.4.1 安装包的认证结果；两套评测均未全部有效完成。[完整评测说明](docs/evaluation.zh-CN.md) 包含 Codex 对照、GAIA 自动与人工复核口径、Token、缓存率、时延和逐题证据。
+
 ## 参与开发
 
 参见[贡献约定](CONTRIBUTING.md)、[源码地图](docs/reference/source-map.md)和[许可证](LICENSE)。第三方代码与资源遵守各自条款；账户凭据和个人状态不提交到源码仓库。

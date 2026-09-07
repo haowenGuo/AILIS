@@ -26,6 +26,15 @@ Read the [manual](docs/README.md) for setup, system design and engineering workf
 
 [中文](README.zh-CN.md) · [日本語](README.ja.md) · [한국어](README.ko.md) · [Français](README.fr.md) · [Deutsch](README.de.md)
 
+## Evaluation snapshot · 2026-09-07
+
+| Benchmark | Audited AILIS result | Scope |
+| --- | --- | --- |
+| Terminal-Bench 2.1 | **65 / 87 · 74.71%** | 89 planned; 2 infrastructure-unresolved |
+| GAIA public validation | **94 / 122 · 77.05%** | 165 planned; 43 infrastructure-unresolved; reviewed answer matching |
+
+These are results from identified frozen runs, not certification of this source branch or the v1.4.1 installer. Neither is a fully valid completed suite. [Evaluation details](docs/evaluation.md) include Codex comparisons, automatic versus reviewed GAIA scores, tokens, cache rates, latency and per-task evidence.
+
 ## Development and license
 
 See [CONTRIBUTING](CONTRIBUTING.md), [source map](docs/reference/source-map.md) and [LICENSE](LICENSE). External code, models, voices and motion assets have their own terms. Keep account credentials and personal state outside source control.

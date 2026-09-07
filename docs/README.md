@@ -25,6 +25,7 @@ AILIS 是一个支持聊天、工具执行、持久上下文和角色交互的�
 - [构建与发布](engineering/distribution.md)：前端目标、源码集合、安装包和验证。
 - [服务端运行](engineering/services.md)：FastAPI、Hosted Node 与部署配置。
 - [运行观测与评估](engineering/measurement.md)：事件、质量、用量、缓存与时延。
+- [评测结果与 Codex 对照](evaluation.zh-CN.md)：2026-09-07 已核实成绩、未决范围、历史基线和逐题索引；[English](evaluation.md)。
 
 ## 参考资料
 
