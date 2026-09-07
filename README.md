@@ -54,9 +54,9 @@ Talk to AILIS naturally, like a companion. When there is work to do, she can und
 
 End-to-end Agent evaluation · **2026-09-07** · scores in %. AILIS is highlighted; columns identify both the system and its model / reasoning setting.
 
-![AILIS and Codex benchmark matrix: Terminal-Bench and GAIA overall / L1 / L2 / L3](docs/assets/benchmarks/ailis-evaluation-20260907.en.svg)
+![AILIS and Codex benchmark matrix: Terminal-Bench and GAIA overall](docs/assets/benchmarks/ailis-evaluation-20260907.en.svg)
 
-**[1] Terminal-Bench:** 65 passes / 87 valid tasks, with 2 of 89 unresolved. Codex is an official archived 89 × 5-trial result. **[2] GAIA:** reviewed answers on 122 completed tasks, with 43 of 165 unresolved; AILIS uses Max / 3000s, the Codex references use Medium / 600s. These are different-budget frozen-run results, not full-suite certification of the current release.
+**[1] Terminal-Bench:** 65 passes / 87 valid tasks, with 2 of 89 unresolved. Codex is the official archived mean across 89 tasks, with five trials per task. **[2] GAIA:** reviewed answers on 122 completed tasks, with 43 of 165 unresolved; AILIS uses Max / 3000s, the Codex references use Medium / 600s. These are different-budget frozen-run results, not full-suite certification of the current release.
 
 <details>
 <summary>Text table · scores, sample counts, and missing values</summary>
@@ -64,12 +64,9 @@ End-to-end Agent evaluation · **2026-09-07** · scores in %. AILIS is highlight
 | Capability / Benchmark | AILIS<br>Luna Max | Codex<br>Luna Max | Codex<br>Luna Medium | Codex<br>GPT-5.5 Medium |
 | :--- | ---: | ---: | ---: | ---: |
 | **Coding** | | | | |
-| **Agentic terminal coding**<br>Terminal-Bench 2.1 [1] | 74.71<br><sub>65 / 87</sub> | **75.73**<br><sub>337 / 445 · ± 1.32 SE</sub> | — | — |
+| **Agentic terminal coding**<br>Terminal-Bench 2.1 [1] | 74.71<br><sub>65 / 87</sub> | **75.73**<br><sub>89 tasks · 5-trial mean · ± 1.32 SE</sub> | — | — |
 | **Agent** | | | | |
 | **General-purpose tasks**<br>GAIA · Overall [2] | 77.05<br><sub>94 / 122</sub> | — | 67.21<br><sub>82 / 122</sub> | **79.51**<br><sub>97 / 122</sub> |
-| **General-purpose tasks · L1**<br>GAIA · L1 [2] | **89.36**<br><sub>42 / 47</sub> | — | 78.72<br><sub>37 / 47</sub> | 87.23<br><sub>41 / 47</sub> |
-| **General-purpose tasks · L2**<br>GAIA · L2 [2] | 69.64<br><sub>39 / 56</sub> | — | 67.86<br><sub>38 / 56</sub> | **71.43**<br><sub>40 / 56</sub> |
-| **General-purpose tasks · L3**<br>GAIA · L3 [2] | 68.42<br><sub>13 / 19</sub> | — | 36.84<br><sub>7 / 19</sub> | **84.21**<br><sub>16 / 19</sub> |
 
 Scores are percentages. Bold indicates the highest reported value in a row, not a controlled ranking. — means no corresponding evidence, not failure or zero.
 

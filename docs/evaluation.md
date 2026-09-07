@@ -8,7 +8,7 @@ Updated **2026-09-07**. Capabilities are rows; systems and model settings are co
 
 ![AILIS and Codex task-execution scorecard](assets/benchmarks/ailis-evaluation-20260907.en.svg)
 
-**[1] Coding:** Terminal-Bench has 65 passes, 22 valid failures and 2 infrastructure-unresolved tasks out of 89 planned. The valid-sample score is **65 / 87 = 74.71%**; confirmed passes over the planned suite are a lower bound of **65 / 89 = 73.03%**. The archived Codex submission contains 89 tasks × 5 trials: **337 / 445 = 75.73% ± 1.32% standard error**.
+**[1] Coding:** Terminal-Bench has 65 passes, 22 valid failures and 2 infrastructure-unresolved tasks out of 89 planned. The valid-sample score is **65 / 87 = 74.71%**; confirmed passes over the planned suite are a lower bound of **65 / 89 = 73.03%**. The archived Codex submission covers **89 tasks**, evaluated five times each, with a mean pass rate of **75.73% ± 1.32% standard error**.
 
 **[2] General tasks:** GAIA has 122 completed tasks and 43 infrastructure-interrupted tasks out of 165 planned. UUIDs, questions, references and levels were matched across systems. AILIS uses Luna Max / 3000s; Codex references use Medium / 600s. **77.05% is the reviewed completed-subset score, not a full-165 result.**
 
@@ -18,14 +18,11 @@ Updated **2026-09-07**. Capabilities are rows; systems and model settings are co
 | Capability / Benchmark | AILIS<br>Luna Max | Codex<br>Luna Max | Codex<br>Luna Medium | Codex<br>GPT-5.5 Medium |
 | :--- | ---: | ---: | ---: | ---: |
 | **Coding** | | | | |
-| **Agentic terminal coding**<br>Terminal-Bench 2.1 [1] | 74.71<br><sub>65 / 87</sub> | **75.73**<br><sub>337 / 445 · ± 1.32 SE</sub> | — | — |
+| **Agentic terminal coding**<br>Terminal-Bench 2.1 [1] | 74.71<br><sub>65 / 87</sub> | **75.73**<br><sub>89 tasks · 5-trial mean · ± 1.32 SE</sub> | — | — |
 | **Agent** | | | | |
 | **General-purpose tasks**<br>GAIA · Overall [2] | 77.05<br><sub>94 / 122</sub> | — | 67.21<br><sub>82 / 122</sub> | **79.51**<br><sub>97 / 122</sub> |
-| **General-purpose tasks · L1**<br>GAIA · L1 [2] | **89.36**<br><sub>42 / 47</sub> | — | 78.72<br><sub>37 / 47</sub> | 87.23<br><sub>41 / 47</sub> |
-| **General-purpose tasks · L2**<br>GAIA · L2 [2] | 69.64<br><sub>39 / 56</sub> | — | 67.86<br><sub>38 / 56</sub> | **71.43**<br><sub>40 / 56</sub> |
-| **General-purpose tasks · L3**<br>GAIA · L3 [2] | 68.42<br><sub>13 / 19</sub> | — | 36.84<br><sub>7 / 19</sub> | **84.21**<br><sub>16 / 19</sub> |
 
-Scores are percentages; the second line gives matches/passes and the denominator. — means unavailable evidence, not zero.
+Scores are percentages; the second line gives sample counts and the evaluation basis. Codex Terminal-Bench covers 89 tasks with five trials per task, not a single 89-task attempt. — means unavailable evidence, not zero.
 
 </details>
 
