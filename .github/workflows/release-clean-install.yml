@@ -179,18 +179,11 @@ jobs:
             if ($actual -ne $expected) { throw "Checksum mismatch: $name" }
           }
           $manifest.artifacts | Select-Object file,bytes,sha256 | ConvertTo-Json -Depth 3
-      - name: Preserve previous tag and publish the verified 1.4.2 hotfix
+      - name: Publish only to the already-approved matching release tag
         shell: pwsh
         run: |
-          $previous = '5c5a3a47b7144e5e4e79a5218b68d953ee63aaba'
           $tag = gh api "repos/$env:GH_REPO/git/ref/tags/v1.4.2" | ConvertFrom-Json
-          if ($tag.object.sha -ne $previous) { throw 'Release tag changed; review required before replacement' }
-          git push origin "${previous}:refs/tags/v1.4.2-before-compaction-20260908"
-          if ($LASTEXITCODE -ne 0) { throw 'Previous release tag backup failed' }
-          git push origin "$($env:VERIFIED_SHA):refs/heads/main"
-          if ($LASTEXITCODE -ne 0) { throw 'Main update is not a safe fast-forward' }
-          git push "--force-with-lease=refs/tags/v1.4.2:$previous" origin "$($env:VERIFIED_SHA):refs/tags/v1.4.2"
-          if ($LASTEXITCODE -ne 0) { throw 'Release tag update failed' }
+          if ($tag.object.sha -ne $env:VERIFIED_SHA) { throw 'Release tag does not match the verified source; publish refused' }
           $files = @(Get-ChildItem verified/release/core -File | Where-Object { $_.Extension -in @('.exe','.blockmap','.yml','.json') -or $_.Name -eq 'SHA256SUMS.txt' } | ForEach-Object FullName)
           $files += (Resolve-Path verified/release-smoke/clean-install-report.json).Path
           gh release upload v1.4.2 @files --clobber
