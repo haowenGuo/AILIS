@@ -1,6 +1,6 @@
 # AILIS
 
-Dieses Handbuch beschreibt den aktuellen Quellcode mit dem vereinheitlichten Agent. Die vorhandenen [v1.4.1-Installationspakete](https://github.com/haowenGuo/AILIS/releases/tag/v1.4.1) wurden aus `659bf61` erstellt und enthalten die späteren Änderungen nicht. Starten Sie dafür den aktuellen Quellcode.
+Dieses Handbuch beschreibt den aktuellen Quellcode mit dem vereinheitlichten Agent. [Version 1.4.2](https://github.com/haowenGuo/AILIS/releases/tag/v1.4.2) enthält neue Chat- und Einstellungsoberflächen sowie ASR-Korrekturen. Unity und große Sprach- oder Modelllaufzeiten sind nicht enthalten. Voraussetzungen stehen in den [Versionshinweisen](docs/releases/v1.4.2.md).
 
 AILIS ist eine Desktop-Anwendung für Text- und Sprachdialoge, Aufgaben mit Werkzeugen, dauerhaften Kontext und einen VRM-Avatar.
 

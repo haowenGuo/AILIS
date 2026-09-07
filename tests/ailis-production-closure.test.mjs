@@ -12,6 +12,8 @@ const report = audit();
 test('desktop closure has explicit evidence for subprocesses and runtime resources', () => {
     assertValid(report);
     for (const file of ['electron/main.cjs', 'electron/preload.cjs', 'electron/ailis-code-mode-worker.cjs',
+        'electron/quick-controls-preload.cjs', 'electron/quick-controls-window.cjs',
+        'quick-controls.html', 'src/quick-controls.js',
         'scripts/mcp-ailis-research-server.cjs', 'scripts/ailis-stockfish-engine.cjs',
         'scripts/ailis-crawl4ai-worker.py', 'scripts/ailis-python-search-worker.py', 'scripts/ailis-ragflow-lite-worker.py',
         'vendor/ragflow-lite/upstream/rag__app__table.py', 'electron/cosyvoice3_tts_worker.py',

@@ -19,6 +19,8 @@ const {
 } = require('electron');
 const { DesktopASRManager } = require('./local-asr-manager.cjs');
 const { synthesizeElevenLabsSpeech } = require('./desktop-elevenlabs-tts.cjs');
+const { synthesizeHostedSpeech, normalizeHostedTtsBaseUrl } = require('./desktop-hosted-tts.cjs');
+const { createQuickControls } = require('./quick-controls-window.cjs');
 const {
     closeCosyVoice3TTS,
     configureCosyVoice3TTS,
@@ -134,6 +136,7 @@ const {
     loadDesktopState,
     createLlmApiKeyId,
     normalizeAutoChatEnabled,
+    normalizeLlmConnectionProfiles,
     normalizeAutoChatMode,
     normalizeAutoChatMaxIntervalSec,
     normalizeAutoChatMinIntervalSec,
@@ -246,6 +249,7 @@ const MENU_I18N = Object.freeze({
         language: 'Language',
         speechMode: 'Voice Mode',
         speechOff: 'Voice Off',
+        speechHosted: 'Standard Voice Mode',
         speechServer: 'ElevenLabs Cloud Voice',
         speechCosyVoice3: 'CosyVoice3 Local High Quality',
         scale: 'Scale',
@@ -267,6 +271,7 @@ const MENU_I18N = Object.freeze({
         language: '言語',
         speechMode: '音声モード',
         speechOff: '音声オフ',
+        speechHosted: '通常音声モード',
         speechServer: 'ElevenLabs クラウド音声',
         speechCosyVoice3: 'CosyVoice3 ローカル高品質',
         scale: '倍率',
@@ -288,6 +293,7 @@ const MENU_I18N = Object.freeze({
         language: '언어',
         speechMode: '음성 모드',
         speechOff: '음성 끄기',
+        speechHosted: '일반 음성 모드',
         speechServer: 'ElevenLabs 클라우드 음성',
         speechCosyVoice3: 'CosyVoice3 로컬 고품질',
         scale: '크기',
@@ -333,9 +339,15 @@ function getTrayIconPath() {
 }
 
 app.setName('AILIS');
+// Optional headless world transport: use this source's unified Agent, settings and stores.
+const worldServiceOnly = process.env.AILIS_WORLD_SERVICE_ONLY === '1';
+if (worldServiceOnly && process.env.AILIS_SHARED_USER_DATA_DIR) {
+    app.setPath('userData', path.resolve(process.env.AILIS_SHARED_USER_DATA_DIR));
+}
 app.setAppUserModelId('com.ailis.desktop');
 
 let petWindow = null;
+let quickControls = null;
 let chatWindow = null;
 let controlWindow = null;
 let controlWindowLoadPromise = null;
@@ -358,11 +370,9 @@ let ailisChatHistoryStore = null;
 let runtimeComponentsInstallRun = null;
 let lastRuntimeComponentsInstallRun = null;
 let petDialogueCollapsedBounds = null;
-let petDialogueExpanded = false;
 let petDialogueExtraTop = 0;
 let petDialogueExtraWidth = 0;
-let petDialogueBoundsMutation = false;
-let petDialogueBoundsMutationTimer = null;
+let petWindowLayout = null;
 let petMousePassthroughEnabled = false;
 let petDragState = null;
 let petCursorTrackingTimer = null;
@@ -866,6 +876,9 @@ function resolveAILISStateDir(value = '') {
 }
 
 function getPersistedAILISStateDir() {
+    if (worldServiceOnly && process.env.AILIS_WORLD_SERVICE_STATE_DIR) {
+        return path.resolve(process.env.AILIS_WORLD_SERVICE_STATE_DIR);
+    }
     return resolveAILISStateDir(desktopState?.preferences?.ailisStateDir);
 }
 
@@ -1013,6 +1026,7 @@ function getRuntimeAssetManager() {
 
 async function bootstrapVoiceRuntime(payload = {}) {
     const result = await getVoiceRuntimeBootstrap().bootstrap(payload || {});
+    if (result.ok) desktopASRManager?.close();
     configureCosyVoice3Runtime();
     return result;
 }
@@ -1997,25 +2011,22 @@ function getPetDialogueExpandedLayout(
         baseBounds,
         requestedExtraTop,
         requestedExtraWidth,
-        minimumWidth: PET_MIN_SIZE.width,
-        minimumHeight: PET_MIN_SIZE.height,
         normalizeExtraTop: normalizePetDialogueExtraTop,
         normalizeExtraWidth: normalizePetDialogueExtraWidth
     });
 }
 
-function setPetWindowBoundsTransient(bounds) {
-    if (!petWindow || petWindow.isDestroyed()) {
-        return;
-    }
-
-    petDialogueBoundsMutation = true;
-    clearTimeout(petDialogueBoundsMutationTimer);
-    petWindow.setBounds(bounds);
-    petDialogueBoundsMutationTimer = setTimeout(() => {
-        petDialogueBoundsMutation = false;
-        petDialogueBoundsMutationTimer = null;
-    }, 220);
+function applyPetWindowLayout(layout, { updateWindow = true } = {}) {
+    petWindowLayout = layout;
+    petDialogueCollapsedBounds = layout.baseBounds;
+    petDialogueExtraTop = layout.extraTop;
+    petDialogueExtraWidth = layout.extraWidth;
+    desktopState.petWindow.bounds = layout.baseBounds;
+    if (!petWindow || petWindow.isDestroyed() || !updateWindow) return;
+    // setPosition round-trips the current native bounds and can accumulate
+    // DIP rounding errors on Windows. Keep the canonical size, change x/y.
+    petWindow.setBounds(layout.expandedBounds);
+    petWindow.webContents.send('ailis:pet-window-layout', layout);
 }
 
 function getCurrentPetScale() {
@@ -2104,17 +2115,11 @@ function setPetDialogueWindowExpanded(
     // The transparent WebGL window keeps one fixed dialogue envelope for its
     // lifetime. Resizing it when speech starts or ends makes Windows recreate
     // the surface and visibly flashes the avatar.
-    const referenceBounds = canonicalizePetBounds(
-        petDialogueCollapsedBounds || desktopState.petWindow.bounds
-    );
-    const layout = getPetDialogueExpandedLayout(
-        referenceBounds,
-        petDialogueExtraTop || requestedExtraTop,
-        petDialogueExtraWidth || requestedExtraWidth
+    const layout = petWindowLayout || getPetDialogueExpandedLayout(
+        canonicalizePetBounds(desktopState.petWindow.bounds), requestedExtraTop, requestedExtraWidth
     );
 
     petDialogueCollapsedBounds = layout.baseBounds;
-    petDialogueExpanded = layout.extraTop > 0 || layout.extraWidth > 0;
     petDialogueExtraTop = layout.extraTop;
     petDialogueExtraWidth = layout.extraWidth;
     desktopState.petWindow.bounds = layout.baseBounds;
@@ -2128,6 +2133,7 @@ function setPetDialogueWindowExpanded(
         extraWidth: layout.extraWidth,
         reservedLeft: layout.reservedLeft,
         reservedRight: layout.reservedRight,
+        visibleBounds: layout.visibleBounds,
         bounds: layout.expandedBounds,
         baseBounds: layout.baseBounds
     };
@@ -2662,6 +2668,9 @@ function getRendererLlmPreferences() {
         llmProvider: settings.provider,
         llmBaseUrl: settings.baseUrl,
         llmModel: settings.model,
+        llmConnectionProfiles: normalizeLlmConnectionProfiles(
+            desktopState.preferences.llmConnectionProfiles, desktopState.preferences
+        ),
         llmApiKeyConfigured: Boolean(settings.apiKey),
         llmApiKeySource: settings.apiKeySource,
         llmApiKeyProfiles: getRendererLlmApiKeyProfiles(),
@@ -2967,6 +2976,9 @@ async function callDesktopElevenLabsTts(payload = {}) {
 }
 
 async function callDesktopTts(payload = {}) {
+    if (payload.provider === 'hosted') {
+        return synthesizeHostedSpeech({ baseUrl: desktopState.preferences.hostedTtsBaseUrl }, payload);
+    }
     if (payload?.provider === 'cosyvoice3') {
         const runtime = getVoiceRuntimeBootstrap();
         const summary = runtime.getFastSummary();
@@ -2987,7 +2999,7 @@ async function callDesktopTts(payload = {}) {
             ok: false,
             provider: payload.provider,
             code: 'unsupported_tts_provider',
-            error: '当前只支持关闭语音、ElevenLabs 和 CosyVoice3。'
+            error: '当前支持普通语音模式、ElevenLabs 和 CosyVoice3。'
         };
     }
     return callDesktopElevenLabsTts(payload);
@@ -3108,6 +3120,10 @@ function ensureAILISGateway() {
     );
     ailisGateway = new AILISGateway({
         app,
+        ...(worldServiceOnly ? {
+            toolAllowlist: [], mcpServers: [], disableBuiltinAilisResearchMcp: true,
+            profileCurationEnabled: false
+        } : {}),
         projectRoot: getProjectRoot(),
         workspaceRoot: getGatewayWorkspaceRoot(),
         auditDir: getPersistedAILISStateDir(),
@@ -3284,6 +3300,7 @@ function getRendererPreferences() {
         petSkipTaskbar: Boolean(desktopState?.preferences?.petSkipTaskbar),
         petScale: normalizePetScale(desktopState?.preferences?.petScale || DEFAULT_PET_SCALE),
         speechMode: normalizeSpeechMode(desktopState?.preferences?.speechMode),
+        hostedTtsBaseUrl: desktopState.preferences.hostedTtsBaseUrl,
         recognitionMode: normalizeRecognitionMode(desktopState?.preferences?.recognitionMode),
         conversationMode: normalizeConversationMode(
             desktopState?.preferences?.conversationMode || DEFAULT_CONVERSATION_MODE
@@ -3488,17 +3505,19 @@ function updateWindowState(key, window, options = {}) {
     }
 
     const minimumSize = getWindowMinimumSize(key);
-    if (key === 'petWindow' && (petDialogueExpanded || petDialogueBoundsMutation)) {
+    if (key === 'petWindow' && petWindowLayout) {
         if (petDialogueCollapsedBounds) {
-            desktopState[key].bounds = clampBoundsToDisplay(
-                petDialogueCollapsedBounds,
-                minimumSize.width,
-                minimumSize.height
-            );
+            desktopState[key].bounds = { ...petDialogueCollapsedBounds };
         }
         desktopState[key].visible = window.isVisible();
         if (options.immediate) {
             persistDesktopState();
+        } else {
+            clearTimeout(windowPersistTimers.get(key));
+            windowPersistTimers.set(key, setTimeout(() => {
+                persistDesktopState();
+                windowPersistTimers.delete(key);
+            }, 120));
         }
         return;
     }
@@ -3767,6 +3786,7 @@ function applyPreferencesPatch(partialPreferences = {}) {
         petSkipTaskbar: rendererPreferences.petSkipTaskbar,
         petScale: rendererPreferences.petScale,
         speechMode: rendererPreferences.speechMode,
+        hostedTtsBaseUrl: rendererPreferences.hostedTtsBaseUrl,
         recognitionMode: rendererPreferences.recognitionMode,
         conversationMode: rendererPreferences.conversationMode,
         uiLanguage: rendererPreferences.uiLanguage,
@@ -3780,6 +3800,7 @@ function applyPreferencesPatch(partialPreferences = {}) {
         llmProvider: currentLlmSettings.provider,
         llmBaseUrl: currentLlmSettings.baseUrl,
         llmModel: currentLlmSettings.model,
+        llmConnectionProfiles: rendererPreferences.llmConnectionProfiles,
         ...getRendererOllamaTargetPreferences(rendererPreferences),
         llmApiKey: currentLlmSettings.apiKey,
         llmApiKeyProfiles: getPersistedLlmApiKeyProfiles(),
@@ -3843,6 +3864,11 @@ function applyPreferencesPatch(partialPreferences = {}) {
     if ('speechMode' in partialPreferences) {
         nextPreferences.speechMode = normalizeSpeechMode(partialPreferences.speechMode);
     }
+    if ('hostedTtsBaseUrl' in partialPreferences) {
+        const baseUrl = normalizeHostedTtsBaseUrl(partialPreferences.hostedTtsBaseUrl);
+        if (!baseUrl) throw new Error('语音服务地址无效，请填写 HTTP/HTTPS 地址。');
+        nextPreferences.hostedTtsBaseUrl = baseUrl;
+    }
     if ('recognitionMode' in partialPreferences) {
         nextPreferences.recognitionMode = normalizeRecognitionMode(partialPreferences.recognitionMode);
     }
@@ -3875,6 +3901,10 @@ function applyPreferencesPatch(partialPreferences = {}) {
         nextPreferences.voiceRuntimeRoot = normalizeVoiceRuntimeRoot(partialPreferences.voiceRuntimeRoot);
     }
     if ('llmProvider' in partialPreferences) {
+        nextPreferences.llmConnectionProfiles = normalizeLlmConnectionProfiles({
+            ...normalizeLlmConnectionProfiles(nextPreferences.llmConnectionProfiles, nextPreferences),
+            ...normalizeLlmConnectionProfiles(partialPreferences.llmConnectionProfiles)
+        });
         nextPreferences.llmProvider = normalizeLlmProvider(partialPreferences.llmProvider);
     }
     if ('llmBaseUrl' in partialPreferences) {
@@ -4297,26 +4327,19 @@ function applyPreferencesPatch(partialPreferences = {}) {
         );
 
         desktopState.petWindow.bounds = nextBounds;
-        if (petWindow && petDialogueExpanded) {
+        if (petWindow) {
             const layout = getPetDialogueExpandedLayout(
                 nextBounds,
-                petDialogueExtraTop || PET_DIALOGUE_DEFAULT_EXTRA_TOP,
-                petDialogueExtraWidth || PET_DIALOGUE_DEFAULT_EXTRA_WIDTH
+                nextPreferences.avatarDialogueBubbleExtraTop,
+                nextPreferences.avatarDialogueBubbleExtraWidth
             );
-            petDialogueCollapsedBounds = layout.baseBounds;
-            petDialogueExtraTop = layout.extraTop;
-            petDialogueExtraWidth = layout.extraWidth;
-            desktopState.petWindow.bounds = layout.baseBounds;
-            setPetWindowBoundsTransient(layout.expandedBounds);
-        } else {
-            petWindow?.setBounds(nextBounds);
+            applyPetWindowLayout(layout);
         }
     }
 
     if (
         !petScaleChanged &&
         petWindow &&
-        petDialogueExpanded &&
         (
             'avatarDialogueBubbleExtraTop' in partialPreferences ||
             'avatarDialogueBubbleExtraWidth' in partialPreferences
@@ -4327,11 +4350,7 @@ function applyPreferencesPatch(partialPreferences = {}) {
             nextPreferences.avatarDialogueBubbleExtraTop,
             nextPreferences.avatarDialogueBubbleExtraWidth
         );
-        petDialogueCollapsedBounds = layout.baseBounds;
-        petDialogueExtraTop = layout.extraTop;
-        petDialogueExtraWidth = layout.extraWidth;
-        desktopState.petWindow.bounds = layout.baseBounds;
-        setPetWindowBoundsTransient(layout.expandedBounds);
+        applyPetWindowLayout(layout);
     }
 
     if (petWindow) {
@@ -4367,6 +4386,7 @@ function applyPreferencesPatch(partialPreferences = {}) {
 
     if (voiceRuntimeRootChanged) {
         voiceRuntimeBootstrap = null;
+        desktopASRManager?.close();
         closeCosyVoice3TTS();
         configureCosyVoice3Runtime();
     }
@@ -4408,6 +4428,7 @@ function applyPreferencesPatch(partialPreferences = {}) {
             });
     }
 
+    quickControls?.refresh();
     return getRendererPreferences();
 }
 
@@ -4442,6 +4463,7 @@ function menuText(key) {
         language: '语言',
         speechMode: '语音模式',
         speechOff: '关闭语音',
+        speechHosted: '普通语音模式',
         speechServer: 'ElevenLabs 云端语音',
         speechCosyVoice3: 'CosyVoice3 本地高质量',
         scale: '缩放',
@@ -4479,6 +4501,9 @@ function getSpeechModeLabel(mode) {
     }
     if (mode === 'server') {
         return menuText('speechServer');
+    }
+    if (mode === 'hosted') {
+        return menuText('speechHosted');
     }
     if (mode === 'cosyvoice3') {
         return menuText('speechCosyVoice3');
@@ -4546,12 +4571,38 @@ function buildPetContextMenu() {
     return Menu.buildFromTemplate(buildControlMenuTemplate());
 }
 
+function getQuickControlsState() {
+    const preferences = getRendererPreferences();
+    return {
+        uiLanguage: getCurrentUiLanguage(),
+        speech: { value: preferences.speechMode, options: SPEECH_MODE_OPTIONS.map(value => ({ value, label: getSpeechModeLabel(value) })) },
+        scale: { value: preferences.petScale, options: PET_SCALE_OPTIONS.map(value => ({ value, label: `${Math.round(value * 100)}%` })) },
+        language: { value: getCurrentUiLanguage(), options: UI_LANGUAGE_OPTIONS.map(value => ({ value, label: UI_LANGUAGE_LABELS[value] || value })) }
+    };
+}
+
+function applyQuickControlAction(action = {}) {
+    if (action.id === 'chat') return showChatWindow();
+    if (action.id === 'controlPanel') return showControlPanel();
+    if (action.id === 'quit') return quitApplication();
+    // Preference persistence already schedules voice warmup; do not lock the popup during model loading.
+    if (action.id === 'speech' && SPEECH_MODE_OPTIONS.includes(action.value)) return applyPreferencesPatch({ speechMode: action.value });
+    if (action.id === 'scale' && PET_SCALE_OPTIONS.includes(action.value)) return applyPetScale(action.value);
+    if (action.id === 'language' && UI_LANGUAGE_OPTIONS.includes(action.value)) return updateUiLanguage(action.value);
+    throw new Error('Unsupported quick control action');
+}
+
 function showControlMenu(targetWindow = petWindow) {
     if (!targetWindow || targetWindow.isDestroyed()) {
         return false;
     }
 
-    buildPetContextMenu().popup({ window: targetWindow });
+    quickControls ||= createQuickControls({ BrowserWindow, ipcMain, screen,
+        loadContent: loadWindowContent, getState: getQuickControlsState, applyAction: applyQuickControlAction });
+    void quickControls.show().catch(error => {
+        console.warn('[quick-controls] Popup unavailable:', error.message);
+        if (!targetWindow.isDestroyed()) buildPetContextMenu().popup({ window: targetWindow });
+    });
     return true;
 }
 
@@ -4610,10 +4661,7 @@ function createPetWindow() {
         desktopState.preferences.avatarDialogueBubbleExtraWidth
     );
     desktopState.petWindow.bounds = petBounds;
-    petDialogueCollapsedBounds = dialogueLayout.baseBounds;
-    petDialogueExpanded = dialogueLayout.extraTop > 0 || dialogueLayout.extraWidth > 0;
-    petDialogueExtraTop = dialogueLayout.extraTop;
-    petDialogueExtraWidth = dialogueLayout.extraWidth;
+    applyPetWindowLayout(dialogueLayout, { updateWindow: false });
     persistDesktopState();
 
     console.log('[window:pet] create', {
@@ -4659,13 +4707,10 @@ function createPetWindow() {
     petWindow.on('closed', () => {
         console.log('[window:pet] closed');
         petWindow = null;
+        petWindowLayout = null;
         petDialogueCollapsedBounds = null;
-        petDialogueExpanded = false;
         petDialogueExtraTop = 0;
         petDialogueExtraWidth = 0;
-        petDialogueBoundsMutation = false;
-        clearTimeout(petDialogueBoundsMutationTimer);
-        petDialogueBoundsMutationTimer = null;
         petMousePassthroughEnabled = false;
         petDragState = null;
         stopPetCursorTracking();
@@ -5578,7 +5623,7 @@ function registerIpc() {
         }
 
         const cursor = screen.getCursorScreenPoint();
-        const baseBounds = petDialogueExpanded && petDialogueCollapsedBounds
+        const baseBounds = petDialogueCollapsedBounds
             ? { ...petDialogueCollapsedBounds }
             : petWindow.getBounds();
         petDragState = {
@@ -5586,9 +5631,8 @@ function registerIpc() {
             baseBounds,
             lastAppliedBounds: { ...baseBounds },
             lastAppliedExpandedBounds: null,
-            wasExpanded: Boolean(petDialogueExpanded && petDialogueCollapsedBounds),
-            extraTop: petDialogueExtraTop || PET_DIALOGUE_DEFAULT_EXTRA_TOP,
-            extraWidth: petDialogueExtraWidth || PET_DIALOGUE_DEFAULT_EXTRA_WIDTH
+            extraTop: petDialogueExtraTop,
+            extraWidth: petDialogueExtraWidth
         };
     });
 
@@ -5614,25 +5658,24 @@ function registerIpc() {
             deltaY = Number.isFinite(rawDeltaY) ? rawDeltaY : 0;
         }
 
-        if (petDialogueExpanded && petDialogueCollapsedBounds) {
+        if (petWindowLayout && petDialogueCollapsedBounds) {
             const baseBounds = petDragState?.baseBounds
                 ? { ...petDragState.baseBounds }
                 : { ...petDialogueCollapsedBounds };
-            const movedBaseBounds = clampBoundsToDisplay({
+            const movedBaseBounds = desktopPlatformAdapter.clampPositionToDisplay({
                 ...baseBounds,
                 x: Math.round(baseBounds.x + deltaX),
                 y: Math.round(baseBounds.y + deltaY)
-            }, PET_MIN_SIZE.width, PET_MIN_SIZE.height);
+            });
             const layout = getPetDialogueExpandedLayout(
                 movedBaseBounds,
-                petDragState?.extraTop || petDialogueExtraTop || PET_DIALOGUE_DEFAULT_EXTRA_TOP,
-                petDragState?.extraWidth || petDialogueExtraWidth || PET_DIALOGUE_DEFAULT_EXTRA_WIDTH
+                petDragState?.extraTop ?? petDialogueExtraTop,
+                petDragState?.extraWidth ?? petDialogueExtraWidth
             );
 
             petDialogueCollapsedBounds = layout.baseBounds;
             petDialogueExtraTop = layout.extraTop;
             petDialogueExtraWidth = layout.extraWidth;
-            petDialogueExpanded = layout.extraTop > 0 || layout.extraWidth > 0;
             desktopState.petWindow.bounds = layout.baseBounds;
             desktopState.petWindow.visible = petWindow.isVisible();
             if (
@@ -5648,18 +5691,18 @@ function registerIpc() {
                 petDragState.lastAppliedBounds = { ...layout.baseBounds };
                 petDragState.lastAppliedExpandedBounds = { ...layout.expandedBounds };
             }
-            setPetWindowBoundsTransient(layout.expandedBounds);
+            applyPetWindowLayout(layout);
             return;
         }
 
         const bounds = petDragState?.baseBounds
             ? { ...petDragState.baseBounds }
             : petWindow.getBounds();
-        const nextBounds = clampBoundsToDisplay({
+        const nextBounds = desktopPlatformAdapter.clampPositionToDisplay({
             ...bounds,
             x: Math.round(bounds.x + deltaX),
             y: Math.round(bounds.y + deltaY)
-        }, PET_MIN_SIZE.width, PET_MIN_SIZE.height);
+        });
 
         if (
             petDragState?.lastAppliedBounds &&
@@ -5729,10 +5772,20 @@ if (!app.requestSingleInstanceLock()) {
     });
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
     desktopState = loadDesktopState(app);
     process.env.AILIS_PROJECT_ROOT = getProjectRoot();
     process.env.AILIS_USER_DATA = app.getPath('userData');
+    if (worldServiceOnly) {
+        const { startUnifiedWorldService } = require(process.env.AILIS_WORLD_SERVICE_MODULE);
+        // Do not start the general HTTP gateway, GUI, ASR/TTS warmups or config writer.
+        await startUnifiedWorldService({
+            gateway: ensureAILISGateway(), sourceRoot: getProjectRoot(),
+            stateDir: getPersistedAILISStateDir(), getLlmSettings: getResolvedLlmSettings,
+            shutdown: () => app.quit()
+        });
+        return;
+    }
     configureCosyVoice3Runtime();
     if (!desktopState.preferences.llmBaseUrl || desktopState.preferences.llmBaseUrl === 'https://api.openai.com/v1') {
         desktopState.preferences.llmBaseUrl = DEFAULT_LLM_BASE_URL;
@@ -5825,7 +5878,10 @@ app.whenReady().then(() => {
         desktopState.preferences.chunkedTtsEnabled ?? DEFAULT_CHUNKED_TTS_ENABLED
     );
     desktopState = saveDesktopState(app, desktopState);
-    desktopASRManager = new DesktopASRManager({ app });
+    desktopASRManager = new DesktopASRManager({
+        app,
+        getRuntimePaths: () => getVoiceRuntimeBootstrap().getPaths()
+    });
     Menu.setApplicationMenu(null);
     registerMediaPermissionHandlers();
     protocol.handle(LOCAL_RESOURCE_PROTOCOL, handleLocalResourceProtocol);
@@ -5872,6 +5928,7 @@ app.whenReady().then(() => {
 app.on('before-quit', () => {
     console.log('[app] before-quit');
     isQuitting = true;
+    quickControls?.dispose();
     if (visionRegionSelectionRequest) {
         cancelVisionRegionSelection();
     }

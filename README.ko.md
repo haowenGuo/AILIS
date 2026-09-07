@@ -1,6 +1,6 @@
 # AILIS
 
-이 매뉴얼은 통합 Agent를 포함한 현재 소스 브랜치를 설명합니다. 기존 [v1.4.1 설치 파일](https://github.com/haowenGuo/AILIS/releases/tag/v1.4.1)은 `659bf61`에서 빌드되어 이후 변경을 포함하지 않습니다. 새 구현은 현재 소스에서 실행하세요.
+이 매뉴얼은 통합 Agent를 포함한 현재 소스를 설명합니다. [v1.4.2](https://github.com/haowenGuo/AILIS/releases/tag/v1.4.2)는 새 대화창과 설정 화면, ASR 수정을 포함합니다. Unity와 대용량 음성·모델 환경은 포함하지 않습니다. 요구 사항은 [릴리스 노트](docs/releases/v1.4.2.md)를 확인하세요.
 
 AILIS는 텍스트·음성 대화, 도구 기반 작업, 지속적인 컨텍스트와 VRM 아바타를 제공하는 데스크톱 앱입니다.
 

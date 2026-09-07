@@ -57,7 +57,7 @@ function normalizeBackendMode(value) {
 
 function normalizeSpeechMode(value, fallbackValue = DEFAULT_SPEECH_MODE) {
     const normalizedValue = String(value || '').trim().toLowerCase();
-    if (['off', 'server', 'cosyvoice3', 'native'].includes(normalizedValue)) {
+    if (['off', 'hosted', 'server', 'cosyvoice3', 'native'].includes(normalizedValue)) {
         return normalizedValue;
     }
     if (['elevenlabs', 'eleven-labs', 'eleven_labs', 'server_tts', 'cloud'].includes(normalizedValue)) {
@@ -69,7 +69,7 @@ function normalizeSpeechMode(value, fallbackValue = DEFAULT_SPEECH_MODE) {
     if (['browser', 'browser-native', 'chrome', 'web-speech'].includes(normalizedValue)) {
         return 'native';
     }
-    return ['off', 'server', 'cosyvoice3', 'native'].includes(fallbackValue) ? fallbackValue : 'off';
+    return ['off', 'hosted', 'server', 'cosyvoice3', 'native'].includes(fallbackValue) ? fallbackValue : 'off';
 }
 
 function normalizeNumber(value, minimum, maximum, fallbackValue, digits = 2) {

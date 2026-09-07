@@ -444,11 +444,13 @@ describe('Codex model bridge', () => {
             });
             assert.equal(result.ok, true);
             assert.deepEqual(JSON.parse(sentBodies[0]), body);
-            const records = (await fs.readFile(auditPath, 'utf8')).trim().split(/\r?\n/).map(JSON.parse);
+            const allRecords = (await fs.readFile(auditPath, 'utf8')).trim().split(/\r?\n/).map(JSON.parse);
+            const records = allRecords.filter(record => record.event !== 'transport');
             assert.equal(records.length, 2);
             assert.equal(records[0].event, 'request');
             assert.deepEqual(records[0].requestBody, body);
-            assert.equal(JSON.stringify(records).includes('secret'), false);
+            assert.equal(JSON.stringify(allRecords).includes('secret'), false);
+            assert.ok(allRecords.some(record => record.event === 'transport' && record.stage === 'attempt_finished'));
             assert.equal(records[1].event, 'response');
             assert.equal(records[1].usage.input_tokens_details.cached_tokens, 64);
         } finally {

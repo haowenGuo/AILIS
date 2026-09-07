@@ -208,6 +208,11 @@ contextBridge.exposeInMainWorld('ailisDesktop', {
         ipcRenderer.on('ailis:chat-control', wrapped);
         return () => ipcRenderer.removeListener('ailis:chat-control', wrapped);
     },
+    onPetWindowLayout: (listener) => {
+        const wrapped = (_event, payload = {}) => listener(payload);
+        ipcRenderer.on('ailis:pet-window-layout', wrapped);
+        return () => ipcRenderer.removeListener('ailis:pet-window-layout', wrapped);
+    },
     onPetCursorPoint: (listener) => {
         const wrapped = (_event, payload = {}) => listener(payload);
         ipcRenderer.on('ailis:pet-cursor-point', wrapped);

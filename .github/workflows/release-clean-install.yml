@@ -71,6 +71,22 @@ jobs:
           tests/store-language-compat.test.mjs
           tests/codex-model-bridge.test.mjs
           tests/ailis-release-manifest.test.mjs
+          tests/ailis-documentation.test.mjs
+          tests/ailis-production-closure.test.mjs
+          tests/ailis-code-mode-packaging.test.mjs
+          tests/ailis-unified-agent.test.mjs
+          tests/ailis-tool-output-integrity.test.mjs
+          tests/local-asr-manager.test.mjs
+          tests/asr-latency-presets.test.mjs
+          tests/voice-runtime-bootstrap.test.mjs
+          tests/desktop-hosted-tts.test.mjs
+          tests/control-panel-draft.test.mjs
+          tests/llm-connection-profiles.test.mjs
+          tests/codex-connection-lifecycle.test.mjs
+          tests/pet-drag-layout.test.mjs
+          tests/avatar-dialogue-bubble.test.mjs
+          tests/gaia-answer-adapter.test.mjs
+          tests/ailis-desktop-real-gaia-eval.test.mjs
 
       - name: Build release packages
         run: pnpm release:core -- --output-root "${{ github.workspace }}\release"
@@ -82,6 +98,16 @@ jobs:
           $manifest = Get-Content -Raw "release/core/AILIS-Release-core-$version.json" | ConvertFrom-Json
           if ($manifest.version -ne $version -or $manifest.source.commit -ne $env:GITHUB_SHA -or $manifest.source.dirty -cne $false) {
             throw "Release manifest must match this clean source commit and package version."
+          }
+
+      - name: Verify chat, settings and quick controls with real sandboxed renderers
+        shell: pwsh
+        run: |
+          Remove-Item Env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue
+          $env:AILIS_PANEL_TEST_DIST = '1'
+          foreach ($test in @('chat-panel-smoke.cjs', 'llm-connection-panel-smoke.cjs', 'quick-controls-smoke.cjs', 'pet-window-layout-smoke.cjs')) {
+            pnpm exec electron "tests/$test"
+            if ($LASTEXITCODE -ne 0) { throw "Desktop renderer smoke failed: $test" }
           }
 
       - name: Validate clean install, first launch, portable launch, and uninstall

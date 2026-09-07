@@ -1,8 +1,10 @@
 const fs = require('fs');
 const path = require('path');
 const readline = require('readline');
-const { spawn, spawnSync } = require('child_process');
+const { spawn, execFile } = require('child_process');
+const { promisify } = require('util');
 const { getVenvPythonPath } = require('./voice-runtime-bootstrap.cjs');
+const execFileAsync = promisify(execFile);
 
 const PACKAGED_ASR_RUNTIME_DIRNAME = 'ailis-asr-runtime';
 const SPEECH_MODEL_DIRNAME = 'speech-models';
@@ -60,22 +62,29 @@ function normalizeRelativePath(rootDir, relativePath) {
         : path.join(rootDir, rawPath);
 }
 
-function pythonLooksLikeAsrRuntime(command, args = [], env = {}) {
+async function probeAsrPython({ command, args = [], env = {} }) {
+    const engine = String(process.env.AILIS_ASR_ENGINE || process.env.AILIS_ASR_PROVIDER || 'whisper').trim().toLowerCase();
     const probe = [
-        'import importlib.util, sys',
-        'missing = [name for name in ("numpy", "torch", "transformers") if importlib.util.find_spec(name) is None]',
-        'sys.exit(1 if missing else 0)'
+        'import sys, numpy, torch',
+        ['sensevoice', 'sensevoice-small', 'funasr'].includes(engine)
+            ? 'from funasr import AutoModel'
+            : 'from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor, pipeline; from torchaudio.functional import resample; import accelerate',
+        'assert torch.zeros(1).sum().item() == 0',
+        'print(sys.executable)'
     ].join('; ');
-    const result = spawnSync(command, [...args, '-c', probe], {
-        windowsHide: true,
-        timeout: 20000,
-        encoding: 'utf8',
-        env: {
-            ...process.env,
-            ...env
-        }
-    });
-    return !result.error && result.status === 0;
+    try {
+        await execFileAsync(command, [...args, '-c', probe], {
+            windowsHide: true,
+            timeout: 60000,
+            maxBuffer: 1024 * 1024,
+            encoding: 'utf8',
+            env: { ...process.env, ...env, PYTHONIOENCODING: 'utf-8' }
+        });
+        return { ok: true };
+    } catch (error) {
+        const detail = String(error.stderr || error.message || error).trim();
+        return { ok: false, error: error.killed ? 'Python dependency check timed out (60s)' : detail };
+    }
 }
 
 function normalizeManifestPathList(rootDir, value) {
@@ -176,8 +185,12 @@ function normalizeTranscribePayload(payload) {
 }
 
 class DesktopASRManager {
-    constructor({ app }) {
+    constructor({ app, getRuntimePaths = () => null, probePython = probeAsrPython }) {
         this.app = app;
+        this.getRuntimePaths = getRuntimePaths;
+        this.probePython = probePython;
+        this.generation = 0;
+        this.workerStartPromise = null;
         this.child = null;
         this.pending = new Map();
         this.nextRequestId = 1;
@@ -187,6 +200,7 @@ class DesktopASRManager {
 
     getCacheDir() {
         return normalizeString(process.env.AILIS_ASR_CACHE_DIR) ||
+            this.getRuntimePaths()?.asrCacheDir ||
             path.join(this.app.getPath('userData'), 'asr-cache');
     }
 
@@ -286,12 +300,14 @@ class DesktopASRManager {
         return path.join(__dirname, 'desktop_asr_worker.py');
     }
 
-    resolvePythonCommand() {
+    async resolvePythonCommand() {
         if (this.pythonCommand) {
             return this.pythonCommand;
         }
 
         const projectRoot = getProjectRoot();
+        const generation = this.generation;
+        const runtimePaths = this.getRuntimePaths();
         const envPython = String(process.env.AILIS_PYTHON || '').trim();
         const envVoicePython = String(process.env.AILIS_VOICE_PYTHON || '').trim();
         const envAsrPython = String(process.env.AILIS_ASR_PYTHON || '').trim();
@@ -316,23 +332,13 @@ class DesktopASRManager {
         for (const runtimeRoot of this.getPackagedAsrRuntimeRoots()) {
             const manifest = this.getAsrRuntimeManifest(runtimeRoot);
             const runtimeEnv = buildRuntimeEnv(runtimeRoot, manifest);
-            const manifestReady = Boolean(
-                manifest.asrDependenciesReady ||
-                (
-                    manifest.dependencies &&
-                    manifest.dependencies.numpy &&
-                    manifest.dependencies.torch &&
-                    manifest.dependencies.transformers
-                )
-            );
             const manifestPython = normalizeRelativePath(runtimeRoot, manifest.asrPython || manifest.python);
             if (manifestPython) {
                 candidates.push({
                     source: 'packaged-asr-runtime',
                     command: manifestPython,
                     args: [],
-                    env: runtimeEnv,
-                    trustedAsrRuntime: manifestReady
+                    env: runtimeEnv
                 });
             }
 
@@ -341,8 +347,16 @@ class DesktopASRManager {
                 source: 'packaged-asr-runtime',
                 command: getVenvPythonPath(asrVenvDir, process.platform),
                 args: [],
-                env: runtimeEnv,
-                trustedAsrRuntime: manifestReady
+                env: runtimeEnv
+            });
+        }
+
+        if (runtimePaths?.voiceVenvPython) {
+            candidates.push({
+                source: 'configured-voice-runtime',
+                command: runtimePaths.voiceVenvPython,
+                args: [],
+                env: { PYTHONNOUSERSITE: '1', PYTHONPATH: '' }
             });
         }
 
@@ -373,6 +387,8 @@ class DesktopASRManager {
             { source: 'py', command: 'py', args: [] }
         );
 
+        const failures = [];
+        const seen = new Set();
         for (const candidate of candidates) {
             if (!candidate.command) {
                 continue;
@@ -383,37 +399,36 @@ class DesktopASRManager {
             ) {
                 continue;
             }
-            try {
-                const result = spawnSync(candidate.command, [...candidate.args, '--version'], {
-                    windowsHide: true,
-                    timeout: 10000,
-                    encoding: 'utf8',
-                    env: {
-                        ...process.env,
-                        ...(candidate.env || {})
-                    }
-                });
-
-                if (!result.error && result.status === 0) {
-                    if (
-                        candidate.source === 'packaged-asr-runtime' &&
-                        !candidate.trustedAsrRuntime &&
-                        !pythonLooksLikeAsrRuntime(candidate.command, candidate.args, candidate.env)
-                    ) {
-                        continue;
-                    }
-                    this.pythonCommand = candidate;
-                    return candidate;
-                }
-            } catch (error) {
-                console.warn('[ASR] Python 探测失败：', error);
+            const key = JSON.stringify([candidate.command, candidate.args, candidate.env]);
+            if (seen.has(key)) continue;
+            seen.add(key);
+            const result = await this.probePython(candidate);
+            if (generation !== this.generation) throw new Error('ASR runtime configuration changed; retry the request');
+            if (result.ok) {
+                this.pythonCommand = candidate;
+                console.log(`[ASR] Verified Python (${candidate.source}): ${candidate.command}`);
+                return candidate;
             }
+            console.warn(`[ASR] Rejected Python ${candidate.command}: ${result.error}`);
+            const lastLine = String(result.error || 'Dependency import failed').split(/\r?\n/).filter(Boolean).at(-1);
+            failures.push(`${candidate.command} ${candidate.args.join(' ')}: ${lastLine}`);
         }
 
-        throw new Error('未找到 AILIS 可用的 Python 运行时；请在控制面板执行“本地语音运行时诊断/一键修复”，或设置 AILIS_ASR_PYTHON / AILIS_VOICE_PYTHON。');
+        throw new Error(`本地语音识别运行环境不可用，请在控制面板检查语音安装目录并修复 ASR 依赖。\n${failures.join('\n')}`);
     }
 
     ensureWorker() {
+        if (!this.workerStartPromise) {
+            const promise = this.startWorker();
+            this.workerStartPromise = promise;
+            promise.finally(() => {
+                if (this.workerStartPromise === promise) this.workerStartPromise = null;
+            }).catch(() => {});
+        }
+        return this.workerStartPromise;
+    }
+
+    async startWorker() {
         if (this.child && !this.child.killed) {
             return this.child;
         }
@@ -423,7 +438,9 @@ class DesktopASRManager {
             throw new Error(`本地语音识别脚本不存在：${workerScriptPath}`);
         }
 
-        const python = this.resolvePythonCommand();
+        const generation = this.generation;
+        const python = await this.resolvePythonCommand();
+        if (generation !== this.generation) throw new Error('ASR runtime configuration changed; retry the request');
         const cacheDir = this.resolveCacheDir();
         const child = spawn(
             python.command,
@@ -435,6 +452,7 @@ class DesktopASRManager {
                 env: {
                     ...process.env,
                     ...(python.env || {}),
+                    PYTHONIOENCODING: 'utf-8',
                     AILIS_PROJECT_ROOT: getProjectRoot(),
                     AILIS_USER_DATA: this.app.getPath('userData'),
                     AILIS_ASR_MODEL_ID: process.env.AILIS_ASR_MODEL_ID || 'openai/whisper-small',
@@ -497,9 +515,10 @@ class DesktopASRManager {
             }
         });
 
-        child.on('exit', (code, signal) => {
+        child.on('close', (code, signal) => {
             if (this.child === child) {
                 this.child = null;
+                this.warmupPromise = null;
             }
 
             const errorMessage = code === 0 && !signal
@@ -507,6 +526,7 @@ class DesktopASRManager {
                 : `本地语音识别进程已退出（code=${code ?? 'null'}, signal=${signal ?? 'null'}）`;
 
             for (const [requestId, pendingRequest] of this.pending.entries()) {
+                if (pendingRequest.child !== child) continue;
                 clearTimeout(pendingRequest.timeoutId);
                 pendingRequest.reject(new Error(errorMessage));
                 this.pending.delete(requestId);
@@ -521,8 +541,8 @@ class DesktopASRManager {
         return child;
     }
 
-    sendRequest(action, payload = {}) {
-        const child = this.ensureWorker();
+    async sendRequest(action, payload = {}) {
+        const child = await this.ensureWorker();
         const requestId = String(this.nextRequestId++);
         const requestPayload = {
             id: requestId,
@@ -537,6 +557,7 @@ class DesktopASRManager {
             }, 10 * 60 * 1000);
 
             this.pending.set(requestId, {
+                child,
                 resolve,
                 reject,
                 timeoutId
@@ -577,16 +598,25 @@ class DesktopASRManager {
             return this.warmupPromise;
         }
 
-        this.warmupPromise = this.sendRequest('warmup')
+        const promise = this.sendRequest('warmup')
             .catch((error) => {
-                this.warmupPromise = null;
+                if (this.warmupPromise === promise) this.warmupPromise = null;
                 throw error;
             });
-
-        return this.warmupPromise;
+        this.warmupPromise = promise;
+        return promise;
     }
 
     close() {
+        this.generation += 1;
+        this.pythonCommand = null;
+        this.warmupPromise = null;
+        this.workerStartPromise = null;
+        for (const pending of this.pending.values()) {
+            clearTimeout(pending.timeoutId);
+            pending.reject(new Error('本地语音识别运行时已关闭或配置已变更，请重新识别。'));
+        }
+        this.pending.clear();
         if (!this.child || this.child.killed) {
             return;
         }
@@ -602,5 +632,6 @@ class DesktopASRManager {
 }
 
 module.exports = {
-    DesktopASRManager
+    DesktopASRManager,
+    probeAsrPython
 };

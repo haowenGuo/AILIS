@@ -13,6 +13,7 @@ import {
     normalizeAsrRecognitionMode
 } from './realtime-voice/asr-latency-presets.js';
 import { applyI18n, setUiLanguage, t } from './i18n.js';
+import { installChatSearch } from './chat-search.js';
 
 function getMessageClassName(role) {
     if (role === 'user') {
@@ -50,6 +51,10 @@ window.addEventListener('DOMContentLoaded', () => {
     const minimizeBtnEl = document.getElementById('minimize-btn');
     const settingsBtnEl = document.getElementById('settings-btn');
     const statusEl = document.getElementById('chat-status');
+    const emptyStateEl = document.getElementById('chat-empty-state');
+    const latestBtnEl = document.getElementById('scroll-to-latest');
+    const moreActionsEl = document.getElementById('chat-more-actions');
+    const composerHintEl = document.getElementById('composer-hint');
 
     let isBusy = false;
     let interruptPending = false;
@@ -60,6 +65,15 @@ window.addEventListener('DOMContentLoaded', () => {
     let pendingFileAttachments = [];
     let fileDragDepth = 0;
     let currentMessages = [];
+    const messageElements = new Map();
+    let followLatest = true;
+    let scrollFrame = 0;
+    let hasSnapshot = false;
+    const disposeChatSearch = installChatSearch({ list: messageListEl, onNavigate: () => {
+        followLatest = false;
+        window.cancelAnimationFrame(scrollFrame);
+        latestBtnEl.hidden = false;
+    } });
     let speechStatusText = '';
     let systemNoticeText = '';
     let systemNoticeTimer = 0;
@@ -75,8 +89,26 @@ window.addEventListener('DOMContentLoaded', () => {
     const speechRecognition = createDesktopSpeechRecognitionService();
     applyI18n(document, { skipSelectors: ['#message-list', '#file-preview'] });
 
-    function scrollToBottom() {
-        messageListEl.scrollTop = messageListEl.scrollHeight;
+    function scrollToBottom({ force = false } = {}) {
+        if (force) followLatest = true;
+        if (!followLatest) {
+            latestBtnEl.hidden = false;
+            return;
+        }
+        window.cancelAnimationFrame(scrollFrame);
+        scrollFrame = window.requestAnimationFrame(() => {
+            scrollFrame = 0;
+            messageListEl.scrollTop = messageListEl.scrollHeight;
+            latestBtnEl.hidden = true;
+        });
+    }
+
+    function resizeInput() {
+        const maxHeight = Math.max(44, Math.min(160, window.innerHeight * 0.25));
+        inputEl.style.height = 'auto';
+        const height = inputEl.scrollHeight;
+        inputEl.style.height = `${Math.max(44, Math.min(height, maxHeight))}px`;
+        inputEl.style.overflowY = height > maxHeight ? 'auto' : 'hidden';
     }
 
     function getStatusText() {
@@ -132,6 +164,9 @@ window.addEventListener('DOMContentLoaded', () => {
             interruptPending ||
             (!isBusy && !hasDraft);
         statusEl.textContent = getStatusText();
+        statusEl.title = statusEl.textContent;
+        emptyStateEl.hidden = currentMessages.length > 0 || isBusy;
+        composerHintEl.textContent = isBusy ? t('生成中，可随时停止') : t('Enter 发送 · Shift+Enter 换行');
 
         if (voiceBtnEl) {
             voiceBtnEl.hidden = !speechRecognition.supportsRecognition;
@@ -520,46 +555,86 @@ window.addEventListener('DOMContentLoaded', () => {
         if (!message?.id) {
             return;
         }
-        currentMessages = [
-            ...currentMessages.filter((entry) => entry.id !== message.id),
-            message
-        ];
+        const index = currentMessages.findIndex((entry) => entry.id === message.id);
+        const previous = currentMessages[index];
+        if (index < 0) currentMessages.push(message);
+        else currentMessages[index] = message;
 
-        let element = messageListEl.querySelector(`[data-message-id="${message.id}"]`);
+        let element = messageElements.get(message.id);
         if (!element) {
             element = document.createElement('div');
             element.dataset.messageId = message.id;
+            messageElements.set(message.id, element);
             messageListEl.appendChild(element);
         }
 
-        element.className = getMessageClassName(message.role);
-        element.dataset.messageRole = message.role || 'system';
         const contentFormat = message.contentFormat || message.content_format || message.format || 'markdown';
-        if (contentFormat === 'text') {
-            setPlainTextContent(element, message.content || '');
-        } else {
-            setMarkdownContent(element, message.content || '');
+        const attachments = message.attachments || [];
+        const previousAttachments = previous?.attachments || [];
+        const sameAttachments = attachments.length === previousAttachments.length && attachments.every((item, i) => {
+            const oldItem = previousAttachments[i];
+            return item === oldItem || (item && oldItem && Object.keys(item).length === Object.keys(oldItem).length &&
+                Object.keys(item).every(key => item[key] === oldItem[key]));
+        });
+        // A focus-triggered snapshot must not replace unchanged text/selection.
+        if (!previous || previous.content !== message.content || previous.role !== message.role ||
+            element.dataset.contentFormat !== contentFormat || !sameAttachments) {
+            element.className = getMessageClassName(message.role);
+            element.dataset.messageRole = message.role || 'system';
+            if (contentFormat === 'text') {
+                setPlainTextContent(element, message.content || '');
+            } else {
+                setMarkdownContent(element, message.content || '');
+            }
+            appendMessageAttachments(element, attachments);
+            if (['user', 'assistant'].includes(message.role)) {
+                const actions = document.createElement('div'); actions.className = 'message-tools';
+                const copy = document.createElement('button'); copy.type = 'button';
+                copy.title = t('复制消息'); copy.setAttribute('aria-label', t('复制消息'));
+                copy.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="10" height="10" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
+                copy.addEventListener('click', async () => {
+                    try {
+                        await navigator.clipboard.writeText(currentMessages.find(item => item.id === message.id)?.content || '');
+                        showSystemNotice({ message: t('消息已复制') });
+                    } catch (error) { showSystemNotice({ level: 'error', message: error.message }); }
+                });
+                actions.append(copy); element.append(actions);
+            }
         }
-        appendMessageAttachments(element, message.attachments || []);
+        emptyStateEl.hidden = true;
         scrollToBottom();
     }
 
     function removeMessage(messageId) {
-        const element = messageListEl.querySelector(`[data-message-id="${messageId}"]`);
+        const element = messageElements.get(messageId);
         if (!element) {
             return;
         }
         currentMessages = currentMessages.filter((message) => message.id !== messageId);
+        messageElements.delete(messageId);
         element.remove();
         scrollToBottom();
         updateComposerState();
     }
 
     function renderSnapshot(messages = []) {
-        currentMessages = [];
-        messageListEl.innerHTML = '';
-        messages.forEach((message) => upsertMessage(message));
-        scrollToBottom();
+        const validMessages = messages.filter(message => message?.id);
+        const nextIds = new Set(validMessages.map(message => message.id));
+        for (const [id, element] of messageElements) {
+            if (nextIds.has(id)) continue;
+            element.remove();
+            messageElements.delete(id);
+        }
+        validMessages.forEach((message, index) => {
+            upsertMessage(message);
+            const element = messageElements.get(message.id);
+            if (messageListEl.children[index] !== element) {
+                messageListEl.insertBefore(element, messageListEl.children[index] || null);
+            }
+        });
+        currentMessages = validMessages;
+        scrollToBottom({ force: !hasSnapshot || validMessages.length === 0 });
+        hasSnapshot = true;
         updateComposerState();
     }
 
@@ -658,6 +733,8 @@ window.addEventListener('DOMContentLoaded', () => {
             clearContinuousRestart();
         }
         inputEl.value = '';
+        resizeInput();
+        scrollToBottom({ force: true });
         pendingVisionAttachment = null;
         pendingFileAttachments = [];
         renderVisionPreview();
@@ -1053,11 +1130,46 @@ window.addEventListener('DOMContentLoaded', () => {
     voiceBtnEl?.addEventListener('click', () => {
         void toggleVoiceInput();
     });
-    inputEl.addEventListener('input', updateComposerState);
+    inputEl.addEventListener('input', () => {
+        resizeInput();
+        updateComposerState();
+    });
     inputEl.addEventListener('keydown', (event) => {
-        if (event.key === 'Enter' && !event.shiftKey) {
+        if (event.isComposing || event.keyCode === 229) return;
+        if (event.key === 'Enter' && !event.shiftKey && !isBusy) {
             event.preventDefault();
             sendCurrentMessage();
+        }
+    });
+
+    messageListEl.addEventListener('scroll', () => {
+        followLatest = messageListEl.scrollHeight - messageListEl.clientHeight - messageListEl.scrollTop < 48;
+        if (!followLatest) {
+            window.cancelAnimationFrame(scrollFrame);
+            scrollFrame = 0;
+        }
+        latestBtnEl.hidden = followLatest;
+    }, { passive: true });
+    latestBtnEl.addEventListener('click', () => scrollToBottom({ force: true }));
+    messageListEl.addEventListener('load', () => scrollToBottom(), true);
+    const viewportObserver = new ResizeObserver(() => scrollToBottom());
+    viewportObserver.observe(messageListEl);
+    window.addEventListener('resize', resizeInput);
+    document.addEventListener('pointerdown', (event) => {
+        if (!moreActionsEl.contains(event.target)) moreActionsEl.open = false;
+    });
+    moreActionsEl.addEventListener('click', (event) => {
+        if (event.target.closest('button')) moreActionsEl.open = false;
+    });
+    document.addEventListener('keydown', (event) => {
+        if (event.key !== 'Escape') return;
+        if (moreActionsEl.open) {
+            moreActionsEl.open = false;
+            moreActionsEl.querySelector('summary').focus();
+        }
+        if (!visionMenuEl.hidden) {
+            closeVisionMenu();
+            visionBtnEl.focus();
         }
     });
 
@@ -1164,6 +1276,7 @@ window.addEventListener('DOMContentLoaded', () => {
 
         if (payload.type === 'message-added' || payload.type === 'message-updated') {
             upsertMessage(payload.message);
+            updateComposerState();
             return;
         }
 
@@ -1202,6 +1315,9 @@ window.addEventListener('DOMContentLoaded', () => {
     });
 
     window.addEventListener('beforeunload', () => {
+        disposeChatSearch();
+        window.cancelAnimationFrame(scrollFrame);
+        viewportObserver.disconnect();
         window.clearTimeout(systemNoticeTimer);
         clearLevelPolling();
         clearContinuousRestart();
@@ -1210,6 +1326,7 @@ window.addEventListener('DOMContentLoaded', () => {
         }
     });
 
+    resizeInput();
     updateComposerState();
     syncContinuousAsr(700);
 });

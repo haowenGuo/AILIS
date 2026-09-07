@@ -39,9 +39,9 @@
         #canvas-container {
             position: absolute;
             left: var(--pet-dialogue-reserved-left, 0px);
-            right: var(--pet-dialogue-reserved-right, 0px);
-            bottom: 0;
-            height: calc(100% - var(--pet-dialogue-reserved-top, 0px));
+            top: var(--pet-dialogue-reserved-top, 0px);
+            width: var(--pet-avatar-width, 100%);
+            height: var(--pet-avatar-height, 100%);
         }
 
         #canvas-container canvas {

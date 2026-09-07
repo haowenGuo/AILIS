@@ -3,7 +3,7 @@
   <h1>AILIS</h1>
   <p><strong>An open-source desktop AI companion that can see, listen, remember, and get real work done.</strong></p>
   <p>
-    <img alt="Version" src="https://img.shields.io/badge/version-1.4.1-2563eb?style=flat-square">
+    <img alt="Version" src="https://img.shields.io/badge/version-1.4.2-2563eb?style=flat-square">
     <img alt="Desktop" src="https://img.shields.io/badge/desktop-Electron-0f172a?style=flat-square">
     <img alt="License" src="https://img.shields.io/badge/license-MIT-059669?style=flat-square">
   </p>
@@ -110,9 +110,9 @@ Humanlike checkpoints come from 30-day companion scenarios, not a 30-day real-us
 
 ## Quick Start
 
-### v1.4.1 update
+### v1.4.2 update
 
-The latest release brings stable append-only context handling, a governed code-mode tool runtime, auxiliary vision routing, and fixes that preserve attachment context during compaction and Korean voice-profile settings. See the [release notes](https://github.com/haowenGuo/AILIS/blob/659bf61f2b340d2313b3bae386704265c8d2bba2/docs/releases/v1.4.1.md) for upgrade instructions and limits. Cache hit rates and cost savings depend on the provider and workload; no fixed reduction is promised.
+This release includes the unified Agent/session runtime, redesigned chat and settings, avatar quick controls, configuration persistence improvements, and local ASR fixes. The Windows packages remain lightweight, without Unity or large voice/model runtimes. See the [release notes](docs/releases/v1.4.2.md) for requirements and limits, and the [v1.4.2 downloads](https://github.com/haowenGuo/AILIS/releases/tag/v1.4.2) for installers and integrity hashes.
 
 ### Use AILIS
 

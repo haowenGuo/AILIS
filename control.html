@@ -5,1856 +5,27 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <link rel="icon" type="image/png" href="./favicon.png">
     <title>AILIS Control Panel</title>
-    <style>
-        * {
-            box-sizing: border-box;
-            margin: 0;
-            padding: 0;
-            font-family: "Microsoft YaHei", -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
-        }
-
-        [hidden] {
-            display: none !important;
-        }
-
-        :root {
-            color-scheme: light;
-            --bg: #f3f5f7;
-            --panel: rgba(255, 255, 255, 0.96);
-            --border: rgba(29, 49, 62, 0.12);
-            --text-main: #20313d;
-            --text-muted: #5b6b74;
-            --accent: #17856b;
-            --accent-soft: rgba(23, 133, 107, 0.12);
-            --accent-warm: #d96c46;
-            --accent-warm-soft: rgba(217, 108, 70, 0.12);
-            --shadow: 0 18px 40px rgba(23, 37, 49, 0.08);
-        }
-
-        html,
-        body {
-            width: 100%;
-            height: 100%;
-            overflow: hidden;
-            background:
-                radial-gradient(circle at top right, rgba(217, 108, 70, 0.08), transparent 26%),
-                radial-gradient(circle at bottom left, rgba(23, 133, 107, 0.1), transparent 30%),
-                var(--bg);
-            color: var(--text-main);
-        }
-
-        body {
-            display: flex;
-            flex-direction: column;
-        }
-
-        button,
-        input,
-        select {
-            font: inherit;
-        }
-
-        #shell {
-            display: flex;
-            flex-direction: column;
-            min-height: 0;
-            flex: 1;
-        }
-
-        #header {
-            display: flex;
-            align-items: flex-start;
-            justify-content: space-between;
-            gap: 16px;
-            padding: 22px 26px 18px;
-            border-bottom: 1px solid rgba(29, 49, 62, 0.08);
-            background: rgba(255, 255, 255, 0.82);
-            backdrop-filter: blur(10px);
-            -webkit-app-region: drag;
-        }
-
-        #header-main {
-            min-width: 0;
-        }
-
-        #eyebrow {
-            color: var(--accent);
-            font-size: 12px;
-            font-weight: 700;
-            letter-spacing: 0.08em;
-            text-transform: uppercase;
-        }
-
-        #title {
-            margin-top: 6px;
-            font-size: 28px;
-            font-weight: 700;
-            line-height: 1.1;
-        }
-
-        #subtitle {
-            margin-top: 10px;
-            max-width: 760px;
-            color: var(--text-muted);
-            font-size: 14px;
-            line-height: 1.7;
-        }
-
-        #header-actions {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            -webkit-app-region: no-drag;
-        }
-
-        .window-controls {
-            display: inline-flex;
-            align-items: center;
-            gap: 2px;
-            margin-left: 2px;
-            border: 1px solid rgba(29, 49, 62, 0.08);
-            border-radius: 10px;
-            overflow: hidden;
-            background: rgba(255, 255, 255, 0.9);
-            -webkit-app-region: no-drag;
-        }
-
-        .window-control-btn {
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            width: 38px;
-            height: 34px;
-            border: 0;
-            border-radius: 0;
-            background: transparent;
-            color: var(--text-main);
-            cursor: pointer;
-            pointer-events: auto;
-            transition: background-color 0.16s ease, color 0.16s ease;
-            -webkit-app-region: no-drag;
-        }
-
-        .window-control-btn svg {
-            width: 15px;
-            height: 15px;
-            fill: none;
-            stroke: currentColor;
-            stroke-width: 2;
-            stroke-linecap: round;
-            stroke-linejoin: round;
-        }
-
-        .window-control-btn:hover {
-            background: rgba(29, 49, 62, 0.07);
-        }
-
-        .window-control-btn.is-close:hover {
-            background: #e5484d;
-            color: #ffffff;
-        }
-
-        .pill {
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-            min-height: 36px;
-            padding: 0 12px;
-            border-radius: 999px;
-            background: rgba(255, 255, 255, 0.95);
-            border: 1px solid rgba(29, 49, 62, 0.08);
-            color: var(--text-muted);
-            font-size: 13px;
-        }
-
-        .pill strong {
-            color: var(--text-main);
-            font-weight: 600;
-        }
-
-        .ghost-btn,
-        .primary-btn,
-        .danger-btn,
-        .icon-btn {
-            border: 1px solid transparent;
-            border-radius: 8px;
-            cursor: pointer;
-            transition: background-color 0.18s ease, border-color 0.18s ease, transform 0.18s ease;
-        }
-
-        .icon-btn {
-            width: 38px;
-            height: 38px;
-            background: rgba(255, 255, 255, 0.94);
-            border-color: rgba(29, 49, 62, 0.08);
-            color: var(--text-main);
-            font-size: 18px;
-        }
-
-        .icon-btn:hover,
-        .ghost-btn:hover,
-        .primary-btn:hover,
-        .danger-btn:hover {
-            transform: translateY(-1px);
-        }
-
-        .ghost-btn {
-            min-height: 40px;
-            padding: 0 14px;
-            background: rgba(255, 255, 255, 0.92);
-            border-color: rgba(29, 49, 62, 0.1);
-            color: var(--text-main);
-        }
-
-        .primary-btn {
-            min-height: 42px;
-            padding: 0 16px;
-            background: var(--accent);
-            color: #ffffff;
-        }
-
-        .primary-btn:disabled {
-            opacity: 0.55;
-            cursor: not-allowed;
-            transform: none;
-        }
-
-        .danger-btn {
-            min-height: 40px;
-            padding: 0 14px;
-            background: var(--accent-warm-soft);
-            border-color: rgba(217, 108, 70, 0.18);
-            color: #8b472f;
-        }
-
-        #content {
-            flex: 1;
-            min-height: 0;
-            overflow: auto;
-            padding: 20px 26px 120px;
-        }
-
-        .section-grid {
-            display: grid;
-            grid-template-columns: repeat(2, minmax(0, 1fr));
-            gap: 18px;
-            align-items: start;
-        }
-
-        .panel-section {
-            background: var(--panel);
-            border: 1px solid var(--border);
-            border-radius: 8px;
-            box-shadow: var(--shadow);
-            overflow: hidden;
-        }
-
-        .section-head {
-            padding: 16px 18px 12px;
-            border-bottom: 1px solid rgba(29, 49, 62, 0.08);
-        }
-
-        .section-title {
-            font-size: 18px;
-            font-weight: 700;
-        }
-
-        .section-copy {
-            margin-top: 6px;
-            color: var(--text-muted);
-            font-size: 13px;
-            line-height: 1.6;
-        }
-
-        .section-body {
-            padding: 16px 18px 18px;
-            display: grid;
-            gap: 14px;
-        }
-
-        .field {
-            display: grid;
-            gap: 8px;
-        }
-
-        .field.inline {
-            grid-template-columns: minmax(0, 1fr) auto;
-            align-items: center;
-            gap: 12px;
-        }
-
-        .field-meta {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            gap: 12px;
-        }
-
-        .field-actions {
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-            flex-wrap: wrap;
-            justify-content: flex-end;
-        }
-
-        .field-label {
-            font-size: 14px;
-            font-weight: 600;
-        }
-
-        .field-help {
-            color: var(--text-muted);
-            font-size: 12px;
-            line-height: 1.5;
-        }
-
-        .field-value {
-            color: var(--accent);
-            font-size: 12px;
-            font-weight: 700;
-        }
-
-        .advanced-section {
-            border: 1px solid rgba(29, 49, 62, 0.1);
-            border-radius: 8px;
-            background: rgba(248, 250, 252, 0.72);
-            overflow: hidden;
-        }
-
-        .advanced-section summary {
-            min-height: 40px;
-            padding: 11px 12px;
-            color: var(--text-main);
-            cursor: pointer;
-            font-size: 13px;
-            font-weight: 700;
-            list-style-position: inside;
-        }
-
-        .advanced-section > .section-body {
-            padding: 12px;
-            border-top: 1px solid rgba(29, 49, 62, 0.08);
-        }
-
-        .advanced-note {
-            color: var(--text-muted);
-            font-size: 12px;
-            line-height: 1.55;
-        }
-
-        .memory-list {
-            display: grid;
-            gap: 8px;
-        }
-
-        .memory-block {
-            border: 1px solid rgba(29, 49, 62, 0.1);
-            border-radius: 8px;
-            padding: 10px 12px;
-            background: rgba(248, 251, 250, 0.9);
-        }
-
-        .memory-block-title {
-            font-size: 13px;
-            font-weight: 700;
-        }
-
-        .memory-block-text {
-            margin-top: 6px;
-            color: var(--text-muted);
-            font-size: 12px;
-            line-height: 1.55;
-            white-space: pre-wrap;
-        }
-
-        .asset-pack-list {
-            display: grid;
-            gap: 10px;
-        }
-
-        .asset-pack-card {
-            display: grid;
-            gap: 9px;
-            padding: 12px;
-            border: 1px solid rgba(29, 49, 62, 0.1);
-            border-radius: 8px;
-            background: rgba(248, 251, 250, 0.92);
-        }
-
-        .asset-pack-card.is-active {
-            border-color: rgba(23, 133, 107, 0.34);
-            background: rgba(23, 133, 107, 0.08);
-        }
-
-        .asset-pack-title {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            gap: 10px;
-            font-size: 14px;
-            font-weight: 700;
-        }
-
-        .asset-pack-meta {
-            color: var(--text-muted);
-            font-size: 12px;
-            line-height: 1.5;
-        }
-
-        .asset-pack-actions {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 8px;
-        }
-
-        input[type="text"],
-        input[type="password"],
-        input[type="number"],
-        select {
-            width: 100%;
-            min-height: 40px;
-            border: 1px solid rgba(29, 49, 62, 0.14);
-            border-radius: 8px;
-            padding: 0 12px;
-            background: #ffffff;
-            color: var(--text-main);
-        }
-
-        input[type="range"] {
-            width: 100%;
-            accent-color: var(--accent);
-        }
-
-        input[type="checkbox"] {
-            width: 18px;
-            height: 18px;
-            accent-color: var(--accent);
-        }
-
-        .split-2 {
-            display: grid;
-            grid-template-columns: repeat(2, minmax(0, 1fr));
-            gap: 12px;
-        }
-
-        .dialogue-layout-editor {
-            display: grid;
-            gap: 12px;
-        }
-
-        .dialogue-preview-stage {
-            position: relative;
-            height: 280px;
-            border: 1px solid rgba(29, 49, 62, 0.1);
-            border-radius: 8px;
-            background:
-                linear-gradient(90deg, rgba(29, 49, 62, 0.05) 1px, transparent 1px),
-                linear-gradient(180deg, rgba(29, 49, 62, 0.05) 1px, transparent 1px),
-                #f8fbfa;
-            background-size: 24px 24px;
-            overflow: hidden;
-        }
-
-        .dialogue-window-preview {
-            position: absolute;
-            left: 50%;
-            top: 50%;
-            width: 280px;
-            height: 210px;
-            transform: translate(-50%, -50%);
-            transform-origin: center center;
-            border: 2px dashed rgba(23, 133, 107, 0.46);
-            border-radius: 8px;
-            background: rgba(255, 255, 255, 0.58);
-        }
-
-        .dialogue-avatar-preview {
-            position: absolute;
-            left: 50%;
-            bottom: 0;
-            width: 120px;
-            height: 170px;
-            transform: translateX(-50%);
-            border: 1px solid rgba(29, 49, 62, 0.1);
-            border-bottom: 0;
-            border-radius: 70px 70px 8px 8px;
-            background:
-                radial-gradient(circle at 50% 24%, rgba(217, 108, 70, 0.18), transparent 20%),
-                linear-gradient(180deg, rgba(23, 133, 107, 0.18), rgba(23, 133, 107, 0.08));
-            pointer-events: none;
-        }
-
-        .dialogue-bubble-preview {
-            position: absolute;
-            left: 8px;
-            top: 8px;
-            width: 158px;
-            min-height: 58px;
-            padding: 9px 11px;
-            border: 2px solid rgba(86, 143, 184, 0.52);
-            border-radius: 8px;
-            background:
-                linear-gradient(90deg, rgba(123, 184, 223, 0.28), transparent 30px),
-                rgba(255, 255, 255, 0.96);
-            box-shadow:
-                0 10px 24px rgba(55, 112, 151, 0.14),
-                inset 4px 0 0 rgba(123, 184, 223, 0.34);
-            color: #263847;
-            font-size: 12px;
-            line-height: 1.45;
-            cursor: grab;
-            user-select: none;
-            touch-action: none;
-            transform-origin: 0 0;
-        }
-
-        .dialogue-bubble-preview:active {
-            cursor: grabbing;
-        }
-
-        .dialogue-resize-handle {
-            position: absolute;
-            right: -7px;
-            bottom: -7px;
-            width: 16px;
-            height: 16px;
-            border: 2px solid #ffffff;
-            border-radius: 50%;
-            background: var(--accent);
-            box-shadow: 0 2px 8px rgba(23, 37, 49, 0.2);
-            cursor: nwse-resize;
-            touch-action: none;
-        }
-
-        #footer-bar {
-            position: fixed;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            gap: 16px;
-            padding: 16px 26px;
-            border-top: 1px solid rgba(29, 49, 62, 0.08);
-            background: rgba(255, 255, 255, 0.92);
-            backdrop-filter: blur(12px);
-        }
-
-        #status-text {
-            color: var(--text-muted);
-            font-size: 13px;
-        }
-
-        #footer-actions {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-        }
-
-        @media (max-width: 980px) {
-            .section-grid {
-                grid-template-columns: 1fr;
-            }
-        }
-
-        /* Codex-like control surface */
-        :root {
-            --bg: #eef2f7;
-            --panel: #ffffff;
-            --panel-soft: #f8fafc;
-            --border: #cfd8e3;
-            --text-main: #18212f;
-            --text-muted: #657386;
-            --accent: #2563eb;
-            --accent-soft: #eff6ff;
-            --accent-warm: #b42318;
-            --accent-warm-soft: #fff1f0;
-            --shadow: 0 12px 28px rgba(15, 23, 42, 0.08);
-        }
-
-        html,
-        body {
-            background:
-                linear-gradient(180deg, #f7f9fc 0%, #eef2f7 100%);
-            color: var(--text-main);
-        }
-
-        #header {
-            align-items: center;
-            padding: 14px 22px;
-            background: #f8fafc;
-            border-bottom: 1px solid var(--border);
-            backdrop-filter: none;
-        }
-
-        #eyebrow {
-            color: var(--text-muted);
-            font-size: 11px;
-            letter-spacing: 0.04em;
-        }
-
-        #title {
-            margin-top: 4px;
-            font-size: 21px;
-            line-height: 1.15;
-        }
-
-        #subtitle {
-            margin-top: 6px;
-            max-width: 820px;
-            font-size: 13px;
-            line-height: 1.5;
-        }
-
-        .pill {
-            min-height: 32px;
-            border-radius: 8px;
-            background: #ffffff;
-            border-color: var(--border);
-            font-size: 12px;
-            box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
-        }
-
-        .language-switch {
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-            min-height: 32px;
-            padding: 3px 6px 3px 10px;
-            border: 1px solid var(--border);
-            border-radius: 999px;
-            background: #ffffff;
-            color: var(--text-muted);
-            font-size: 12px;
-            box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
-            white-space: nowrap;
-        }
-
-        .language-switch select {
-            width: auto;
-            min-width: 112px;
-            min-height: 26px;
-            padding: 2px 26px 2px 9px;
-            border-radius: 999px;
-            font-size: 12px;
-            background-color: #ffffff;
-        }
-
-        #content {
-            padding: 18px 22px 96px;
-        }
-
-        .section-grid {
-            gap: 14px;
-        }
-
-        .panel-section {
-            border-color: var(--border);
-            background: #ffffff;
-            box-shadow: var(--shadow);
-        }
-
-        .section-head {
-            padding: 14px 16px 11px;
-            background: var(--panel-soft);
-            border-bottom: 1px solid var(--border);
-        }
-
-        .section-title {
-            font-size: 15px;
-            line-height: 1.3;
-        }
-
-        .section-copy {
-            margin-top: 5px;
-            font-size: 12px;
-            line-height: 1.45;
-        }
-
-        .section-body {
-            padding: 14px 16px 16px;
-            gap: 12px;
-        }
-
-        .field {
-            gap: 7px;
-        }
-
-        .field-label {
-            font-size: 13px;
-        }
-
-        .field-help {
-            font-size: 12px;
-        }
-
-        .field-value {
-            color: var(--accent);
-            font-size: 12px;
-        }
-
-        input[type="text"],
-        input[type="password"],
-        input[type="number"],
-        select {
-            min-height: 38px;
-            border-color: var(--border);
-            background: #ffffff;
-            color: var(--text-main);
-        }
-
-        input[type="text"]:focus,
-        input[type="password"]:focus,
-        input[type="number"]:focus,
-        select:focus {
-            outline: none;
-            border-color: #93b4ff;
-            box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
-        }
-
-        input[type="range"] {
-            accent-color: var(--accent);
-        }
-
-        input[type="checkbox"] {
-            accent-color: var(--accent);
-        }
-
-        .ghost-btn,
-        .primary-btn,
-        .danger-btn,
-        .icon-btn {
-            border-radius: 7px;
-            transform: none;
-        }
-
-        .icon-btn {
-            width: 34px;
-            height: 34px;
-            background: #ffffff;
-            border-color: var(--border);
-            color: var(--text-main);
-        }
-
-        .ghost-btn {
-            min-height: 34px;
-            background: #ffffff;
-            border-color: var(--border);
-            color: var(--text-main);
-            font-size: 12px;
-        }
-
-        .primary-btn {
-            min-height: 38px;
-            background: var(--accent);
-            border-color: #1d4ed8;
-        }
-
-        .danger-btn {
-            min-height: 38px;
-            background: var(--accent-warm-soft);
-            border-color: #f0b8b4;
-            color: var(--accent-warm);
-        }
-
-        .icon-btn:hover,
-        .ghost-btn:hover,
-        .primary-btn:hover,
-        .danger-btn:hover {
-            transform: none;
-        }
-
-        .ghost-btn:hover,
-        .icon-btn:hover {
-            background: #f8fafc;
-        }
-
-        .primary-btn:hover:enabled {
-            background: #1d4ed8;
-        }
-
-        .split-2 {
-            gap: 10px;
-        }
-
-        .memory-block {
-            border-color: var(--border);
-            background: var(--panel-soft);
-        }
-
-        .dialogue-preview-stage {
-            border-color: var(--border);
-            background:
-                linear-gradient(90deg, rgba(24, 33, 47, 0.04) 1px, transparent 1px),
-                linear-gradient(180deg, rgba(24, 33, 47, 0.04) 1px, transparent 1px),
-                #f8fafc;
-        }
-
-        .dialogue-window-preview {
-            border-color: rgba(37, 99, 235, 0.38);
-        }
-
-        .dialogue-bubble-preview {
-            border-color: rgba(37, 99, 235, 0.36);
-            background: #ffffff;
-            box-shadow: 0 12px 28px rgba(15, 23, 42, 0.12);
-        }
-
-        .dialogue-resize-handle {
-            background: var(--accent);
-        }
-
-        #footer-bar {
-            padding: 12px 22px;
-            background: rgba(248, 250, 252, 0.96);
-            border-top: 1px solid var(--border);
-            backdrop-filter: blur(10px);
-        }
-
-        #status-text {
-            font-size: 12px;
-        }
-
-        /* AILIS open-source control room refresh */
-        :root {
-            --bg: #f4efe6;
-            --panel: rgba(255, 252, 246, 0.94);
-            --panel-soft: #fbf4e8;
-            --panel-quiet: rgba(255, 255, 255, 0.72);
-            --border: rgba(58, 47, 35, 0.12);
-            --border-strong: rgba(58, 47, 35, 0.2);
-            --text-main: #27231e;
-            --text-muted: #70685e;
-            --accent: #0e806a;
-            --accent-deep: #085f50;
-            --accent-soft: rgba(14, 128, 106, 0.12);
-            --accent-warm: #b55731;
-            --accent-warm-soft: rgba(181, 87, 49, 0.12);
-            --gold: #b9903f;
-            --shadow: 0 18px 50px rgba(62, 49, 34, 0.11);
-            --shadow-soft: 0 10px 28px rgba(62, 49, 34, 0.08);
-            --radius-lg: 22px;
-            --radius-md: 16px;
-            --font-ui: "LXGW WenKai Screen", "HarmonyOS Sans SC", "Microsoft YaHei", "PingFang SC", sans-serif;
-        }
-
-        * {
-            font-family: var(--font-ui);
-        }
-
-        html,
-        body {
-            background:
-                radial-gradient(circle at 8% 5%, rgba(185, 144, 63, 0.18), transparent 28%),
-                radial-gradient(circle at 94% 4%, rgba(14, 128, 106, 0.16), transparent 26%),
-                linear-gradient(135deg, #fffaf0 0%, #f4efe6 46%, #edf4ef 100%);
-        }
-
-        body::before {
-            content: "";
-            position: fixed;
-            inset: 0;
-            pointer-events: none;
-            background-image:
-                linear-gradient(rgba(58, 47, 35, 0.035) 1px, transparent 1px),
-                linear-gradient(90deg, rgba(58, 47, 35, 0.028) 1px, transparent 1px);
-            background-size: 34px 34px;
-            mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.72), transparent 80%);
-        }
-
-        #header {
-            padding: 18px 28px 16px;
-            background: rgba(255, 250, 240, 0.88);
-            border-bottom: 1px solid var(--border);
-            box-shadow: 0 10px 30px rgba(62, 49, 34, 0.06);
-        }
-
-        #eyebrow {
-            color: var(--accent);
-            font-size: 12px;
-            letter-spacing: 0.12em;
-        }
-
-        #title {
-            margin-top: 5px;
-            font-size: 27px;
-            letter-spacing: -0.02em;
-        }
-
-        #subtitle {
-            max-width: 900px;
-            color: #655c51;
-            font-size: 13px;
-        }
-
-        .pill,
-        .icon-btn {
-            border-radius: 999px;
-            background: rgba(255, 255, 255, 0.78);
-            border-color: var(--border);
-            box-shadow: var(--shadow-soft);
-        }
-
-        #content {
-            padding: 18px 32px 132px 28px;
-            scrollbar-gutter: stable;
-        }
-
-        #control-nav {
-            position: sticky;
-            top: 0;
-            z-index: 10;
-            display: flex;
-            gap: 8px;
-            padding: 8px;
-            margin-bottom: 14px;
-            border: 1px solid var(--border);
-            border-radius: 999px;
-            background: rgba(255, 252, 246, 0.82);
-            box-shadow: var(--shadow-soft);
-            backdrop-filter: blur(16px);
-        }
-
-        #control-nav button {
-            flex: 1;
-            min-height: 34px;
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            padding: 0 12px;
-            border: 0;
-            border-radius: 999px;
-            background: transparent;
-            color: var(--text-muted);
-            cursor: pointer;
-            font-size: 12px;
-            font-weight: 800;
-            transition: background-color 0.18s ease, box-shadow 0.18s ease, color 0.18s ease;
-        }
-
-        #control-nav button:hover {
-            background: var(--accent-soft);
-            color: var(--accent-deep);
-        }
-
-        #control-nav button.is-active {
-            background: linear-gradient(135deg, rgba(14, 128, 106, 0.16), rgba(204, 143, 54, 0.16));
-            box-shadow: inset 0 0 0 1px rgba(14, 128, 106, 0.18);
-            color: var(--accent-deep);
-        }
-
-        #control-pages {
-            min-height: 0;
-        }
-
-        .control-page {
-            display: none;
-            animation: page-fade-in 0.18s ease both;
-        }
-
-        .control-page.is-active {
-            display: block;
-        }
-
-        @keyframes page-fade-in {
-            from {
-                opacity: 0;
-                transform: translateY(6px);
-            }
-            to {
-                opacity: 1;
-                transform: translateY(0);
-            }
-        }
-
-        .page-intro {
-            margin-bottom: 16px;
-            padding: 18px 20px;
-            border: 1px solid var(--border);
-            border-radius: var(--radius-lg);
-            background:
-                linear-gradient(135deg, rgba(255, 255, 255, 0.84), rgba(237, 246, 241, 0.72)),
-                var(--panel);
-            box-shadow: var(--shadow-soft);
-        }
-
-        .page-eyebrow {
-            color: var(--gold);
-            font-size: 11px;
-            font-weight: 900;
-            letter-spacing: 0.1em;
-            text-transform: uppercase;
-        }
-
-        .page-title {
-            margin-top: 8px;
-            font-size: 20px;
-            font-weight: 900;
-            letter-spacing: -0.02em;
-        }
-
-        .page-copy {
-            margin-top: 8px;
-            max-width: 820px;
-            color: var(--text-muted);
-            font-size: 13px;
-            line-height: 1.7;
-        }
-
-        #control-overview {
-            display: grid;
-            grid-template-columns: repeat(4, minmax(0, 1fr));
-            gap: 14px;
-        }
-
-        .overview-card {
-            min-height: 128px;
-            padding: 18px;
-            border: 1px solid var(--border);
-            border-radius: var(--radius-lg);
-            background:
-                linear-gradient(145deg, rgba(255, 255, 255, 0.9), rgba(255, 246, 232, 0.74)),
-                var(--panel);
-            box-shadow: var(--shadow-soft);
-            color: inherit;
-            cursor: pointer;
-            text-align: left;
-            transition: transform 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
-        }
-
-        .overview-card:hover {
-            transform: translateY(-2px);
-            border-color: rgba(14, 128, 106, 0.28);
-            box-shadow: var(--shadow);
-        }
-
-        .overview-kicker {
-            color: var(--gold);
-            font-size: 11px;
-            font-weight: 900;
-            letter-spacing: 0.1em;
-            text-transform: uppercase;
-        }
-
-        .overview-title {
-            margin-top: 9px;
-            font-size: 18px;
-            font-weight: 900;
-        }
-
-        .overview-copy {
-            margin-top: 7px;
-            color: var(--text-muted);
-            font-size: 12px;
-            line-height: 1.55;
-        }
-
-        .section-grid {
-            display: grid;
-            grid-template-columns: repeat(12, minmax(0, 1fr));
-            gap: 16px;
-        }
-
-        .section-grid > .panel-section {
-            grid-column: span 4;
-        }
-
-        .control-page[data-control-page="appearance"] .section-display,
-        .control-page[data-control-page="appearance"] .section-character {
-            grid-column: span 6;
-        }
-
-        .control-page[data-control-page="appearance"] .section-dialogue,
-        .control-page[data-control-page="agent"] .section-permissions,
-        .control-page[data-control-page="model"] .section-model,
-        .control-page[data-control-page="voice"] .section-speech,
-        .control-page[data-control-page="advanced"] .section-runtime {
-            grid-column: span 12 !important;
-        }
-
-        .control-page[data-control-page="model"] .section-email {
-            grid-column: span 12;
-        }
-
-        .section-display { order: 10; }
-        .section-character { order: 20; }
-        .section-permissions { order: 30; }
-        .section-model {
-            order: 40;
-            grid-column: span 8 !important;
-        }
-        .section-speech { order: 50; }
-        .section-email { order: 60; }
-        .section-dialogue { order: 70; }
-        .section-runtime { order: 80; }
-
-        .panel-section {
-            border-radius: var(--radius-lg);
-            background: var(--panel);
-            border-color: var(--border);
-            box-shadow: var(--shadow-soft);
-        }
-
-        .section-head {
-            padding: 17px 18px 13px;
-            background:
-                linear-gradient(120deg, rgba(255, 248, 236, 0.96), rgba(237, 246, 241, 0.82));
-            border-bottom-color: var(--border);
-        }
-
-        .section-title {
-            font-size: 16px;
-            font-weight: 900;
-            letter-spacing: -0.01em;
-        }
-
-        .section-copy {
-            color: var(--text-muted);
-        }
-
-        .section-body {
-            padding: 16px 18px 18px;
-        }
-
-        .field {
-            gap: 8px;
-        }
-
-        .field.inline,
-        .toggle-row,
-        .field:has(> .field-meta + .field-help:not(:empty)):not(:has(input)):not(:has(select)) {
-            padding: 12px;
-            border: 1px solid rgba(58, 47, 35, 0.08);
-            border-radius: var(--radius-md);
-            background: rgba(255, 255, 255, 0.52);
-        }
-
-        .field-meta {
-            align-items: flex-start;
-        }
-
-        .field-label {
-            font-size: 13px;
-            font-weight: 900;
-        }
-
-        .field-help {
-            color: var(--text-muted);
-        }
-
-        .field-value {
-            color: var(--accent-deep);
-        }
-
-        input[type="text"],
-        input[type="password"],
-        input[type="number"],
-        input[type="search"],
-        select {
-            min-height: 42px;
-            border-radius: 13px;
-            border-color: rgba(58, 47, 35, 0.16);
-            background: rgba(255, 255, 255, 0.84);
-        }
-
-        input[type="text"]:focus,
-        input[type="password"]:focus,
-        input[type="number"]:focus,
-        input[type="search"]:focus,
-        select:focus {
-            border-color: rgba(14, 128, 106, 0.48);
-            box-shadow: 0 0 0 4px rgba(14, 128, 106, 0.12);
-        }
-
-        .ghost-btn,
-        .primary-btn,
-        .danger-btn {
-            border-radius: 999px;
-            font-weight: 900;
-        }
-
-        .primary-btn {
-            background: linear-gradient(135deg, var(--accent), var(--accent-deep));
-            border-color: transparent;
-            box-shadow: 0 10px 20px rgba(14, 128, 106, 0.18);
-        }
-
-        .primary-btn:hover:enabled {
-            background: linear-gradient(135deg, #11947a, #076453);
-        }
-
-        .ghost-btn {
-            background: rgba(255, 255, 255, 0.72);
-        }
-
-        .danger-btn {
-            background: rgba(181, 87, 49, 0.09);
-        }
-
-        .advanced-section {
-            border-radius: var(--radius-md);
-            border-color: rgba(58, 47, 35, 0.1);
-            background: rgba(255, 255, 255, 0.42);
-        }
-
-        .advanced-section summary {
-            display: flex;
-            align-items: center;
-            min-height: 44px;
-            padding: 12px 14px;
-            color: #4e473f;
-            font-weight: 900;
-        }
-
-        .advanced-panel {
-            box-shadow: none;
-            background: transparent;
-            border-color: transparent;
-        }
-
-        .advanced-panel .advanced-section {
-            background: rgba(255, 252, 246, 0.62);
-            border-style: dashed;
-        }
-
-        .model-console {
-            display: grid;
-            gap: 18px;
-        }
-
-        .model-status-board {
-            display: grid;
-            grid-template-columns: minmax(0, 1.05fr) minmax(0, 1.35fr);
-            gap: 14px;
-            padding: 16px;
-            border: 1px solid rgba(14, 128, 106, 0.16);
-            border-radius: 22px;
-            background:
-                radial-gradient(circle at top left, rgba(14, 128, 106, 0.18), transparent 38%),
-                linear-gradient(135deg, rgba(255, 252, 246, 0.9), rgba(244, 250, 247, 0.78));
-        }
-
-        .model-status-main {
-            display: grid;
-            align-content: center;
-            gap: 8px;
-            min-height: 142px;
-        }
-
-        .model-status-kicker,
-        .runtime-kicker {
-            color: #0d6f5e;
-            font-size: 11px;
-            font-weight: 950;
-            letter-spacing: 0.12em;
-            text-transform: uppercase;
-        }
-
-        .model-status-title {
-            color: #26221d;
-            font-size: clamp(22px, 3vw, 32px);
-            font-weight: 950;
-            letter-spacing: -0.04em;
-            line-height: 1.05;
-        }
-
-        .model-status-copy {
-            max-width: 560px;
-            color: #665d53;
-            font-size: 13px;
-            font-weight: 700;
-            line-height: 1.65;
-        }
-
-        .model-status-grid {
-            display: grid;
-            grid-template-columns: repeat(2, minmax(0, 1fr));
-            gap: 10px;
-        }
-
-        .model-status-cell {
-            min-height: 76px;
-            padding: 12px;
-            border: 1px solid rgba(58, 47, 35, 0.08);
-            border-radius: 16px;
-            background: rgba(255, 255, 255, 0.62);
-        }
-
-        .model-status-label {
-            margin-bottom: 5px;
-            color: #81776b;
-            font-size: 11px;
-            font-weight: 900;
-        }
-
-        .model-status-value {
-            color: #332d26;
-            font-size: 13px;
-            font-weight: 900;
-            line-height: 1.45;
-            overflow-wrap: anywhere;
-        }
-
-        .model-next-step {
-            grid-column: 1 / -1;
-            border-color: rgba(185, 144, 63, 0.2);
-            background: rgba(255, 248, 230, 0.72);
-        }
-
-        .model-choice-grid {
-            display: grid;
-            grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
-            gap: 12px;
-        }
-
-        .model-field-card {
-            padding: 14px;
-            border: 1px solid rgba(58, 47, 35, 0.08);
-            border-radius: 18px;
-            background: rgba(255, 255, 255, 0.62);
-        }
-
-        .runtime-shell {
-            display: grid;
-            gap: 14px;
-        }
-
-        .runtime-header {
-            display: grid;
-            grid-template-columns: minmax(0, 1fr) auto;
-            gap: 12px;
-            align-items: center;
-        }
-
-        .runtime-title {
-            color: #2f2a25;
-            font-size: 18px;
-            font-weight: 950;
-            letter-spacing: -0.02em;
-        }
-
-        .runtime-copy {
-            margin-top: 4px;
-            color: #70675d;
-            font-size: 12px;
-            font-weight: 700;
-            line-height: 1.55;
-        }
-
-        .runtime-stepper {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 8px;
-        }
-
-        .runtime-step {
-            display: inline-flex;
-            align-items: center;
-            gap: 7px;
-            padding: 7px 10px;
-            border-radius: 999px;
-            background: rgba(14, 128, 106, 0.1);
-            color: #145e51;
-            font-size: 12px;
-            font-weight: 950;
-            white-space: nowrap;
-        }
-
-        .runtime-step strong {
-            display: inline-grid;
-            place-items: center;
-            width: 20px;
-            height: 20px;
-            border-radius: 50%;
-            background: rgba(14, 128, 106, 0.16);
-        }
-
-        .local-llm-runtime-panel {
-            border-color: rgba(14, 128, 106, 0.16) !important;
-            background:
-                linear-gradient(135deg, rgba(14, 128, 106, 0.08), rgba(185, 144, 63, 0.08)),
-                rgba(255, 255, 255, 0.56) !important;
-        }
-
-        .local-voice-runtime-panel {
-            padding: 16px;
-            border: 1px solid rgba(14, 128, 106, 0.16);
-            border-radius: var(--radius-md);
-            background: rgba(255, 255, 255, 0.68);
-        }
-
-        .runtime-path-row {
-            display: grid;
-            grid-template-columns: minmax(0, 1fr) auto;
-            gap: 10px;
-            align-items: end;
-        }
-
-        .runtime-path-row .field {
-            margin: 0;
-        }
-
-        .runtime-log {
-            white-space: pre-wrap;
-            max-height: 180px;
-            overflow: auto;
-            padding: 12px;
-            border: 1px solid rgba(58, 47, 35, 0.08);
-            border-radius: 14px;
-            background: rgba(42, 36, 30, 0.92);
-            color: #f6efe4;
-            font-family: "Cascadia Mono", "Consolas", monospace;
-            font-size: 11px;
-            line-height: 1.55;
-        }
-
-        .local-llm-provider-panel {
-            display: grid;
-            gap: 14px;
-            padding: 12px;
-            border: 1px solid rgba(58, 47, 35, 0.08);
-            border-radius: var(--radius-md);
-            background: rgba(255, 255, 255, 0.56);
-        }
-
-        .ollama-target-summary {
-            display: grid;
-            grid-template-columns: minmax(0, 1fr) auto;
-            gap: 12px;
-            align-items: center;
-            padding: 14px;
-            border: 1px solid rgba(14, 128, 106, 0.16);
-            border-radius: 18px;
-            background:
-                linear-gradient(135deg, rgba(14, 128, 106, 0.1), rgba(37, 99, 235, 0.07)),
-                rgba(255, 255, 255, 0.82);
-        }
-
-        .ollama-target-model {
-            margin-top: 3px;
-            color: #122f2a;
-            font-size: 19px;
-            font-weight: 950;
-            letter-spacing: -0.02em;
-            overflow-wrap: anywhere;
-        }
-
-        .ollama-mode-selector {
-            display: grid;
-            grid-template-columns: repeat(3, minmax(0, 1fr));
-            gap: 10px;
-        }
-
-        .ollama-mode-btn {
-            display: grid;
-            gap: 5px;
-            min-height: 86px;
-            padding: 13px;
-            border: 1px solid rgba(58, 47, 35, 0.1);
-            border-radius: 18px;
-            background: rgba(255, 255, 255, 0.72);
-            color: #40382f;
-            text-align: left;
-            cursor: pointer;
-        }
-
-        .ollama-mode-btn strong {
-            font-size: 14px;
-            font-weight: 950;
-        }
-
-        .ollama-mode-btn span {
-            color: #70675d;
-            font-size: 12px;
-            font-weight: 700;
-            line-height: 1.4;
-        }
-
-        .ollama-mode-btn.is-active {
-            border-color: rgba(14, 128, 106, 0.36);
-            background:
-                linear-gradient(135deg, rgba(14, 128, 106, 0.16), rgba(37, 99, 235, 0.08)),
-                #ffffff;
-            box-shadow: 0 12px 24px rgba(14, 128, 106, 0.12);
-        }
-
-        .ollama-mode-btn.is-active span {
-            color: #145e51;
-        }
-
-        .ollama-mode-section {
-            padding: 14px;
-            border: 1px solid rgba(58, 47, 35, 0.08);
-            border-radius: 18px;
-            background: rgba(255, 255, 255, 0.72);
-        }
-
-        .asset-pack-card,
-        .memory-block {
-            border-radius: var(--radius-md);
-            background: rgba(255, 255, 255, 0.6);
-        }
-
-        .asset-pack-card.is-active {
-            border-color: rgba(14, 128, 106, 0.34);
-            background: rgba(14, 128, 106, 0.09);
-        }
-
-        .runtime-diagnostics {
-            display: grid;
-            gap: 12px;
-            color: #40382f;
-        }
-
-        .runtime-outcome {
-            display: grid;
-            gap: 7px;
-            padding: 14px;
-            border: 1px solid rgba(58, 47, 35, 0.1);
-            border-radius: 16px;
-            background: rgba(255, 255, 255, 0.64);
-        }
-
-        .runtime-outcome.is-ready {
-            border-color: rgba(14, 128, 106, 0.22);
-            background: rgba(14, 128, 106, 0.09);
-        }
-
-        .runtime-outcome.is-running {
-            border-color: rgba(185, 144, 63, 0.22);
-            background: rgba(255, 248, 230, 0.72);
-        }
-
-        .runtime-outcome.is-blocked,
-        .runtime-outcome.is-failed {
-            border-color: rgba(181, 87, 49, 0.22);
-            background: rgba(181, 87, 49, 0.08);
-        }
-
-        .runtime-outcome-title {
-            color: #2f2a25;
-            font-size: 17px;
-            font-weight: 950;
-            letter-spacing: -0.02em;
-        }
-
-        .runtime-outcome-copy {
-            color: #6b6257;
-            font-size: 12px;
-            font-weight: 750;
-            line-height: 1.6;
-        }
-
-        .runtime-component-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
-            gap: 8px;
-        }
-
-        .runtime-component {
-            display: grid;
-            gap: 7px;
-            padding: 10px 11px;
-            border: 1px solid rgba(58, 47, 35, 0.1);
-            border-radius: 14px;
-            background: rgba(255, 255, 255, 0.58);
-        }
-
-        .runtime-component.is-ready {
-            border-color: rgba(14, 128, 106, 0.22);
-            background: rgba(14, 128, 106, 0.08);
-        }
-
-        .runtime-component.is-running {
-            border-color: rgba(185, 144, 63, 0.24);
-            background: rgba(255, 248, 230, 0.76);
-        }
-
-        .runtime-component.is-blocked,
-        .runtime-component.is-failed {
-            border-color: rgba(181, 87, 49, 0.22);
-            background: rgba(181, 87, 49, 0.08);
-        }
-
-        .runtime-component-head {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            gap: 8px;
-        }
-
-        .runtime-component-title {
-            color: #2f2a25;
-            font-size: 12px;
-            font-weight: 950;
-        }
-
-        .runtime-component-badge {
-            padding: 4px 7px;
-            border-radius: 999px;
-            background: rgba(58, 47, 35, 0.08);
-            color: #5f554a;
-            font-size: 10px;
-            font-weight: 950;
-            white-space: nowrap;
-        }
-
-        .runtime-component-copy {
-            color: #70675d;
-            font-size: 11px;
-            font-weight: 700;
-            line-height: 1.5;
-        }
-
-        .runtime-asset-list {
-            display: grid;
-            gap: 10px;
-        }
-
-        .runtime-asset-card {
-            display: grid;
-            grid-template-columns: minmax(0, 1fr) auto;
-            gap: 12px;
-            padding: 13px;
-            border: 1px solid rgba(58, 47, 35, 0.1);
-            border-radius: 16px;
-            background: rgba(255, 255, 255, 0.66);
-        }
-
-        .runtime-asset-card.is-low {
-            border-color: rgba(14, 128, 106, 0.18);
-        }
-
-        .runtime-asset-card.is-medium {
-            border-color: rgba(185, 144, 63, 0.26);
-            background: rgba(255, 248, 230, 0.54);
-        }
-
-        .runtime-asset-card.is-high {
-            border-color: rgba(181, 87, 49, 0.24);
-            background: rgba(181, 87, 49, 0.07);
-        }
-
-        .runtime-asset-main {
-            min-width: 0;
-        }
-
-        .runtime-asset-title {
-            color: #2f2a25;
-            font-size: 14px;
-            font-weight: 950;
-        }
-
-        .runtime-asset-meta,
-        .runtime-asset-path {
-            margin-top: 5px;
-            color: #70675d;
-            font-size: 11px;
-            font-weight: 750;
-            line-height: 1.45;
-        }
-
-        .runtime-asset-path {
-            overflow-wrap: anywhere;
-            font-family: "Cascadia Mono", "Consolas", monospace;
-        }
-
-        .runtime-asset-actions {
-            display: flex;
-            flex-wrap: wrap;
-            align-content: start;
-            justify-content: end;
-            gap: 8px;
-        }
-
-        .runtime-asset-empty {
-            padding: 14px;
-            border: 1px dashed rgba(58, 47, 35, 0.16);
-            border-radius: 16px;
-            color: #70675d;
-            font-size: 12px;
-            font-weight: 750;
-            line-height: 1.6;
-        }
-
-        .runtime-section {
-            display: grid;
-            gap: 8px;
-        }
-
-        .runtime-section-title {
-            color: #756b5f;
-            font-size: 11px;
-            font-weight: 950;
-            letter-spacing: 0.08em;
-            text-transform: uppercase;
-        }
-
-        .runtime-list {
-            display: grid;
-            gap: 7px;
-            margin: 0;
-            padding: 0;
-            list-style: none;
-        }
-
-        .runtime-list li {
-            padding: 9px 10px;
-            border: 1px solid rgba(58, 47, 35, 0.08);
-            border-radius: 12px;
-            background: rgba(255, 252, 246, 0.72);
-            color: #4c443b;
-            font-size: 12px;
-            font-weight: 760;
-            line-height: 1.55;
-        }
-
-        .runtime-list.is-action li {
-            border-color: rgba(14, 128, 106, 0.14);
-            background: rgba(14, 128, 106, 0.07);
-        }
-
-        .runtime-detail-grid {
-            display: grid;
-            grid-template-columns: repeat(2, minmax(0, 1fr));
-            gap: 8px;
-        }
-
-        .runtime-detail {
-            padding: 9px 10px;
-            border: 1px solid rgba(58, 47, 35, 0.08);
-            border-radius: 12px;
-            background: rgba(255, 255, 255, 0.56);
-            overflow-wrap: anywhere;
-        }
-
-        .runtime-detail-label {
-            margin-bottom: 3px;
-            color: #81776b;
-            font-size: 10px;
-            font-weight: 950;
-        }
-
-        .runtime-detail-value {
-            color: #332d26;
-            font-size: 12px;
-            font-weight: 850;
-            line-height: 1.45;
-        }
-
-        .dialogue-preview-stage {
-            border-radius: var(--radius-md);
-        }
-
-        #footer-bar {
-            left: 18px;
-            right: 30px;
-            bottom: 14px;
-            padding: 12px 14px 12px 18px;
-            border: 1px solid var(--border);
-            border-radius: 999px;
-            background: rgba(255, 252, 246, 0.9);
-            box-shadow: var(--shadow);
-        }
-
-        #status-text {
-            color: #5f584f;
-            font-weight: 700;
-        }
-
-        @media (max-width: 1180px) {
-            #control-overview {
-                grid-template-columns: repeat(2, minmax(0, 1fr));
-            }
-
-            .model-status-board,
-            .model-choice-grid,
-            .ollama-mode-selector,
-            .runtime-path-row,
-            .runtime-header {
-                grid-template-columns: 1fr;
-            }
-
-            .ollama-target-summary {
-                grid-template-columns: 1fr;
-            }
-
-            .section-grid > .panel-section {
-                grid-column: span 6;
-            }
-
-            .section-model {
-                grid-column: span 12 !important;
-            }
-        }
-
-        @media (max-width: 760px) {
-            .model-status-grid {
-                grid-template-columns: 1fr;
-            }
-
-            #header {
-                align-items: flex-start;
-                flex-direction: column;
-            }
-
-            #header-actions {
-                width: 100%;
-                justify-content: space-between;
-            }
-
-            #content {
-                padding: 14px 14px 132px;
-            }
-
-            #control-nav {
-                border-radius: var(--radius-md);
-                flex-wrap: wrap;
-            }
-
-            #control-nav button {
-                flex: 1 1 42%;
-            }
-
-            #control-overview,
-            .section-grid {
-                grid-template-columns: 1fr;
-            }
-
-            .section-grid > .panel-section,
-            .section-model {
-                grid-column: 1 / -1 !important;
-            }
-
-            .split-2 {
-                grid-template-columns: 1fr;
-            }
-
-            #footer-bar {
-                left: 10px;
-                right: 10px;
-                border-radius: var(--radius-md);
-            }
-        }
-
-    </style>
+    <link rel="stylesheet" href="./src/control-panel.css">
 </head>
 <body>
     <div id="shell">
         <header id="header">
             <div id="header-main">
-                <div id="eyebrow">AILIS Desktop</div>
-                <div id="title">控制面板</div>
-                <div id="subtitle">普通设置只保留日常会用到的选择；复杂参数收在高级设置里。保存后会立即同步到角色窗口和聊天窗。</div>
+                <img class="brand-avatar" src="./Resources/Emotes/ailis-small/wave.png" alt="" width="38" height="42">
+                <div>
+                    <div id="eyebrow">AILIS</div>
+                    <h1 id="title">控制面板</h1>
+                </div>
             </div>
             <div id="header-actions">
+                <button id="settings-search-btn" type="button" title="搜索设置" aria-label="搜索设置">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/></svg><span>搜索设置</span><kbd>Ctrl K</kbd>
+                </button>
                 <label class="language-switch" for="ui-language">
                     <span>语言</span>
                     <select id="ui-language" aria-label="界面语言"></select>
                 </label>
-                <div class="pill"><strong id="app-version">v1.0.0</strong><span>桌面版</span></div>
+                <div class="pill"><strong id="app-version">v1.0.0</strong></div>
                 <div class="window-controls" role="group" aria-label="窗口控制">
                     <button id="minimize-btn" class="window-control-btn" type="button" aria-label="最小化控制面板" title="最小化">
                         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 18h12"></path></svg>
@@ -1869,58 +40,68 @@
             </div>
         </header>
 
-        <main id="content">
             <nav id="control-nav" role="tablist" aria-label="控制面板页面">
-                <button id="tab-overview" class="is-active" type="button" role="tab" aria-selected="true" aria-controls="page-overview" data-control-page-target="overview">总览</button>
-                <button id="tab-appearance" type="button" role="tab" aria-selected="false" aria-controls="page-appearance" data-control-page-target="appearance">角色外观</button>
-                <button id="tab-agent" type="button" role="tab" aria-selected="false" aria-controls="page-agent" data-control-page-target="agent">任务能力</button>
-                <button id="tab-model" type="button" role="tab" aria-selected="false" aria-controls="page-model" data-control-page-target="model">模型账号</button>
-                <button id="tab-voice" type="button" role="tab" aria-selected="false" aria-controls="page-voice" data-control-page-target="voice">语音</button>
-                <button id="tab-advanced" type="button" role="tab" aria-selected="false" aria-controls="page-advanced" data-control-page-target="advanced">诊断</button>
+                <button id="tab-model" class="is-active" type="button" role="tab" aria-selected="true" aria-controls="page-model" data-control-page-target="model"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 2v4m6-4v4M9 18v4m6-4v4M2 9h4m-4 6h4m12-6h4m-4 6h4"/></svg><span>模型</span></button>
+                <button id="tab-appearance" type="button" role="tab" aria-selected="false" aria-controls="page-appearance" data-control-page-target="appearance"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21v-2a8 8 0 0 1 16 0v2"/></svg><span>角色</span></button>
+                <button id="tab-voice" type="button" role="tab" aria-selected="false" aria-controls="page-voice" data-control-page-target="voice"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="2" width="6" height="13" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3m-4 0h8"/></svg><span>语音</span></button>
+                <button id="tab-agent" type="button" role="tab" aria-selected="false" aria-controls="page-agent" data-control-page-target="agent"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 15a3 3 0 0 1-3 3H9l-5 4V6a3 3 0 0 1 3-3h10a3 3 0 0 1 3 3Z"/><path d="M8 8h8m-8 5h5"/></svg><span>交互</span></button>
+                <button id="tab-advanced" type="button" role="tab" aria-selected="false" aria-controls="page-advanced" data-control-page-target="advanced"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 3v18M12 3v18M20 3v18"/><path d="M1 8h6m2 8h6m2-10h6"/></svg><span>高级</span></button>
             </nav>
 
+        <dialog id="settings-search" aria-label="搜索设置">
+            <div class="settings-search-box">
+                <div class="settings-search-head">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/></svg>
+                    <input id="settings-search-input" type="search" placeholder="查找模型、声音、记忆…" aria-label="搜索设置" role="combobox" aria-expanded="true" aria-controls="settings-search-results" autocomplete="off">
+                    <button id="settings-search-close" type="button" aria-label="关闭搜索">Esc</button>
+                </div>
+                <div id="settings-search-results" role="listbox" aria-label="设置搜索结果"></div>
+                <p id="settings-search-empty" hidden>没有找到对应设置，试试更短的关键词。</p>
+                <div class="settings-search-footer"><span id="settings-search-count" role="status"></span><span>↑↓ 选择 · Enter 打开</span></div>
+            </div>
+        </dialog>
+        <main id="content">
             <div id="control-pages">
-                <section class="control-page is-active" id="page-overview" data-control-page="overview" role="tabpanel" aria-labelledby="tab-overview">
-                    <div class="page-intro">
-                        <div class="page-eyebrow">Control Room</div>
-                        <div class="page-title">选择一个工作区</div>
-                        <div class="page-copy">控制面板现在按页面拆开，顶部导航负责切换工作区；常用入口放在这里，避免所有模块挤在同一个长页面里。</div>
-                    </div>
-                    <section id="control-overview" aria-label="控制面板概览">
-                        <button class="overview-card" type="button" data-control-page-target="appearance">
-                            <div class="overview-kicker">Character</div>
-                            <div class="overview-title">角色体验</div>
-                            <div class="overview-copy">调整桌宠尺寸、渲染风格和本地人物包，日常只看这里就够。</div>
-                        </button>
-                        <button class="overview-card" type="button" data-control-page-target="model">
-                            <div class="overview-kicker">Brain</div>
-                            <div class="overview-title">模型账号</div>
-                            <div class="overview-copy">云端 Key、本地 Ollama、邮箱账号和连接测试收在同一个工作区。</div>
-                        </button>
-                        <button class="overview-card" type="button" data-control-page-target="voice">
-                            <div class="overview-kicker">Voice</div>
-                            <div class="overview-title">声音通道</div>
-                            <div class="overview-copy">先选语音路线和麦克风，高级音色参数默认安静收纳。</div>
-                        </button>
-                        <button class="overview-card" type="button" data-control-page-target="agent">
-                            <div class="overview-kicker">Agent</div>
-                            <div class="overview-title">任务调试</div>
-                            <div class="overview-copy">权限开关和 Agent Lab 单独成区，避免混进普通偏好设置。</div>
-                        </button>
-                    </section>
-                </section>
-
                 <section class="control-page" id="page-appearance" data-control-page="appearance" role="tabpanel" aria-labelledby="tab-appearance">
-                    <div class="page-intro">
-                        <div class="page-eyebrow">Character</div>
-                        <div class="page-title">角色外观</div>
-                        <div class="page-copy">桌宠大小、渲染风格、人物包和对话框校准集中在这里。高级参数默认折叠，避免日常配置被细节淹没。</div>
-                    </div>
+                    <div class="page-intro"><h2>人物外观</h2><p>让 AILIS 以你喜欢的样子陪伴在桌面上。</p></div>
                     <div class="section-grid">
+                <section class="panel-section section-character" id="section-character">
+                    <div class="section-head">
+                        <div class="section-title">我的人物</div>
+                        <div class="section-copy">管理正在使用的人物，以及本地人物包。</div>
+                    </div>
+                    <div class="section-body">
+                        <div class="character-profile">
+                        <img id="character-default-preview" src="./Resources/Emotes/ailis/wave.png" alt="AILIS" width="88" height="110">
+                        <div class="field">
+                            <div class="field-meta">
+                                <span class="field-label">当前启用</span>
+                                <span class="field-value" id="character-active-type">默认</span>
+                            </div>
+                            <div class="field-help" id="character-active-summary">正在读取人物资产状态...</div>
+                        </div>
+                        </div>
+
+                        <div class="field-actions">
+                            <button id="character-install-folder-btn" class="ghost-btn" type="button">安装本地包</button>
+                            <button id="character-reset-active-btn" class="danger-btn" type="button">恢复默认人物</button>
+                        </div>
+
+                        <div class="field">
+                            <div class="field-meta">
+                                <span class="field-label">已安装人物包 / 皮肤包</span>
+                            </div>
+                            <div id="character-pack-list" class="asset-pack-list">
+                                <div class="field-help">还没有安装本地人物包。</div>
+                            </div>
+                            <div class="field-help" id="character-pack-root">安装目录读取中...</div>
+                        </div>
+                    </div>
+                </section>
                 <section class="panel-section section-display" id="section-appearance">
                     <div class="section-head">
                         <div class="section-title">桌宠显示</div>
-                        <div class="section-copy">只保留角色大小、渲染风格和任务栏显示，细节调参放在高级设置里。</div>
+                        <div class="section-copy">调整人物大小、画面与桌面交互。</div>
                     </div>
                     <div class="section-body">
                         <label class="field">
@@ -2133,38 +314,6 @@
                     </div>
                 </section>
 
-                <section class="panel-section section-character" id="section-character">
-                    <div class="section-head">
-                        <div class="section-title">我的人物</div>
-                        <div class="section-copy">本地安装人物包和皮肤包，面向 MIT 开源社区扩展；完全本地使用，适合社区自愿分享。</div>
-                    </div>
-                    <div class="section-body">
-                        <div class="field">
-                            <div class="field-meta">
-                                <span class="field-label">当前启用</span>
-                                <span class="field-value" id="character-active-type">默认</span>
-                            </div>
-                            <div class="field-help" id="character-active-summary">正在读取人物资产状态...</div>
-                        </div>
-
-                        <div class="field-actions">
-                            <button id="character-install-folder-btn" class="ghost-btn" type="button">安装本地包</button>
-                            <button id="character-install-sample-btn" class="ghost-btn" type="button">安装测试包</button>
-                            <button id="character-reset-active-btn" class="danger-btn" type="button">恢复默认人物</button>
-                        </div>
-
-                        <div class="field">
-                            <div class="field-meta">
-                                <span class="field-label">已安装人物包 / 皮肤包</span>
-                            </div>
-                            <div id="character-pack-list" class="asset-pack-list">
-                                <div class="field-help">还没有安装本地人物包。</div>
-                            </div>
-                            <div class="field-help" id="character-pack-root">安装目录读取中...</div>
-                        </div>
-                    </div>
-                </section>
-
                 <section class="panel-section advanced-panel section-dialogue" id="section-dialogue">
                     <details class="advanced-section">
                         <summary>高级设置：人物对话框</summary>
@@ -2228,20 +377,14 @@
                 </section>
 
                 <section class="control-page" id="page-agent" data-control-page="agent" role="tabpanel" aria-labelledby="tab-agent">
-                    <div class="page-intro">
-                        <div class="page-eyebrow">Agent</div>
-                        <div class="page-title">任务能力</div>
-                        <div class="page-copy">聊天与任务由同一个 AILIS 处理。这里设置执行权限并查看 Agent Lab。</div>
-                    </div>
+                    <div class="page-intro"><h2>互动与陪伴</h2><p>交流的节奏、执行的权限，由你决定。</p></div>
                     <div class="section-grid">
                 <section class="panel-section section-permissions" id="section-agent">
                     <div class="section-head">
                         <div class="section-title">任务权限</div>
-                        <div class="section-copy">只保留用户需要决定的安全开关，内部实现细节不在控制面板展示。</div>
+                        <div class="section-copy">决定 AILIS 可以在这台电脑上做什么。</div>
                     </div>
                     <div class="section-body">
-                        <div class="field-help">AILIS 使用统一会话：聊天、记忆、工具执行与最终回复共享上下文，无需切换人物和任务模式。</div>
-
                         <label class="field inline">
                             <div>
                                 <div class="field-label">完全控制能力</div>
@@ -2263,13 +406,6 @@
                             <div class="field-help" id="ember-harness-status">当前已关闭。</div>
                         </label>
 
-                        <div class="field">
-                            <div class="field-meta">
-                                <span class="field-label">Agent 分析台</span>
-                                <button id="open-agent-lab-btn" class="primary-btn" type="button">打开独立分析台</button>
-                            </div>
-                            <div class="field-help">在独立窗口中运行、逐轮调试和分析 Agent Loop，不占用控制面板空间。</div>
-                        </div>
                     </div>
                 </section>
                 <section class="panel-section section-proactive-companion" id="section-proactive-companion">
@@ -2290,35 +426,33 @@
                             <div class="field-help">主动陪伴模式不再先判断是否开口，而是直接生成承接当前对话和记忆的陪伴内容；工作模式才由模型判断是否值得反馈。</div>
                         </label>
 
-                        <div class="field-help">
-                            普通对话适合按需交流；主动陪伴适合持续聊天；工作模式适合长任务期间的低频进度和阻塞反馈。
-                        </div>
-
                         <div class="field-help">主动内容会读取最近对话与长期记忆，并避开用户正在输入、AILIS 正在回复或语音仍在播放的时刻。</div>
                     </div>
                 </section>
                     </div>
                 </section>
 
-                <section class="control-page" id="page-model" data-control-page="model" role="tabpanel" aria-labelledby="tab-model">
-                    <div class="page-intro">
-                        <div class="page-eyebrow">Brain & Accounts</div>
-                        <div class="page-title">模型账号</div>
-                        <div class="page-copy">模型服务、本地 Ollama 部署入口、API Key 和邮箱账号集中在这里；需要联网或诊断的动作只在用户点击时触发。</div>
-                    </div>
+                <section class="control-page is-active" id="page-model" data-control-page="model" role="tabpanel" aria-labelledby="tab-model">
+                    <div class="page-intro"><h2>模型与连接</h2><p>选择连接方式。各模式分别记住配置，保存后生效。</p></div>
                     <div class="section-grid">
                 <section class="panel-section section-model" id="section-model">
-                    <div class="section-head">
-                        <div class="section-title">模型 API</div>
-                        <div class="section-copy">云端模型填写 Key；Ollama 本地模型通常只需要服务地址和模型名。</div>
-                    </div>
                     <div class="section-body model-console">
-                        <section class="model-status-board" aria-label="当前模型状态">
-                            <div class="model-status-main">
-                                <div class="model-status-kicker">Current Brain</div>
-                                <div class="model-status-title" id="model-active-summary">正在读取模型状态...</div>
+                        <div class="llm-mode-selector" role="group" aria-label="模型连接方式">
+                            <button class="ollama-mode-btn" type="button" data-llm-mode="direct" aria-pressed="false">
+                                <div class="mode-heading"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 5-5 7 5 7m8-14 5 7-5 7M14 3l-4 18"/></svg><strong>直连模型 API</strong></div><span>使用自己的服务商和 API Key</span>
+                            </button>
+                            <button class="ollama-mode-btn" type="button" data-llm-mode="server" aria-pressed="false">
+                                <div class="mode-heading"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 18a4 4 0 0 1-1-7.9 7 7 0 0 1 13.5-2A5 5 0 0 1 18 18Z"/></svg><strong>AILIS 服务器</strong></div><span>免填模型 Key，由服务器转发推理</span>
+                            </button>
+                            <button class="ollama-mode-btn" type="button" data-llm-mode="local" aria-pressed="false">
+                                <div class="mode-heading"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="13" rx="2"/><path d="M12 16v5m-5 0h10"/></svg><strong>本地部署</strong></div><span>通过 Ollama 使用或安装本地模型</span>
+                            </button>
+                        </div>
+                        <div class="field-help" id="llm-connection-mode-help" aria-live="polite"></div>
+                        <details class="model-status-board">
+                            <summary id="model-active-summary">正在读取模型状态...</summary>
+                            <div class="model-status-details">
                                 <div class="model-status-copy" id="model-active-subtitle">这里会显示 AILIS 当前准备使用的模型，以及是否还需要保存、部署或测试。</div>
-                            </div>
                             <div class="model-status-grid">
                                 <div class="model-status-cell">
                                     <div class="model-status-label">服务商</div>
@@ -2345,16 +479,15 @@
                                     <div class="model-status-value" id="model-active-next-step">选择服务商后，AILIS 会提示你下一步该做什么。</div>
                                 </div>
                             </div>
-                        </section>
+                            </div>
+                        </details>
 
-                        <div class="model-choice-grid">
+                        <div class="model-choice-grid" id="llm-direct-fields">
                         <label class="field model-field-card">
                             <div class="field-meta">
                                 <span class="field-label">服务商</span>
                             </div>
                             <select id="llm-preset"></select>
-                            <div class="field-help" id="llm-preset-help">选择服务商后填写对应配置；本地 Ollama 通常不需要 API Key。</div>
-                            <div class="field-help" id="llm-setup-help">本地模型：选择 Ollama 后，AILIS 会引导自动诊断、部署并启用。</div>
                         </label>
 
                         <label class="field model-field-card" id="llm-model-card">
@@ -2362,22 +495,21 @@
                                 <span class="field-label" id="llm-model-label">模型</span>
                             </div>
                             <select id="llm-model-preset"></select>
-                            <div class="field-help" id="llm-model-help">日常对话优先选低延迟模型；复杂任务再选更强的 Pro/Max/Sonnet 类模型。</div>
                         </label>
                         </div>
+
+                        <label class="field">
+                            <div class="field-meta"><span class="field-label" id="llm-base-label">API Base</span></div>
+                            <input id="llm-base-url" type="text" autocomplete="off" placeholder="https://api.deepseek.com">
+                            <div class="field-help" id="llm-base-help"></div>
+                        </label>
 
                         <div class="field local-llm-runtime-panel" id="local-llm-runtime-panel" hidden>
                             <div class="runtime-shell">
                             <div class="runtime-header">
                                 <div>
-                                    <div class="runtime-kicker">Local Runtime</div>
                                     <div class="runtime-title" id="local-llm-runtime-title">本地模型运行时</div>
                                     <div class="runtime-copy" id="local-llm-runtime-copy">选择一种模型来源后，AILIS 会按该来源检查、部署并启用。</div>
-                                </div>
-                                <div class="runtime-stepper" aria-label="本地模型部署步骤">
-                                    <span class="runtime-step"><strong>1</strong>选择模型</span>
-                                    <span class="runtime-step"><strong>2</strong>自动部署服务</span>
-                                    <span class="runtime-step"><strong>3</strong>自动启用</span>
                                 </div>
                             </div>
 
@@ -2469,18 +601,20 @@
                             </div>
                         </div>
 
-                        <label class="field" id="llm-credential-fields">
+                        <div class="field" id="llm-credential-fields">
                             <div class="field-meta">
                                 <span class="field-label">API Key</span>
                                 <button id="clear-llm-key-btn" class="ghost-btn" type="button">移除当前 Key</button>
                             </div>
-                            <select id="llm-api-key-select"></select>
-                            <input id="llm-api-key-label" type="text" autocomplete="off" placeholder="Key 名称，可选：例如 DeepSeek 主 Key、OpenAI 备用 Key">
-                            <input id="llm-api-key" type="password" autocomplete="off" placeholder="粘贴新 Key 后保存；留空则使用上方选中的已保存 Key">
+                            <select id="llm-api-key-select" aria-label="已保存的 API Key"></select>
+                            <div class="key-entry-grid">
+                                <input id="llm-api-key" type="password" autocomplete="off" aria-label="新的 API Key" placeholder="粘贴新 Key 后保存；留空则使用上方选中的已保存 Key">
+                                <input id="llm-api-key-label" type="text" autocomplete="off" aria-label="Key 名称" placeholder="Key 名称，可选：例如 DeepSeek 主 Key、OpenAI 备用 Key">
+                            </div>
                             <div class="field-help" id="llm-key-state">Key 状态读取中...</div>
-                        </label>
+                        </div>
 
-                        <div class="field">
+                        <div class="field connection-check">
                             <div class="field-meta">
                                 <span class="field-label">连接测试</span>
                                 <button id="llm-health-check-btn" class="ghost-btn" type="button">测试连接</button>
@@ -2489,23 +623,19 @@
                         </div>
 
                         <details class="advanced-section">
-                            <summary>高级：手动覆盖 Provider / API Base / 模型 ID</summary>
+                            <summary>高级：协议、模型 ID 与请求参数</summary>
                             <div class="section-body">
-                        <label class="field">
+                                <div class="field-help" id="llm-preset-help">选择服务商后填写对应配置；本地 Ollama 通常不需要 API Key。</div>
+                                <div class="field-help" id="llm-model-help">日常对话优先选低延迟模型；复杂任务再选更强的 Pro/Max/Sonnet 类模型。</div>
+                                <div class="field-help" id="llm-setup-help">本地模型：选择 Ollama 后，AILIS 会引导自动诊断、部署并启用。</div>
+                        <label class="field" id="llm-advanced-provider-field">
                             <div class="field-meta">
                                 <span class="field-label">高级 Provider</span>
                             </div>
                             <select id="llm-provider"></select>
                         </label>
 
-                        <label class="field">
-                            <div class="field-meta">
-                                <span class="field-label">高级 API Base</span>
-                            </div>
-                            <input id="llm-base-url" type="text" placeholder="https://ark.cn-beijing.volces.com/api/v3">
-                        </label>
-
-                        <label class="field">
+                        <label class="field" id="llm-advanced-model-field">
                             <div class="field-meta">
                                 <span class="field-label">高级模型 ID</span>
                             </div>
@@ -2540,17 +670,15 @@
                 </section>
 
                 <section class="panel-section section-model" id="section-vision-model">
-                    <div class="section-head">
-                        <div class="section-title">视觉模型</div>
-                        <div class="section-copy">主模型不支持图片时，由独立视觉模型读取桌面截图，再把文字观察交给 TaskAgent。不会持续录屏，只在任务需要时截图。</div>
-                    </div>
+                    <details class="advanced-section" id="vision-model-settings">
+                    <summary>可选：独立视觉模型</summary>
                     <div class="section-body">
                         <label class="field checkbox-field">
                             <span class="checkbox-row">
                                 <input id="vision-llm-enabled" type="checkbox">
                                 <span>启用独立视觉模型</span>
                             </span>
-                            <span class="field-help">当前 DeepSeek 主模型需要开启此项；如果主模型本身支持图片，可以保持关闭并直接使用主模型视觉。</span>
+                            <span class="field-help">主模型支持图片时无需单独配置；不支持时可在这里接入视觉模型。</span>
                         </label>
 
                         <div class="split-2">
@@ -2594,13 +722,12 @@
 
                         <div class="field-help" id="vision-llm-capability-state">视觉能力状态读取中...</div>
                     </div>
+                    </details>
                 </section>
 
                 <section class="panel-section section-email" id="section-email">
-                    <div class="section-head">
-                        <div class="section-title">邮箱账号</div>
-                        <div class="section-copy">邮件工具会优先使用这里保存的本机账号配置。QQ 使用邮箱授权码，Gmail/Outlook 可用应用密码或 OAuth2 token。</div>
-                    </div>
+                    <details class="advanced-section" id="email-settings">
+                    <summary>可选：工具邮箱账号</summary>
                     <div class="section-body">
                         <div class="split-2">
                             <label class="field">
@@ -2653,21 +780,18 @@
                             </label>
                         </div>
                     </div>
+                    </details>
                 </section>
                     </div>
                 </section>
 
                 <section class="control-page" id="page-voice" data-control-page="voice" role="tabpanel" aria-labelledby="tab-voice">
-                    <div class="page-intro">
-                        <div class="page-eyebrow">Voice</div>
-                        <div class="page-title">语音与麦克风</div>
-                        <div class="page-copy">语音输出、ElevenLabs、CosyVoice、本地 ASR 和麦克风设置集中在这里；诊断和修复仍然保持用户主动触发。</div>
-                    </div>
+                    <div class="page-intro"><h2>声音与聆听</h2><p>选择她的声音，也让她听见你。</p></div>
                     <div class="section-grid">
                 <section class="panel-section section-speech" id="section-voice">
                     <div class="section-head">
-                        <div class="section-title">语音与麦克风</div>
-                        <div class="section-copy">普通用户只需要选择语音路线、麦克风和 ASR 模式；音频细节放在高级设置里。</div>
+                        <div class="section-title">语音输出</div>
+                        <div class="section-copy">选择 AILIS 如何说话。</div>
                     </div>
                     <div class="section-body">
                         <label class="field">
@@ -2677,13 +801,25 @@
                             <select id="speech-mode"></select>
                         </label>
 
-                        <label class="toggle-row">
+                        <div id="hosted-tts-settings" hidden>
+                            <p class="field-help">普通语音使用在线合成，无需 Key 或本地模型。需要联网，仅发送待朗读的文本。</p>
+                            <details class="advanced-section">
+                                <summary>语音服务地址（可选）</summary>
+                                <label class="field">
+                                    <span class="field-label">语音服务地址</span>
+                                    <input id="hosted-tts-base-url" type="url" autocomplete="off" placeholder="https://101.133.239.56">
+                                    <span class="field-help">默认使用 AILIS 网页语音服务；自建服务可修改此地址。</span>
+                                </label>
+                            </details>
+                        </div>
+
+                        <label class="toggle-row" id="chunked-tts-settings" hidden>
                             <input id="chunked-tts-enabled" type="checkbox">
                             <span>分段语音（边生成边播放）</span>
                         </label>
 
-                        <details class="advanced-section">
-                            <summary>高级 ElevenLabs 参数</summary>
+                        <details class="advanced-section" id="elevenlabs-settings" hidden open>
+                            <summary>ElevenLabs</summary>
                             <div class="section-body">
                         <label class="field">
                             <div class="field-meta">
@@ -2708,6 +844,9 @@
                             <div class="field-help" id="elevenlabs-key-state">Key 状态读取中...</div>
                         </label>
 
+                        <details class="advanced-section">
+                            <summary>音色与高级参数</summary>
+                            <div class="section-body">
                         <div class="split-2">
                             <label class="field">
                                 <div class="field-meta">
@@ -2792,25 +931,10 @@
                         </label>
                             </div>
                         </details>
-
-                        <label class="field">
-                            <div class="field-meta">
-                                <span class="field-label">默认麦克风</span>
-                                <button id="refresh-mics-btn" class="ghost-btn" type="button">刷新设备</button>
                             </div>
-                            <select id="preferred-mic"></select>
-                            <div class="field-help" id="mic-help">会优先使用这里指定的输入设备。</div>
-                        </label>
+                        </details>
 
-                        <label class="field">
-                            <div class="field-meta">
-                                <span class="field-label">语音识别模式</span>
-                            </div>
-                            <select id="recognition-mode"></select>
-                            <div class="field-help">快速 ASR 会更早收尾并优先低延迟；自动 ASR 会持续监听，并先做人声/噪音门禁。</div>
-                        </label>
-
-                        <div class="field local-voice-runtime-panel">
+                        <div class="field local-voice-runtime-panel" id="cosyvoice-settings" hidden>
                             <div class="runtime-header">
                                 <div>
                                     <div class="runtime-title">CosyVoice3 本地语音</div>
@@ -2836,65 +960,57 @@
                             <pre class="runtime-log" id="voice-runtime-log" hidden></pre>
                         </div>
 
-                        <div class="field local-voice-runtime-panel" id="runtime-components-panel">
-                            <div class="runtime-header">
-                                <div>
-                                    <div class="runtime-title">安装包可选运行时</div>
-                                    <div class="runtime-copy">安装器里选择的 Python、CosyVoice3、ASR、Web/Search 会在这里继续安装、导入或验证。</div>
-                                </div>
-                                <div class="field-actions">
-                                    <button id="runtime-components-refresh-btn" class="ghost-btn" type="button">检查</button>
-                                    <button id="runtime-components-install-btn" class="primary-btn" type="button">安装已选组件</button>
-                                </div>
-                            </div>
-                            <div id="runtime-components-status" class="runtime-diagnostics">运行时组件状态读取中...</div>
-                            <div class="field-help" id="runtime-components-plan"></div>
-                            <pre class="runtime-log" id="runtime-components-log" hidden></pre>
-                        </div>
-
-                        <details class="advanced-section">
-                            <summary>高级本地语音参数</summary>
-                            <div class="section-body">
+                    </div>
+                </section>
+                <section class="panel-section section-microphone" id="section-microphone">
+                    <div class="section-head">
+                        <div class="section-title">语音输入</div>
+                        <div class="section-copy">选择麦克风和语音识别方式。</div>
+                    </div>
+                    <div class="section-body">
                         <label class="field">
                             <div class="field-meta">
-                                <span class="field-label">本地语音速度</span>
-                                <span class="field-value" id="tts-rate-value"></span>
+                                <span class="field-label">默认麦克风</span>
+                                <button id="refresh-mics-btn" class="ghost-btn" type="button">刷新设备</button>
                             </div>
-                            <input id="tts-rate" type="range" min="0.6" max="1.4" step="0.01">
+                            <select id="preferred-mic"></select>
+                            <div class="field-help" id="mic-help">会优先使用这里指定的输入设备。</div>
                         </label>
-
                         <label class="field">
-                            <div class="field-meta">
-                                <span class="field-label">本地语音音高</span>
-                                <span class="field-value" id="tts-pitch-value"></span>
-                            </div>
-                            <input id="tts-pitch" type="range" min="0.6" max="1.6" step="0.01">
+                            <div class="field-meta"><span class="field-label">语音识别模式</span></div>
+                            <select id="recognition-mode"></select>
+                            <div class="field-help">快速 ASR 会更早收尾并优先低延迟；自动 ASR 会持续监听，并先做人声/噪音门禁。</div>
                         </label>
-
-                        <label class="field">
-                            <div class="field-meta">
-                                <span class="field-label">本地语音音量</span>
-                                <span class="field-value" id="tts-volume-value"></span>
-                            </div>
-                            <input id="tts-volume" type="range" min="0" max="1" step="0.01">
-                        </label>
-                            </div>
-                        </details>
                     </div>
                 </section>
                     </div>
                 </section>
 
                 <section class="control-page" id="page-advanced" data-control-page="advanced" role="tabpanel" aria-labelledby="tab-advanced">
-                    <div class="page-intro">
-                        <div class="page-eyebrow">Diagnostics</div>
-                        <div class="page-title">诊断与状态</div>
-                        <div class="page-copy">运行状态、工具状态、记忆目录和低频维护入口放在这里，避免它们拖慢或干扰首屏常用设置。</div>
-                    </div>
+                    <div class="page-intro"><h2>维护与诊断</h2><p>按需检查运行状态、管理组件和本地数据。</p></div>
                     <div class="section-grid">
                 <section class="panel-section advanced-panel section-runtime" id="section-advanced">
+                    <div class="field">
+                        <div class="field-meta">
+                            <span class="field-label">Agent 分析台</span>
+                            <button id="open-agent-lab-btn" class="ghost-btn" type="button">打开独立分析台</button>
+                        </div>
+                    </div>
+                    <details class="advanced-section" id="runtime-components-panel">
+                        <summary>可选运行时组件</summary>
+                        <div class="section-body">
+                            <div class="field-help">Python、CosyVoice3、ASR、Web/Search 的安装与验证。</div>
+                            <div class="field-actions">
+                                <button id="runtime-components-refresh-btn" class="ghost-btn" type="button">检查</button>
+                                <button id="runtime-components-install-btn" class="primary-btn" type="button">安装已选组件</button>
+                            </div>
+                            <div id="runtime-components-status" class="runtime-diagnostics">运行时组件状态读取中...</div>
+                            <div class="field-help" id="runtime-components-plan"></div>
+                            <pre class="runtime-log" id="runtime-components-log" hidden></pre>
+                        </div>
+                    </details>
                     <details class="advanced-section">
-                        <summary>高级设置：运行状态与记忆目录</summary>
+                        <summary>运行状态与数据目录</summary>
                         <div class="section-body">
                             <label class="field">
                                 <div class="field-meta">
@@ -2923,7 +1039,11 @@
                                 <div class="field-help" id="package-state-text">运行环境读取中...</div>
                                 <div class="field-help" id="user-data-path"></div>
                             </div>
-
+                        </div>
+                    </details>
+                    <details class="advanced-section">
+                        <summary>记忆数据管理</summary>
+                        <div class="section-body">
                             <div class="field">
                                 <div class="field-meta">
                                     <span class="field-label">Memory 路径</span>
@@ -2937,11 +1057,14 @@
                                 <div class="field-help" id="memory-path-text"></div>
                                 <div class="memory-list" id="memory-block-list"></div>
                             </div>
-
+                        </div>
+                    </details>
+                    <details class="advanced-section">
+                        <summary>运行时资产管理</summary>
+                        <div class="section-body">
                             <div class="field local-voice-runtime-panel">
                                 <div class="runtime-header">
                                     <div>
-                                        <div class="runtime-title">运行时资产管理</div>
                                         <div class="runtime-copy">统一扫描、迁移和清理 models、.ailis-runtime、build-cache 中的可重建资产；不会自动删除任何文件。</div>
                                     </div>
                                     <div class="field-actions">
@@ -2964,7 +1087,10 @@
         </main>
 
         <footer id="footer-bar">
-            <div id="status-text">正在读取当前配置...</div>
+            <div class="save-feedback">
+                <div id="settings-save-state" aria-live="polite">正在读取当前配置...</div>
+                <div id="status-text" role="status">正在读取当前配置...</div>
+            </div>
             <div id="footer-actions">
                 <button id="reset-btn" class="danger-btn" type="button">恢复默认</button>
                 <button id="save-btn" class="primary-btn" type="button" disabled>保存设置</button>

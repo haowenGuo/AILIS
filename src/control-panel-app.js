@@ -5,8 +5,17 @@ import {
     setUiLanguage,
     t
 } from './i18n.js';
+import { createFormBaseline, hasFormChanges } from './control-panel-draft.js';
+import { installSettingsSearch } from './settings-search.js';
 
 const elements = {
+    llmModeButtons: [...document.querySelectorAll('[data-llm-mode]')],
+    llmModeHelp: document.getElementById('llm-connection-mode-help'),
+    llmDirectFields: document.getElementById('llm-direct-fields'),
+    llmBaseLabel: document.getElementById('llm-base-label'),
+    llmBaseHelp: document.getElementById('llm-base-help'),
+    llmAdvancedProviderField: document.getElementById('llm-advanced-provider-field'),
+    llmAdvancedModelField: document.getElementById('llm-advanced-model-field'),
     appVersion: document.getElementById('app-version'),
     avatarBubbleAvatarPreview: document.getElementById('avatar-bubble-avatar-preview'),
     avatarBubbleEditor: document.getElementById('avatar-bubble-editor'),
@@ -40,7 +49,6 @@ const elements = {
     characterActiveSummary: document.getElementById('character-active-summary'),
     characterActiveType: document.getElementById('character-active-type'),
     characterInstallFolderBtn: document.getElementById('character-install-folder-btn'),
-    characterInstallSampleBtn: document.getElementById('character-install-sample-btn'),
     characterPackList: document.getElementById('character-pack-list'),
     characterPackRoot: document.getElementById('character-pack-root'),
     characterResetActiveBtn: document.getElementById('character-reset-active-btn'),
@@ -224,13 +232,8 @@ const elements = {
     renderShadowQualityValue: document.getElementById('render-shadow-quality-value'),
     saveBtn: document.getElementById('save-btn'),
     speechMode: document.getElementById('speech-mode'),
+    hostedTtsBaseUrl: document.getElementById('hosted-tts-base-url'),
     statusText: document.getElementById('status-text'),
-    ttsPitch: document.getElementById('tts-pitch'),
-    ttsPitchValue: document.getElementById('tts-pitch-value'),
-    ttsRate: document.getElementById('tts-rate'),
-    ttsRateValue: document.getElementById('tts-rate-value'),
-    ttsVolume: document.getElementById('tts-volume'),
-    ttsVolumeValue: document.getElementById('tts-volume-value'),
     uiLanguage: document.getElementById('ui-language'),
     userDataPath: document.getElementById('user-data-path'),
     voiceRuntimeBootstrapBtn: document.getElementById('voice-runtime-bootstrap-btn'),
@@ -252,7 +255,7 @@ const elements = {
     runtimeAssetsSummary: document.getElementById('runtime-assets-summary')
 };
 
-const CONTROL_PAGE_ORDER = Object.freeze(['overview', 'appearance', 'agent', 'model', 'voice', 'advanced']);
+const CONTROL_PAGE_ORDER = Object.freeze(['model', 'appearance', 'voice', 'agent', 'advanced']);
 const CONTROL_PAGE_DEFAULT = CONTROL_PAGE_ORDER[0];
 const AUTO_CHAT_MODE_SETTINGS = Object.freeze({
     off: {
@@ -296,8 +299,12 @@ function getInitialControlPageId() {
     return normalizeControlPageId(window.location.hash || CONTROL_PAGE_DEFAULT);
 }
 
+const controlPageScrollPositions = new Map();
 function setActiveControlPage(pageId, { updateHash = true, resetScroll = true } = {}) {
     const nextPageId = normalizeControlPageId(pageId);
+    const content = document.getElementById('content');
+    const previousPage = document.querySelector('.control-page.is-active')?.dataset.controlPage;
+    if (previousPage && content) controlPageScrollPositions.set(previousPage, content.scrollTop);
     document.querySelectorAll('.control-page').forEach((page) => {
         const active = page.dataset.controlPage === nextPageId;
         page.classList.toggle('is-active', active);
@@ -314,7 +321,7 @@ function setActiveControlPage(pageId, { updateHash = true, resetScroll = true } 
     });
 
     if (resetScroll) {
-        document.getElementById('content')?.scrollTo({ top: 0, behavior: 'auto' });
+        content?.scrollTo({ top: controlPageScrollPositions.get(nextPageId) || 0, behavior: 'auto' });
     }
 
     if (updateHash) {
@@ -337,11 +344,12 @@ function initializeControlPageNavigation() {
     document.querySelectorAll('#control-nav [role="tab"]').forEach((tab, index, tabs) => {
         tab.addEventListener('keydown', (event) => {
             const direction = event.key === 'ArrowRight' ? 1 : event.key === 'ArrowLeft' ? -1 : 0;
-            if (!direction) {
+            if (!direction && event.key !== 'Home' && event.key !== 'End') {
                 return;
             }
             event.preventDefault();
-            const nextTab = tabs[(index + direction + tabs.length) % tabs.length];
+            const nextIndex = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : (index + direction + tabs.length) % tabs.length;
+            const nextTab = tabs[nextIndex];
             nextTab.focus();
             setActiveControlPage(nextTab.dataset.controlPageTarget);
         });
@@ -356,6 +364,7 @@ function initializeControlPageNavigation() {
 
 const speechModeLabels = {
     off: '关闭语音',
+    hosted: '普通语音模式',
     server: 'ElevenLabs 云端语音',
     cosyvoice3: 'CosyVoice3 本地高质量',
 };
@@ -472,7 +481,7 @@ const llmPresetCatalog = [
     {
         id: 'ailis-cloud',
         label: 'AILIS Cloud（推荐，免 API Key）',
-        help: '开箱即用：Persona、TaskAgent、记忆与电脑工具留在本机，仅模型推理经 AILIS 服务器安全中转。',
+        help: 'Agent、记忆与电脑工具留在本机，仅模型推理经 AILIS 服务器中转。',
         provider: 'ailis-cloud',
         baseUrl: 'https://101.133.239.56/api/llm/v1',
         models: [
@@ -698,6 +707,7 @@ const BUBBLE_PREVIEW_BASE_WIDTH = 158;
 const BUBBLE_PREVIEW_BASE_HEIGHT = 58;
 
 let currentPreferences = null;
+let formBaseline = null;
 let panelState = null;
 let microphoneDevices = [];
 let saveInFlight = false;
@@ -712,6 +722,8 @@ let draftElevenLabsActiveLanguageCode = 'zh';
 let llmProviderDefaultBaseUrls = { ...fallbackLlmProviderDefaultBaseUrls };
 let llmProviderDefaultModels = { ...fallbackLlmProviderDefaultModels };
 let lastLlmProviderValue = 'openai-compatible';
+let llmConnectionProfiles = {};
+const llmCredentialDrafts = new Map();
 let lastVisionLlmProviderValue = 'openai-compatible';
 let vllmModelCatalogResults = [];
 let vllmModelCatalogLastResult = null;
@@ -1609,6 +1621,7 @@ function syncDialoguePreview() {
 }
 
 function updateRangeLabels() {
+    syncSpeechModeFields();
     elements.avatarBubbleLeftValue.textContent = formatPixelValue(elements.avatarBubbleLeft.value);
     elements.avatarBubbleTopValue.textContent = formatPixelValue(elements.avatarBubbleTop.value);
     elements.avatarBubbleScaleValue.textContent = `${Math.round(Number(elements.avatarBubbleScale.value || 1) * 100)}%`;
@@ -1649,9 +1662,6 @@ function updateRangeLabels() {
         elements.petMouseHitTestOffsetY.value || 0.08,
         0.08
     );
-    elements.ttsRateValue.textContent = formatValue(elements.ttsRate.value);
-    elements.ttsPitchValue.textContent = formatValue(elements.ttsPitch.value);
-    elements.ttsVolumeValue.textContent = formatValue(elements.ttsVolume.value);
     elements.llmTemperatureValue.textContent = formatValue(elements.llmTemperature.value);
     syncDialoguePreview();
 }
@@ -1687,7 +1697,9 @@ function normalizePreferences(preferences = {}) {
         : String(preferences.llmModel || 'doubao-seed-2-0-mini-260215');
     const normalizedOllamaTarget = normalizeOllamaTarget(preferences.ollamaTarget || {}, {
         ollamaDeploymentMode: preferences.ollamaDeploymentMode,
-        modelId: normalizedLlmModel,
+        modelId: normalizedLlmProvider === 'ollama'
+            ? normalizedLlmModel
+            : preferences.llmConnectionProfiles?.local?.model || fallbackLlmProviderDefaultModels.ollama,
         localModelPath: preferences.ollamaLocalModelPath
     });
 
@@ -1695,6 +1707,7 @@ function normalizePreferences(preferences = {}) {
         petScale: String(preferences.petScale ?? '0.85'),
         petSkipTaskbar: Boolean(preferences.petSkipTaskbar),
         speechMode: String(preferences.speechMode || 'off'),
+        hostedTtsBaseUrl: String(preferences.hostedTtsBaseUrl || '').trim(),
         chunkedTtsEnabled: preferences.chunkedTtsEnabled !== false,
         recognitionMode: String(preferences.recognitionMode || 'auto-vad'),
         conversationMode: 'assistant',
@@ -1709,6 +1722,7 @@ function normalizePreferences(preferences = {}) {
         llmProvider: normalizedLlmProvider,
         llmBaseUrl: normalizedLlmBaseUrl,
         llmModel: normalizedLlmModel,
+        llmConnectionProfiles: preferences.llmConnectionProfiles || {},
         ollamaTarget: normalizedOllamaTarget,
         ollamaDeploymentMode: ollamaSourceToLegacyMode(normalizedOllamaTarget.source),
         ollamaLocalModelPath: String(preferences.ollamaLocalModelPath || '').trim(),
@@ -2044,9 +2058,9 @@ function getCurrentOllamaTarget(overrides = {}) {
         currentOllamaTarget.source ||
         ollamaDeploymentMode
     ) || 'installed';
-    const modelFromForm = elements.llmModel?.value?.trim() ||
+    const modelFromForm = (elements.llmProvider?.value === 'ollama' ? elements.llmModel?.value?.trim() : '') ||
+        currentOllamaTarget.modelId ||
         elements.ollamaInstalledModelId?.value?.trim() ||
-        currentPreferences?.llmModel ||
         getProviderDefaultModel('ollama');
     const localPath = getOllamaLocalModelPath() ||
         currentOllamaTarget.localPath ||
@@ -2072,6 +2086,7 @@ function setCurrentOllamaTarget(nextTarget = {}) {
 }
 
 function readFormPreferences({ includeSecret = false } = {}) {
+    captureLlmConnectionDraft();
     captureCurrentElevenLabsProfile();
     const nextOllamaTarget = getCurrentOllamaTarget();
     const pendingLlmApiKeyInput = elements.llmApiKey?.value?.trim() || '';
@@ -2079,6 +2094,7 @@ function readFormPreferences({ includeSecret = false } = {}) {
         petScale: Number(elements.petScale.value),
         petSkipTaskbar: !elements.petShowTaskbar.checked,
         speechMode: elements.speechMode.value,
+        hostedTtsBaseUrl: elements.hostedTtsBaseUrl.value.trim(),
         chunkedTtsEnabled: elements.chunkedTtsEnabled.checked,
         recognitionMode: elements.recognitionMode.value,
         conversationMode: elements.conversationMode?.value || currentPreferences?.conversationMode || 'assistant',
@@ -2097,6 +2113,7 @@ function readFormPreferences({ includeSecret = false } = {}) {
         llmProvider: elements.llmProvider.value,
         llmBaseUrl: elements.llmBaseUrl.value,
         llmModel: elements.llmModel.value,
+        llmConnectionProfiles,
         ollamaTarget: nextOllamaTarget,
         ollamaDeploymentMode: ollamaSourceToLegacyMode(nextOllamaTarget.source),
         ollamaLocalModelPath: getOllamaLocalModelPath() || currentOllamaTarget.localPath || '',
@@ -2166,9 +2183,9 @@ function readFormPreferences({ includeSecret = false } = {}) {
         renderShadowQuality: Number(elements.renderShadowQuality.value),
         renderOutlineEnabled: elements.renderOutlineEnabled.checked,
         renderAntialiasEnabled: elements.renderAntialiasEnabled.checked,
-        desktopNativeTtsRate: Number(elements.ttsRate.value),
-        desktopNativeTtsPitch: Number(elements.ttsPitch.value),
-        desktopNativeTtsVolume: Number(elements.ttsVolume.value),
+        desktopNativeTtsRate: currentPreferences?.desktopNativeTtsRate,
+        desktopNativeTtsPitch: currentPreferences?.desktopNativeTtsPitch,
+        desktopNativeTtsVolume: currentPreferences?.desktopNativeTtsVolume,
         avatarDialogueBubbleLeft: Number(elements.avatarBubbleLeft.value),
         avatarDialogueBubbleTop: Number(elements.avatarBubbleTop.value),
         avatarDialogueBubbleScale: Number(elements.avatarBubbleScale.value),
@@ -2254,11 +2271,16 @@ function hasDirtyChanges() {
         pendingClearLlmKey ||
         pendingClearVisionLlmKey ||
         pendingClearElevenLabsKey ||
-        JSON.stringify(readFormPreferences()) !== JSON.stringify(currentPreferences);
+        hasFormChanges(readFormPreferences(), currentPreferences, formBaseline);
 }
 
 function syncSaveButton() {
-    elements.saveBtn.disabled = saveInFlight || !hasDirtyChanges();
+    const dirty = hasDirtyChanges();
+    elements.saveBtn.disabled = saveInFlight || !dirty;
+    const state = !currentPreferences ? 'loading' : saveInFlight ? 'saving' : dirty ? 'dirty' : 'saved';
+    document.getElementById('footer-bar').dataset.state = state;
+    const labels = { loading: '正在读取当前配置...', saving: '正在保存设置...', dirty: '有未保存的更改', saved: '配置已保存' };
+    document.getElementById('settings-save-state').textContent = t(labels[state]);
     renderModelActivationState();
 }
 
@@ -2381,6 +2403,7 @@ function renderCharacterAssets(characterAssets = {}) {
     const active = snapshot.active || {};
     const effective = snapshot.effective || {};
     const packs = Array.isArray(snapshot.packs) ? snapshot.packs : [];
+    document.getElementById('character-default-preview').hidden = effective.source === 'asset_pack';
     if (elements.characterActiveType) {
         elements.characterActiveType.textContent = getCharacterPackTypeLabel(effective.type);
     }
@@ -2405,7 +2428,7 @@ function renderCharacterAssets(characterAssets = {}) {
     if (!packs.length) {
         const empty = document.createElement('div');
         empty.className = 'field-help';
-        empty.textContent = '还没有安装本地人物包。可以先点“安装测试包”验证切换流程。';
+        empty.textContent = t('还没有安装本地人物包。');
         elements.characterPackList.appendChild(empty);
         return;
     }
@@ -2478,17 +2501,6 @@ async function installCharacterPackFromFolder() {
     }
     renderCharacterAssets(result?.snapshot);
     setStatus(`已安装人物资产：${result?.installed?.displayName || result?.installed?.id || '本地包'}`);
-}
-
-async function installSampleCharacterPack() {
-    if (!window.ailisDesktop?.assetPacks?.installSample) {
-        setStatus('当前桌面宿主不支持测试人物包。');
-        return;
-    }
-    setStatus('正在安装本地测试皮肤包...');
-    const result = await window.ailisDesktop.assetPacks.installSample();
-    renderCharacterAssets(result?.snapshot);
-    setStatus(`测试皮肤包已安装：${result?.installed?.displayName || result?.installed?.id || 'AILIS Test Skin'}`);
 }
 
 async function activateCharacterPack(packId) {
@@ -2671,6 +2683,9 @@ function getProviderDefaultModel(provider) {
 
 function getSelectedPresetLabel() {
     const preset = getLlmPreset(elements.llmPreset?.value);
+    if (preset?.id === LLM_PRESET_CUSTOM_ID || getLlmConnectionMode() !== 'direct') {
+        return llmProviderLabels[elements.llmProvider?.value] || elements.llmProvider?.value || '未选择';
+    }
     return preset?.label || llmProviderLabels[elements.llmProvider?.value] || elements.llmProvider?.value || '未选择';
 }
 
@@ -2785,7 +2800,7 @@ function renderModelActivationState() {
     elements.modelActiveSubtitle.textContent = localProvider
         ? '本地模型需要先让运行时服务真正启动；部署成功后会自动写回模型配置。'
         : managedProvider
-        ? '本地保留 Persona、TaskAgent、记忆和电脑工具；只有模型推理请求经过 AILIS 服务器。'
+        ? 'Agent、记忆与电脑工具留在本机，仅模型推理经 AILIS 服务器中转。'
         : '云端模型需要 Key、Base URL 和模型 ID 都正确；保存后聊天和 Agent 才会使用。';
     elements.modelActiveProvider.textContent = presetLabel;
     elements.modelActiveModel.textContent = model || '未选择';
@@ -2918,6 +2933,8 @@ function fillLlmPresetOptions() {
         const option = document.createElement('option');
         option.value = preset.id;
         option.textContent = preset.label;
+        option.hidden = getLlmConnectionMode(preset.provider) !== 'direct';
+        option.disabled = option.hidden;
         elements.llmPreset.appendChild(option);
     });
 }
@@ -3059,6 +3076,7 @@ function renderVllmModelCatalogStatus(result = null) {
 function syncLocalLlmRuntimePanel({ maybeRefresh = false } = {}) {
     const provider = getSelectedLocalLlmProvider();
     const visible = Boolean(provider);
+    renderLlmConnectionMode();
     if (elements.localLlmRuntimePanel) {
         elements.localLlmRuntimePanel.hidden = !visible;
     }
@@ -5211,6 +5229,92 @@ function syncLlmPresetSelectionFromFields({ maybeRefreshCatalog = false } = {}) 
     syncVllmModelCatalogPanel({ maybeRefresh: maybeRefreshCatalog });
 }
 
+function getLlmConnectionMode(provider = elements.llmProvider?.value) {
+    return provider === 'ailis-cloud' ? 'server' : provider === 'ollama' ? 'local' : 'direct';
+}
+
+function captureLlmConnectionDraft(provider = elements.llmProvider?.value) {
+    if (!provider) return;
+    llmConnectionProfiles[getLlmConnectionMode(provider)] = {
+        provider,
+        baseUrl: elements.llmBaseUrl.value,
+        model: elements.llmModel.value
+    };
+    // Unsaved secrets stay in this window's memory, never in connection history.
+    llmCredentialDrafts.set(provider, {
+        apiKey: elements.llmApiKey.value,
+        label: elements.llmApiKeyLabel?.value || '',
+        selectedId: elements.llmApiKeySelect?.value || '',
+        clear: pendingClearLlmKey
+    });
+}
+
+function renderLlmConnectionMode() {
+    const mode = getLlmConnectionMode();
+    for (const button of elements.llmModeButtons) {
+        const active = button.dataset.llmMode === mode;
+        button.classList.toggle('is-active', active);
+        button.setAttribute('aria-pressed', String(active));
+    }
+    if (elements.llmDirectFields) elements.llmDirectFields.hidden = mode !== 'direct';
+    if (elements.llmAdvancedProviderField) elements.llmAdvancedProviderField.hidden = mode !== 'direct';
+    if (elements.llmAdvancedModelField) elements.llmAdvancedModelField.hidden = mode === 'server';
+    const descriptions = {
+        direct: '直接连接模型服务商，使用自己的 Key；Agent 和工具在本机运行。',
+        server: '无需填写模型 Key。服务器选择上游模型；Agent 和工具仍在本机运行，提交的上下文会经过服务器。',
+        local: '在本机运行 Ollama 模型。已有模型直接启用；安装运行时或下载新模型时需要联网。'
+    };
+    const baseLabels = { direct: 'API Base', server: 'AILIS 服务器模型接口', local: 'Ollama 服务地址' };
+    const baseHelp = {
+        direct: '使用服务商提供的 API Base；切换模式不会清除已保存的 Key。',
+        server: '默认使用官方服务器；自托管地址需提供兼容的 /api/llm/v1 接口。',
+        local: '默认连接 http://127.0.0.1:11434。仅选择此模式不会自动安装或下载。'
+    };
+    if (elements.llmModeHelp) elements.llmModeHelp.textContent = t(descriptions[mode]);
+    if (elements.llmBaseLabel) elements.llmBaseLabel.textContent = t(baseLabels[mode]);
+    if (elements.llmBaseHelp) elements.llmBaseHelp.textContent = t(baseHelp[mode]);
+    // Advanced protocol choices must not silently move the user into another mode.
+    for (const option of elements.llmProvider?.options || []) {
+        option.hidden = getLlmConnectionMode(option.value) !== mode;
+        option.disabled = option.hidden;
+    }
+}
+
+function setLlmConnectionFields(connection, previousProvider = elements.llmProvider.value) {
+    captureLlmConnectionDraft(previousProvider);
+    elements.llmProvider.value = connection.provider;
+    elements.llmBaseUrl.value = connection.baseUrl;
+    elements.llmModel.value = connection.model;
+    lastLlmProviderValue = connection.provider;
+    const draft = llmCredentialDrafts.get(connection.provider);
+    elements.llmApiKey.value = draft?.apiKey || '';
+    if (elements.llmApiKeyLabel) elements.llmApiKeyLabel.value = draft?.label || '';
+    pendingClearLlmKey = draft?.clear || false;
+    renderLlmApiKeySelect();
+    if (draft?.selectedId && [...elements.llmApiKeySelect.options].some((option) => option.value === draft.selectedId)) {
+        elements.llmApiKeySelect.value = draft.selectedId;
+    }
+    syncLlmPresetSelectionFromFields();
+    syncLlmKeyState();
+    renderLlmCapabilityState();
+    renderLlmHealthState(null);
+    updateRangeLabels();
+    syncSaveButton();
+}
+
+function selectLlmConnectionMode(mode) {
+    if (!['direct', 'server', 'local'].includes(mode) || mode === getLlmConnectionMode()) return;
+    const saved = llmConnectionProfiles[mode];
+    const provider = saved?.provider || ({ direct: 'deepseek', server: 'ailis-cloud', local: 'ollama' })[mode];
+    setLlmConnectionFields({
+        provider,
+        baseUrl: saved?.baseUrl ?? getProviderDefaultBaseUrl(provider),
+        model: saved?.model ?? (mode === 'local'
+            ? currentPreferences?.ollamaUsedModels?.[0] || getProviderDefaultModel(provider)
+            : getProviderDefaultModel(provider))
+    });
+}
+
 function applyLlmPreset(presetId, { preserveModel = false } = {}) {
     const preset = getLlmPreset(presetId);
     if (!preset || preset.id === LLM_PRESET_CUSTOM_ID) {
@@ -5219,33 +5323,11 @@ function applyLlmPreset(presetId, { preserveModel = false } = {}) {
         return;
     }
 
-    elements.llmProvider.value = preset.provider;
-    elements.llmBaseUrl.value = preset.baseUrl;
-    if (!preserveModel || !elements.llmModel.value.trim()) {
-        elements.llmModel.value = getPresetDefaultModel(preset);
-    }
-    lastLlmProviderValue = preset.provider;
-    fillLlmModelPresetOptions(preset.id, elements.llmModel.value);
-    syncLlmPresetHelp(preset.id);
-    syncLlmSetupHelp();
-    syncVllmModelCatalogPanel();
-    syncLlmKeyState();
-    renderLlmCapabilityState();
-    renderLlmHealthState(null);
-}
-
-function applyLlmProviderDefaultsIfNeeded(previousProvider, nextProvider) {
-    if (!previousProvider || previousProvider === nextProvider) {
-        return;
-    }
-    const previousBaseUrl = getProviderDefaultBaseUrl(previousProvider);
-    const previousModel = getProviderDefaultModel(previousProvider);
-    if (!elements.llmBaseUrl.value.trim() || elements.llmBaseUrl.value.trim() === previousBaseUrl) {
-        elements.llmBaseUrl.value = getProviderDefaultBaseUrl(nextProvider);
-    }
-    if (!elements.llmModel.value.trim() || elements.llmModel.value.trim() === previousModel) {
-        elements.llmModel.value = getProviderDefaultModel(nextProvider);
-    }
+    setLlmConnectionFields({
+        provider: preset.provider,
+        baseUrl: preset.baseUrl,
+        model: preserveModel && elements.llmModel.value.trim() ? elements.llmModel.value : getPresetDefaultModel(preset)
+    });
 }
 
 async function runLlmHealthCheck() {
@@ -5388,6 +5470,14 @@ async function runOllamaRuntimeCheck() {
     }
 }
 
+function syncSpeechModeFields() {
+    const mode = elements.speechMode.value;
+    document.getElementById('hosted-tts-settings').hidden = mode !== 'hosted';
+    document.getElementById('elevenlabs-settings').hidden = mode !== 'server';
+    document.getElementById('cosyvoice-settings').hidden = mode !== 'cosyvoice3';
+    document.getElementById('chunked-tts-settings').hidden = !['hosted', 'server', 'cosyvoice3'].includes(mode);
+}
+
 function syncElevenLabsKeyState() {
     if (pendingClearElevenLabsKey) {
         elements.elevenLabsKeyState.textContent = '保存后会清除已保存 Key。';
@@ -5440,6 +5530,7 @@ function fillForm(preferences) {
     elements.petScale.value = normalized.petScale;
     elements.petShowTaskbar.checked = !normalized.petSkipTaskbar;
     elements.speechMode.value = normalized.speechMode;
+    elements.hostedTtsBaseUrl.value = normalized.hostedTtsBaseUrl;
     elements.chunkedTtsEnabled.checked = normalized.chunkedTtsEnabled;
     elements.recognitionMode.value = normalized.recognitionMode;
     if (elements.uiLanguage) {
@@ -5471,6 +5562,8 @@ function fillForm(preferences) {
             : `默认位置：${normalized.voiceRuntimeDefaultRoot || 'AILIS 根目录/models/voice-runtime'}。可改到空间更大的磁盘。`;
     }
     elements.llmProvider.value = normalized.llmProvider;
+    llmConnectionProfiles = structuredClone(normalized.llmConnectionProfiles);
+    llmCredentialDrafts.clear();
     lastLlmProviderValue = normalized.llmProvider;
     elements.llmBaseUrl.value = normalized.llmBaseUrl;
     elements.llmModel.value = normalized.llmModel;
@@ -5563,9 +5656,6 @@ function fillForm(preferences) {
     elements.renderShadowQuality.value = String(normalized.renderShadowQuality);
     elements.renderOutlineEnabled.checked = normalized.renderOutlineEnabled;
     elements.renderAntialiasEnabled.checked = normalized.renderAntialiasEnabled;
-    elements.ttsRate.value = String(normalized.desktopNativeTtsRate);
-    elements.ttsPitch.value = String(normalized.desktopNativeTtsPitch);
-    elements.ttsVolume.value = String(normalized.desktopNativeTtsVolume);
     elements.avatarBubbleLeft.value = String(normalized.avatarDialogueBubbleLeft);
     elements.avatarBubbleTop.value = String(normalized.avatarDialogueBubbleTop);
     elements.avatarBubbleScale.value = String(normalized.avatarDialogueBubbleScale);
@@ -5584,13 +5674,14 @@ function fillForm(preferences) {
     syncElevenLabsKeyState();
     syncEmailSecretStates();
     syncMicrophoneSelection();
-    syncSaveButton();
     renderOllamaLocalModelStatus(normalized.ollamaLocalModelPath
         ? { path: normalized.ollamaLocalModelPath }
         : null);
     renderOllamaModelMemoryLists();
     renderOllamaDeploymentMode();
     applyI18n(document);
+    formBaseline = createFormBaseline(readFormPreferences(), currentPreferences);
+    syncSaveButton();
 }
 
 function renderAgentRuntimeStatus(status = {}) {
@@ -7006,9 +7097,7 @@ function endDialoguePreviewDrag(event) {
     elements.renderShadowQuality,
     elements.petShowTaskbar,
     elements.speechMode,
-    elements.ttsPitch,
-    elements.ttsRate,
-    elements.ttsVolume,
+    elements.hostedTtsBaseUrl,
     elements.uiLanguage
 ].forEach((element) => {
     element?.addEventListener('input', () => {
@@ -7054,6 +7143,10 @@ elements.llmApiKeyLabel?.addEventListener('input', () => {
     syncLlmKeyState();
     syncSaveButton();
 });
+
+for (const button of elements.llmModeButtons) {
+    button.addEventListener('click', () => selectLlmConnectionMode(button.dataset.llmMode));
+}
 
 elements.llmPreset?.addEventListener('change', () => {
     applyLlmPreset(elements.llmPreset.value);
@@ -7265,22 +7358,11 @@ elements.vllmModelQuery?.addEventListener('keydown', (event) => {
 
 elements.llmProvider?.addEventListener('change', () => {
     const nextProvider = elements.llmProvider.value;
-    applyLlmProviderDefaultsIfNeeded(lastLlmProviderValue, nextProvider);
-    lastLlmProviderValue = nextProvider;
-    if (elements.llmApiKey) {
-        elements.llmApiKey.value = '';
-    }
-    if (elements.llmApiKeyLabel) {
-        elements.llmApiKeyLabel.value = '';
-    }
-    pendingClearLlmKey = false;
-    syncLlmPresetSelectionFromFields();
-    syncLlmKeyState();
-    renderLlmCapabilityState();
-    renderLlmHealthState(null);
-    syncVllmModelCatalogPanel();
-    updateRangeLabels();
-    syncSaveButton();
+    setLlmConnectionFields({
+        provider: nextProvider,
+        baseUrl: getProviderDefaultBaseUrl(nextProvider),
+        model: getProviderDefaultModel(nextProvider)
+    }, lastLlmProviderValue);
 });
 
 elements.llmBaseUrl?.addEventListener('input', () => {
@@ -7443,10 +7525,6 @@ elements.characterInstallFolderBtn?.addEventListener('click', () => {
     void installCharacterPackFromFolder();
 });
 
-elements.characterInstallSampleBtn?.addEventListener('click', () => {
-    void installSampleCharacterPack();
-});
-
 elements.characterResetActiveBtn?.addEventListener('click', () => {
     void resetActiveCharacterPack();
 });
@@ -7571,6 +7649,7 @@ window.ailisDesktop?.gateway?.onEvent?.((event = {}) => {
 
 window.addEventListener('DOMContentLoaded', () => {
     initializeControlPageNavigation();
+    installSettingsSearch({ navigate: setActiveControlPage });
     updateRangeLabels();
     void initialize();
 });

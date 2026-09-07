@@ -10,6 +10,42 @@ import {
     summarizeEvents
 } from '../scripts/run-ailis-desktop-real-gaia-eval.mjs';
 
+test('GAIA answer extraction does not search the reference in explanatory prose', () => {
+    const response = { displayText: 'The word is **Egalitarianism**.\n\nThe source also says egalitarian.' };
+    const a = scoreVisibleAnswer({ response, gold: 'egalitarian' });
+    const b = scoreVisibleAnswer({ response, gold: 'Egalitarianism' });
+    assert.equal(a.ok, false);
+    assert.equal(b.ok, true);
+    assert.equal(a.answer, b.answer);
+});
+
+test('GAIA answer extraction retains a short answer at the start of long prose', () => {
+    const response = { displayText: 'The volume is **0.1777 m³**.\n\n' + 'Explanation: radius 0.3047 and height 0.6094. '.repeat(20) };
+    assert.equal(scoreVisibleAnswer({ response, gold: '0.1777', question: 'What was the volume in m^3?' }).ok, true);
+});
+
+test('GAIA answer extraction reads an output code block and balanced boxed math', () => {
+    assert.equal(scoreVisibleAnswer({ response: { displayText: 'The final numeric output is:\n\n```text\n0\n```\n\nIt retries before finishing.' }, gold: '0' }).ok, true);
+    assert.equal(scoreVisibleAnswer({ response: { displayText: 'The area is \\boxed{39\\text{ square units}}.' }, gold: '39', question: 'What is the area?' }).ok, true);
+});
+
+test('GAIA explicit wrong answer must not be rescued by another structured field', () => {
+    const score = scoreVisibleAnswer({ response: { exactAnswer: '41', finalAnswer: '42', displayText: 'Answer: 42' }, gold: '42' });
+    assert.equal(score.ok, false);
+    assert.equal(score.answer, '41');
+});
+
+test('GAIA conflicting final declarations require review, not reference-guided selection', () => {
+    const response = { displayText: 'Answer: 41\nAnswer: 42' };
+    assert.equal(scoreVisibleAnswer({ response, gold: '41' }).ok, false);
+    assert.equal(scoreVisibleAnswer({ response, gold: '42' }).ok, false);
+});
+
+test('GAIA list scoring does not accept extra elements', () => {
+    const score = scoreVisibleAnswer({ response: { displayText: 'red, green, blue' }, gold: 'green, blue' });
+    assert.equal(score.ok, false);
+});
+
 test('desktop-real GAIA defaults to the Luna Codex bridge without a round cap', () => {
     const previousBridge = process.env.AILIS_EVAL_CODEX_MODEL_BRIDGE;
     const previousModel = process.env.AILIS_CODEX_MODEL;
@@ -279,7 +315,7 @@ test('desktop-real visible scorer accepts scaled thousand-unit equivalent only w
     const response = {
         ok: true,
         status: 'completed',
-        displayText: '最终结果：**17000**'
+        displayText: '最终结果：**17000 hours**'
     };
     const question = 'How many thousand hours would it take? Round your result to the nearest 1000 hours.';
 
@@ -288,7 +324,7 @@ test('desktop-real visible scorer accepts scaled thousand-unit equivalent only w
 
     const withQuestion = scoreVisibleAnswer({ response, gold: '17', question });
     assert.equal(withQuestion.ok, true);
-    assert.equal(withQuestion.answer, '17000');
+    assert.equal(withQuestion.answer, '17000 hours');
 });
 
 test('desktop-real visible scorer extracts an English rounded scaled-unit result from a real answer shape', () => {
@@ -313,24 +349,24 @@ test('desktop-real visible scorer extracts inline final result after rendering',
     const response = {
         ok: true,
         status: 'completed',
-        displayText: '总小时数约为 17054.89 小时，四舍五入后，最终结果：**17000**'
+        displayText: '总小时数约为 17054.89 小时，四舍五入后，最终结果：**17000 hours**'
     };
     const question = 'How many thousand hours would it take? Round your result to the nearest 1000 hours.';
     const score = scoreVisibleAnswer({ response, gold: '17', question });
     assert.equal(score.ok, true);
-    assert.equal(score.answer, '17000');
+    assert.equal(score.answer, '17000 hours');
 });
 
 test('desktop-real visible scorer extracts Chinese conclusion answer line', () => {
     const response = {
         ok: true,
         status: 'completed',
-        displayText: '四舍五入到最近千位：**17,000 小时**\n**结论：17000**'
+        displayText: '四舍五入到最近千位：**17,000 小时**\n**结论：17000 hours**'
     };
     const question = 'How many thousand hours would it take? Round your result to the nearest 1000 hours.';
     const score = scoreVisibleAnswer({ response, gold: '17', question });
     assert.equal(score.ok, true);
-    assert.equal(score.answer, '17000');
+    assert.equal(score.answer, '17000 hours');
 });
 
 test('desktop-real visible scorer accepts count answer with semantic unit suffix', () => {

@@ -9,7 +9,7 @@ import { verifyDocumentation } from '../scripts/verify-documentation.mjs';
 const root = fileURLToPath(new URL('..', import.meta.url));
 test('maintained manual links, source references and commands resolve', () => {
     const result = verifyDocumentation(root);
-    assert.equal(result.documents, 34);
+    assert.ok(result.documents >= 34, 'keep the maintained manual while allowing new release documentation');
     assert.ok(result.links >= 218);
     assert.deepEqual(result.errors, []);
 });

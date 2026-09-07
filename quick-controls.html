@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+    <title>AILIS Quick Controls</title>
+    <link rel="stylesheet" href="./src/quick-controls.css">
+</head>
+<body>
+    <main id="quick-panel" aria-label="快捷设置">
+        <header>
+            <img src="./Resources/Emotes/ailis-small/wave.png" width="36" height="42" alt="">
+            <div><strong>AILIS</strong><span>随时在你身边</span></div>
+            <button id="dismiss" type="button" aria-label="关闭" title="关闭"><svg viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
+        </header>
+        <div class="quick-actions">
+            <button type="button" id="quick-chat" data-action="chat"><svg viewBox="0 0 24 24"><path d="M20 15a3 3 0 0 1-3 3H9l-5 4V6a3 3 0 0 1 3-3h10a3 3 0 0 1 3 3Z"/><path d="M8 8h8m-8 5h5"/></svg><span>聊天</span></button>
+            <button type="button" data-action="controlPanel"><svg viewBox="0 0 24 24"><path d="M4 3v18M12 3v18M20 3v18M1 8h6m2 8h6m2-10h6"/></svg><span>控制面板</span></button>
+        </div>
+        <section class="voice-section"><h2>语音模式</h2><div id="voice-options" role="group" aria-label="语音模式"></div></section>
+        <label class="quick-row"><span>人物大小</span><select id="quick-scale" aria-label="人物大小"></select></label>
+        <label class="quick-row"><span>语言</span><select id="quick-language" aria-label="界面语言"></select></label>
+        <footer><span id="quick-status" role="status">选择后立即生效</span><button type="button" data-action="quit" id="quick-quit">退出 AILIS</button></footer>
+    </main>
+    <script type="module" src="./src/quick-controls.js"></script>
+</body>
+</html>

@@ -4,7 +4,7 @@
   "profiles": {
     "desktop": {
       "entries": ["electron/main.cjs"],
-      "pages": {"agentLab": "agent-lab.html", "control": "control.html", "pet": "pet.html", "chat": "chat.html", "visionRegion": "vision-region.html"},
+      "pages": {"agentLab": "agent-lab.html", "control": "control.html", "pet": "pet.html", "chat": "chat.html", "quickControls": "quick-controls.html", "visionRegion": "vision-region.html"},
       "tests": ["tests/ailis-unified-agent.test.mjs", "tests/ailis-code-mode-packaging.test.mjs", "tests/ailis-runtime.test.mjs", "tests/ailis-production-closure.test.mjs"]
     },
     "hosted": {"entries": ["scripts/start-ailis-hosted-runtime.cjs"], "pages": {}, "tests": ["tests/ailis-hosted-runtime.test.mjs"]},
@@ -13,6 +13,7 @@
   },
   "edges": [
     {"from": "electron/main.cjs", "to": ["electron/preload.cjs", "installer/ailis-runtime-components.json"], "reason": "Electron preload boundary and runtime component installer manifest"},
+    {"from": "electron/quick-controls-window.cjs", "to": ["electron/quick-controls-preload.cjs"], "reason": "Sandboxed quick controls preload loaded by BrowserWindow"},
     {"from": "electron/ailis-code-mode-runtime.cjs", "to": ["electron/ailis-code-mode-worker.cjs"], "reason": "forked code-mode process; not a require/import"},
     {"from": "electron/local-asr-manager.cjs", "to": ["electron/desktop_asr_worker.py"], "reason": "Python ASR process"},
     {"from": "electron/desktop-cosyvoice3-tts.cjs", "to": ["electron/cosyvoice3_tts_worker.py"], "reason": "Python streaming TTS process"},
@@ -26,6 +27,7 @@
     {"from": "electron/ailis-skills.cjs", "directories": ["electron/skills"], "reason": "dynamic skill ID enumeration; preserve every bundled skill and its resources"}
   ],
   "externalLoads": [
+    {"from": "electron/main.cjs", "expression": "require(process.env.AILIS_WORLD_SERVICE_MODULE)", "reason": "opt-in headless world transport, supplied by the developer through AILIS_WORLD_SERVICE_ONLY and an external module path; not enabled or bundled in the desktop release"},
     {"from": "electron/ailis-gateway.cjs", "expression": "import(pathToFileURL(harnessPath).href)", "reason": "optional OpenClaw SDK agent-harness in separately prepared build-cache/openclaw-runtime; not bundled or validated by source closure"},
     {"from": "electron/openclaw-runtime.cjs", "expression": "import(pathToFileURL(runtimePath).href)", "reason": "optional OpenClaw gateway SDK, selected from installed runtime candidates; no hermeticity claim for this path"}
   ],

@@ -3,7 +3,7 @@
   <h1>AILIS</h1>
   <p><strong>能看、能听、能记住，也能真正把事情做完的开源桌面 AI 伙伴。</strong></p>
   <p>
-    <img alt="Version" src="https://img.shields.io/badge/version-1.4.1-2563eb?style=flat-square">
+    <img alt="Version" src="https://img.shields.io/badge/version-1.4.2-2563eb?style=flat-square">
     <img alt="Desktop" src="https://img.shields.io/badge/desktop-Electron-0f172a?style=flat-square">
     <img alt="License" src="https://img.shields.io/badge/license-MIT-059669?style=flat-square">
   </p>
@@ -110,9 +110,9 @@ Humanlike 检查点来自 30 天陪伴场景，不代表真实用户连续使用
 
 ## 快速开始
 
-### v1.4.1 更新
+### v1.4.2 更新
 
-本版整合稳定的追加式上下文、受审批与审计约束的 code-mode 工具运行时、辅助视觉路由，并修复压缩时附件上下文丢失和韩语语音配置兼容问题。升级方式与边界见[版本说明](https://github.com/haowenGuo/AILIS/blob/659bf61f2b340d2313b3bae386704265c8d2bba2/docs/releases/v1.4.1.md)。缓存命中率与费用取决于服务商和实际任务，不承诺固定降幅。
+本版整合统一 Agent/Session 运行时、新对话窗口与控制面板、人物快捷菜单、配置保存改进及本地 ASR 修复。Windows 安装包保持轻量，不捆绑 Unity 或大型语音、模型运行时。使用条件与边界见[版本说明](docs/releases/v1.4.2.md)，安装包和校验值见 [v1.4.2 下载](https://github.com/haowenGuo/AILIS/releases/tag/v1.4.2)。
 
 ### 直接使用
 

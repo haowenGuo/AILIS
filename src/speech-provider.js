@@ -170,7 +170,7 @@ function getNativeSpeechSettings(text) {
 function normalizeSpeechMode(mode) {
     const requestedMode = String(mode || '').trim().toLowerCase();
 
-    if (['off', 'server', 'cosyvoice3', 'native'].includes(requestedMode)) {
+    if (['off', 'hosted', 'server', 'cosyvoice3', 'native'].includes(requestedMode)) {
         return requestedMode;
     }
     if (['elevenlabs', 'eleven-labs', 'eleven_labs', 'server_tts', 'cloud'].includes(requestedMode)) {
@@ -190,6 +190,7 @@ function resolveSpeechMode(modeOverride = null) {
     const requestedMode = normalizeSpeechMode(modeOverride || CONFIG.SPEECH_MODE);
 
     const desktopRuntime = isDesktopRuntime();
+    if (requestedMode === 'hosted') return desktopRuntime ? 'hosted' : 'server';
 
     if (requestedMode === 'cosyvoice3') {
         return desktopRuntime ? 'cosyvoice3' : 'off';
@@ -322,8 +323,9 @@ function canCandidateSynthesize(candidate) {
 }
 
 class ServerTTSCandidate {
-    constructor() {
-        this.id = 'server-tts';
+    constructor({ hosted = false } = {}) {
+        this.hosted = hosted;
+        this.id = hosted ? 'hosted-tts' : 'server-tts';
         this.replyMode = 'server_tts';
     }
 
@@ -340,6 +342,7 @@ class ServerTTSCandidate {
         if (isDesktopRuntime() && typeof window.ailisDesktop?.tts?.synthesize === 'function') {
             return normalizeSynthesisResult(
                 await window.ailisDesktop.tts.synthesize({
+                    ...(this.hosted ? { provider: 'hosted' } : {}),
                     text: cleanText
                 }),
                 { defaultMimeType: 'audio/mpeg' }
@@ -751,8 +754,8 @@ export function createSpeechProvider({
         ttsCandidates.push(new CosyVoice3TTSCandidate());
     }
 
-    if (enableTTS && resolvedMode === 'server') {
-        ttsCandidates.push(new ServerTTSCandidate());
+    if (enableTTS && ['server', 'hosted'].includes(resolvedMode)) {
+        ttsCandidates.push(new ServerTTSCandidate({ hosted: resolvedMode === 'hosted' }));
         if (CONFIG.WEB_NATIVE_TTS_FALLBACK_ENABLED && !isDesktopRuntime()) {
             ttsCandidates.push(new NativeSpeechSynthesisCandidate({
                 preferredVoiceId: nativeVoiceId

@@ -3,6 +3,7 @@ import fsSync from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createRequire } from 'node:module';
+import { scoreVisibleAnswer } from './gaia-answer-adapter.mjs';
 
 import {
     configureResearchMcpLlmEnvironment,
@@ -634,198 +635,6 @@ function isIncompleteStatus(status = '') {
     return /\b(?:running|queued|pending|incomplete|timeout|timed_out)\b/i.test(normalizeText(status));
 }
 
-function cleanCandidateLine(value = '') {
-    return stripControlTags(value)
-        .replace(/^[-*>\s]+/, '')
-        .replace(/[`*_]+/g, '')
-        .replace(/\s+/g, ' ')
-        .trim()
-        .replace(/[。.!！]+$/g, '');
-}
-
-function isLikelyIdentifierNoise(value = '') {
-    const text = cleanCandidateLine(value);
-    if (!text) {
-        return true;
-    }
-    if (/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(text)) {
-        return true;
-    }
-    if (/^[a-z0-9]{6,}(?:-[a-z0-9]{4,}){2,}$/i.test(text)) {
-        return true;
-    }
-    return false;
-}
-
-function pushAnswerCandidate(candidates, source, rawAnswer, maxLength = 240) {
-    const answer = cleanCandidateLine(rawAnswer).slice(0, maxLength);
-    if (!answer || isLikelyIdentifierNoise(answer)) {
-        return;
-    }
-    candidates.push({ source, answer });
-}
-
-function extractAnswerCandidatesFromVisibleText(text = '') {
-    const visible = String(text || '');
-    const candidates = [];
-    const patterns = [
-        /(?:^|\n)\s*(?:final\s+answer|final\s+result|result|answer|the\s+answer|conclusion|答案|结果|结论|最终答案|最终结果|最终结论)\s*(?:is|=|:|：|为|是)?\s*([^\n\r]+)/gi,
-        /(?:\bfinal\s+answer\b|\bfinal\s+result\b|\bthe\s+answer\b|\banswer\b|\bconclusion\b|答案|结论|最终答案|最终结果|最终结论)\s*(?:is|=|:|：|为|是)?\s*([^\n\r。.!；;]+)/gi,
-        /(?:^|\n)\s*(?:therefore|so)\s*,?\s*(?:the\s+answer\s+is)?\s*([^\n\r]+)/gi
-    ];
-    for (const pattern of patterns) {
-        let match;
-        while ((match = pattern.exec(visible)) !== null) {
-            pushAnswerCandidate(candidates, 'visible_answer_line', match[1], 240);
-        }
-    }
-    const compact = visible.replace(/\s+/g, ' ');
-    const contextualPatterns = [
-        /(?:highest|best|top|winner|choose|pick|selected|maximum|maximize|最高|最佳|最优|第一|第\s*1|选择|应选|选)\D{0,60}(?:#|ball|球|球号)?\s*([A-Za-z0-9_.-]{1,40})/gi,
-        /(?:#|ball|球|球号)\s*([A-Za-z0-9_.-]{1,40})\D{0,60}(?:highest|best|top|winner|maximum|最高|最佳|最优|第一)/gi,
-        /\|\s*(?:1|#?1|rank\s*1|top\s*1|第一)?\s*\|\s*(?:\*\*)?(?:#|ball|球|球号)?\s*([A-Za-z0-9_.-]{1,40})(?:\*\*)?\s*\|/gi
-    ];
-    for (const pattern of contextualPatterns) {
-        let match;
-        while ((match = pattern.exec(compact)) !== null) {
-            pushAnswerCandidate(candidates, 'visible_contextual_answer', match[1], 120);
-        }
-    }
-    return candidates;
-}
-
-function extractQuestionAwareAnswerCandidatesFromVisibleText(text = '', question = '') {
-    const candidates = [];
-    if (!isCountQuestion(question)) {
-        return candidates;
-    }
-    const lines = String(text || '').split(/\r?\n/);
-    const patterns = [
-        /(?:^|\s)(?:total|total\s+count|count|number|数量|总数|总计|合计|一共|共)\s*(?:is|are|=|:|：|为|是)?\s*(?:\*\*)?\s*([+-]?\d+(?:\.\d+)?(?:\s+[A-Za-z][A-Za-z\s-]{0,80})?)/i,
-        /(?:there\s+(?:are|were|is|was)|共有|一共有)\s*(?:\*\*)?\s*([+-]?\d+(?:\.\d+)?(?:\s+[A-Za-z][A-Za-z\s-]{0,80})?)/i
-    ];
-    for (const line of lines) {
-        const cleaned = cleanCandidateLine(line);
-        if (!cleaned || /\btotal\s+(?:lines?|tokens?|duration|cost)\b/i.test(cleaned)) {
-            continue;
-        }
-        for (const pattern of patterns) {
-            const match = cleaned.match(pattern);
-            if (match) {
-                pushAnswerCandidate(candidates, 'visible_count_total', match[1], 160);
-            }
-        }
-    }
-    return candidates;
-}
-
-function extractScaledUnitAnswerCandidatesFromVisibleText(text = '', question = '') {
-    if (!getQuestionNumericScale(question)) {
-        return [];
-    }
-    const candidates = [];
-    const patterns = [
-        /(?:rounded|rounding|nearest)[^:\n\r]{0,120}[:=]\s*(?:\*\*)?\s*([+-]?\d[\d,]*(?:\.\d+)?)/i,
-        /(?:rounded|rounding)\D{0,80}\bto\s*(?:\*\*)?\s*([+-]?\d[\d,]*(?:\.\d+)?)(?:\s+[A-Za-z][A-Za-z\s-]{0,40})?\s*$/i,
-        /(?:四舍五入|取整|约为)[^：:\n\r]{0,80}[：:]\s*(?:\*\*)?\s*([+-]?\d[\d,]*(?:\.\d+)?)/i
-    ];
-    for (const line of String(text || '').split(/\r?\n/)) {
-        const cleaned = cleanCandidateLine(line);
-        if (!cleaned) {
-            continue;
-        }
-        for (const pattern of patterns) {
-            const match = cleaned.match(pattern);
-            if (match) {
-                pushAnswerCandidate(candidates, 'visible_scaled_result', match[1], 80);
-            }
-        }
-    }
-    return candidates;
-}
-
-function looksLikeStructuredAnswerShape(value = '') {
-    const text = cleanCandidateLine(value);
-    if (!text) {
-        return false;
-    }
-    if (text.length > 320) {
-        return false;
-    }
-    if (/[|{}<>]|\b```/.test(text)) {
-        return false;
-    }
-    return true;
-}
-
-function extractStructuredAnswerCandidates(response = {}) {
-    const direct = [
-        ['exact_answer_submission', response.exactAnswerSubmission?.answer || response.exact_answer_submission?.answer],
-        ['exact_answer', response.exactAnswer || response.exact_answer],
-        ['task_result_exact_answer', response.taskResult?.exact_answer || response.task_result?.exact_answer],
-        ['handoff_exact_answer', response.taskRunHandoff?.exactAnswer || response.task_run_handoff?.exact_answer],
-        ['final_answer', response.final_answer],
-        ['finalAnswer', response.finalAnswer],
-        ['answer', response.answer]
-    ];
-    return direct
-        .map(([source, answer]) => ({ source, answer: cleanCandidateLine(answer || '') }))
-        .filter((item) => looksLikeStructuredAnswerShape(item.answer))
-        .filter((item) => item.answer);
-}
-
-function scoreVisibleAnswer({ response = {}, gold = '', question = '' } = {}) {
-    const displayText = normalizeText(response.displayText || response.display_text || response.message || response.speechText || '');
-    const candidates = [
-        ...extractStructuredAnswerCandidates(response),
-        ...extractQuestionAwareAnswerCandidatesFromVisibleText(displayText, question),
-        ...extractAnswerCandidatesFromVisibleText(displayText),
-        ...extractScaledUnitAnswerCandidatesFromVisibleText(displayText, question)
-    ];
-    for (const candidate of candidates) {
-        if (answersEquivalentForQuestion(candidate.answer, gold, question)) {
-            return {
-                ok: true,
-                status: 'visible_answer_match',
-                source: candidate.source,
-                answer: candidate.answer,
-                candidates
-            };
-        }
-    }
-    const normalizedGold = normalizeAnswerForScore(gold);
-    const normalizedVisible = normalizeAnswerForScore(displayText);
-    const shortGold = normalizedGold.length <= 3 || parseNumber(normalizedGold) !== null;
-    if (normalizedGold && !shortGold && normalizedVisible.includes(normalizedGold)) {
-        return {
-            ok: true,
-            status: 'visible_contains_gold',
-            source: 'visible_text_contains_gold',
-            answer: gold,
-            candidates
-        };
-    }
-    const goldParts = splitListAnswerInOrder(gold);
-    if (visibleContainsListParts(displayText, goldParts, {
-        ordered: questionRequiresListOrder(question)
-    })) {
-        return {
-            ok: true,
-            status: 'visible_contains_all_list_parts',
-            source: 'visible_text_list_parts',
-            answer: gold,
-            candidates
-        };
-    }
-    return {
-        ok: false,
-        status: candidates.length ? 'answer_candidate_mismatch' : 'no_visible_answer_candidate',
-        source: '',
-        answer: candidates[0]?.answer || '',
-        candidates,
-        needsManualReview: Boolean(normalizedGold && normalizedVisible)
-    };
-}
 
 function usageNumber(usage = {}, keys = []) {
     for (const key of keys) {
@@ -977,7 +786,10 @@ function buildTaskResult({ args, task, response, durationMs, eventSummary, paylo
         file_name: task.file_name || '',
         file_path: task.file_path || '',
         final_answer: task.final_answer || '',
-        submitted_answer: visibleScore.answer || '',
+        submitted_answer: visibleScore.submittedAnswer || '',
+        final_response: response?.displayText || response?.display_text || response?.message || response?.speechText || response?.finalAnswer || response?.final_answer || response?.answer || '',
+        score_contract: visibleScore.contract,
+        score_valid: responseOk && !visibleScore.needsManualReview,
         visible_score: visibleScore,
         ok: responseOk && visibleScore.ok,
         response_ok: responseOk,
@@ -1002,8 +814,8 @@ function aggregateSummary({ args, results, startedAt, finishedAt, runtimeSetting
     const responseOk = results.filter((row) => row.response_ok).length;
     const visibleCorrect = results.filter((row) => row.visible_score?.ok).length;
     const incomplete = results.filter((row) => !row.visible_score?.ok && isIncompleteStatus(row.raw_status || row.status)).length;
-    const failed = Math.max(0, total - visibleCorrect - incomplete);
     const manualReview = results.filter((row) => row.visible_score?.needsManualReview && !row.visible_score?.ok).length;
+    const failed = results.filter((row) => !row.visible_score?.ok && !row.visible_score?.needsManualReview && !isIncompleteStatus(row.raw_status || row.status)).length;
     const durations = results.map((row) => Number(row.durationMs) || 0);
     const usage = results.reduce(
         (acc, row) => addUsage(acc, row.usage || {}),
@@ -1033,7 +845,8 @@ function aggregateSummary({ args, results, startedAt, finishedAt, runtimeSetting
             directToolExecutor: args.directToolExecutor,
             agentRole: args.agentRole,
             subagentSettleTimeoutMs: args.subagentSettleTimeoutMs,
-            answerPolicy: 'visible answer counts when it matches the gold answer; short numeric answers require an answer line or structured answer candidate'
+            answerPolicy: 'v2: gold-blind answer extraction, explicit quantity/presentation adaptation, exact ordered comparison; uncertain extraction requires review',
+            scoreContract: 'ailis.gaia.gold-blind-answer-adapter.v2'
         },
         runtime: {
             desktopStatePath: runtimeSettings.statePath,
@@ -1387,9 +1200,11 @@ async function main() {
 }
 
 export {
+    aggregateSummary,
     answersEquivalent,
     answersEquivalentForQuestion,
     buildDesktopRealPayload,
+    buildTaskResult,
     configureResearchMcpLlmEnvironment,
     isIncompleteStatus,
     loadDesktopStateSettings,

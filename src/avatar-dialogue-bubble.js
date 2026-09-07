@@ -1,3 +1,5 @@
+import { layoutPetBubble } from './pet-bubble-layout.js';
+
 export const AVATAR_SPEECH_EVENT_NAME = 'ailis-avatar-speech-event';
 
 const BUBBLE_STYLE_ID = 'ailis-avatar-dialogue-bubble-style';
@@ -169,6 +171,11 @@ function installBubbleStyle() {
         }
 
         .avatar-dialogue-bubble--pet {
+            box-sizing: border-box;
+            display: flex;
+            flex-direction: column;
+            transform-origin: top left;
+            overflow: hidden;
             left: 8px;
             top: 0;
             min-width: min(220px, calc(100% - 32px));
@@ -183,6 +190,8 @@ function installBubbleStyle() {
         }
 
         .avatar-dialogue-bubble--pet .avatar-dialogue-bubble__text {
+            min-height: 0;
+            flex: 1 1 auto;
             max-height: 6.24em;
         }
 
@@ -245,15 +254,17 @@ function saveStoredPosition(variant, position) {
     }
 }
 
-function clampBubblePosition(rootElement, bubbleEl, position) {
+function clampBubblePosition(rootElement, bubbleEl, position, visibleBounds = null) {
     const rootRect = rootElement.getBoundingClientRect();
     const bubbleRect = bubbleEl.getBoundingClientRect();
-    const maxLeft = Math.max(BUBBLE_EDGE_PADDING, rootRect.width - bubbleRect.width - BUBBLE_EDGE_PADDING);
-    const maxTop = Math.max(BUBBLE_EDGE_PADDING, rootRect.height - bubbleRect.height - BUBBLE_EDGE_PADDING);
+    const minLeft = (visibleBounds?.left || 0) + BUBBLE_EDGE_PADDING;
+    const minTop = (visibleBounds?.top || 0) + BUBBLE_EDGE_PADDING;
+    const maxLeft = Math.max(minLeft, (visibleBounds?.right ?? rootRect.width) - bubbleRect.width - BUBBLE_EDGE_PADDING);
+    const maxTop = Math.max(minTop, (visibleBounds?.bottom ?? rootRect.height) - bubbleRect.height - BUBBLE_EDGE_PADDING);
 
     return {
-        left: Math.min(Math.max(position.left, BUBBLE_EDGE_PADDING), maxLeft),
-        top: Math.min(Math.max(position.top, BUBBLE_EDGE_PADDING), maxTop)
+        left: Math.min(Math.max(position.left, minLeft), maxLeft),
+        top: Math.min(Math.max(position.top, minTop), maxTop)
     };
 }
 
@@ -332,6 +343,8 @@ export function installAvatarDialogueBubble({
     let petShellOperation = null;
     let petShellRequestId = 0;
     let petFixedEnvelope = false;
+    let petVisibleBounds = null;
+    let petViewportSignature = '';
     let bubbleSettings = normalizePetBubbleSettings(window.ailisDesktop?.preferences || {});
 
     const usesDesktopBubbleSettings = () => variant === 'pet' && Boolean(window.ailisDesktop);
@@ -374,7 +387,7 @@ export function installAvatarDialogueBubble({
     };
 
     const applyPosition = (position, { persist = false } = {}) => {
-        const safePosition = clampBubblePosition(rootElement, bubbleEl, position);
+        const safePosition = clampBubblePosition(rootElement, bubbleEl, position, petVisibleBounds);
         bubbleEl.style.left = `${safePosition.left}px`;
         bubbleEl.style.top = `${safePosition.top}px`;
         if (Number.isFinite(Number(position.anchorX))) {
@@ -429,6 +442,30 @@ export function installAvatarDialogueBubble({
         }
 
         const rootRect = rootElement.getBoundingClientRect();
+        if (petVisibleBounds) {
+            const scale = bubbleSettings.scale;
+            const width = Math.min(320 * scale, petVisibleBounds.right - petVisibleBounds.left - 16);
+            bubbleEl.style.minWidth = '0';
+            bubbleEl.style.maxWidth = 'none';
+            bubbleEl.style.width = `${Math.max(1, width / scale)}px`;
+            bubbleEl.style.maxHeight = '';
+            const natural = getMeasuredBubbleRect();
+            if (!natural) return null;
+            const layout = layoutPetBubble({
+                visibleBounds: petVisibleBounds,
+                avatarBounds: {
+                    left: avatarBounds.left - rootRect.left, right: avatarBounds.right - rootRect.left,
+                    top: avatarBounds.top - rootRect.top, bottom: avatarBounds.bottom - rootRect.top
+                },
+                width, height: natural.height
+            });
+            bubbleEl.style.visibility = layout ? '' : 'hidden';
+            if (!layout) return null;
+            bubbleEl.style.width = `${layout.width / scale}px`;
+            bubbleEl.style.maxHeight = `${layout.height / scale}px`;
+            bubbleEl.setAttribute('data-placement', layout.side);
+            return layout;
+        }
         const bubbleRect = getMeasuredBubbleRect();
         if (!rootRect || !bubbleRect) {
             return null;
@@ -474,7 +511,9 @@ export function installAvatarDialogueBubble({
     const applyPetDialogueReservations = ({
         extraTop = 0,
         reservedLeft = 0,
-        reservedRight = 0
+        reservedRight = 0,
+        baseBounds = null,
+        visibleBounds = null
     } = {}) => {
         if (variant !== 'pet') {
             return;
@@ -483,6 +522,14 @@ export function installAvatarDialogueBubble({
         petReservedTop = Math.max(0, Math.round(Number(extraTop) || 0));
         petReservedLeft = Math.max(0, Math.round(Number(reservedLeft) || 0));
         petReservedRight = Math.max(0, Math.round(Number(reservedRight) || 0));
+        petVisibleBounds = visibleBounds;
+        const signature = JSON.stringify([petReservedTop, petReservedLeft, petReservedRight, baseBounds?.width, baseBounds?.height]);
+        const viewportChanged = signature !== petViewportSignature;
+        petViewportSignature = signature;
+        if (baseBounds?.width > 0 && baseBounds?.height > 0) {
+            rootElement.style.setProperty('--pet-avatar-width', `${baseBounds.width}px`);
+            rootElement.style.setProperty('--pet-avatar-height', `${baseBounds.height}px`);
+        }
         rootElement.style.setProperty('--pet-dialogue-reserved-top', `${petReservedTop}px`);
         rootElement.style.setProperty('--pet-dialogue-reserved-left', `${petReservedLeft}px`);
         rootElement.style.setProperty('--pet-dialogue-reserved-right', `${petReservedRight}px`);
@@ -490,9 +537,10 @@ export function installAvatarDialogueBubble({
             'data-dialogue-expanded',
             petReservedTop > 0 || petReservedLeft > 0 || petReservedRight > 0
         );
-        window.requestAnimationFrame(() => {
-            window.dispatchEvent(new Event('resize'));
-        });
+        if (viewportChanged) {
+            window.requestAnimationFrame(() => window.dispatchEvent(new Event('resize')));
+        }
+        if (bubbleEl.classList.contains('avatar-dialogue-bubble--visible')) applyPreferredPositionAfterLayout();
     };
 
     const setPetDialogueShellExpanded = async (expanded, { force = false, extraTop = null, extraWidth = null } = {}) => {
@@ -555,7 +603,9 @@ export function installAvatarDialogueBubble({
                 applyPetDialogueReservations({
                     extraTop: nextReservedTop,
                     reservedLeft: result?.reservedLeft,
-                    reservedRight: result?.reservedRight
+                    reservedRight: result?.reservedRight,
+                    baseBounds: result?.baseBounds,
+                    visibleBounds: result?.visibleBounds
                 });
                 return petReservedTop;
             });
@@ -731,6 +781,8 @@ export function installAvatarDialogueBubble({
     };
 
     const removePreferencesListener = window.ailisDesktop?.onPreferencesUpdated?.(handlePreferencesUpdated);
+    const removeLayoutListener = variant === 'pet'
+        ? window.ailisDesktop?.onPetWindowLayout?.(applyPetDialogueReservations) : null;
 
     window.addEventListener(AVATAR_SPEECH_EVENT_NAME, handleSpeechEvent);
     window.addEventListener('resize', handleViewportChange);
@@ -749,6 +801,7 @@ export function installAvatarDialogueBubble({
         lifecycleToken += 1;
         void setPetDialogueShellExpanded(false);
         removePreferencesListener?.();
+        removeLayoutListener?.();
         window.removeEventListener(AVATAR_SPEECH_EVENT_NAME, handleSpeechEvent);
         window.removeEventListener('resize', handleViewportChange);
         bubbleEl.removeEventListener('pointerdown', beginDrag);

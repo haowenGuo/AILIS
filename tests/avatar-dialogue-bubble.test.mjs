@@ -115,7 +115,7 @@ class FakeElement extends EventTarget {
     releasePointerCapture() {}
 }
 
-function installFakeDom({ onExpand = () => {} } = {}) {
+function installFakeDom({ onExpand = () => {}, layout = {} } = {}) {
     const head = new FakeElement('head');
     const body = new FakeElement('body', { width: 360, height: 520 });
     const root = new FakeElement('div', { width: 360, height: 520 });
@@ -169,10 +169,15 @@ function installFakeDom({ onExpand = () => {} } = {}) {
                 extraTop: 190,
                 extraWidth: 220,
                 reservedLeft: 0,
-                reservedRight: 0
+                reservedRight: 0,
+                ...layout
             };
         },
-        onPreferencesUpdated: () => () => {}
+        onPreferencesUpdated: () => () => {},
+        onPetWindowLayout: (listener) => {
+            windowTarget.publishLayout = listener;
+            return () => { windowTarget.publishLayout = null; };
+        }
     };
 
     globalThis.window = windowTarget;
@@ -184,6 +189,31 @@ async function flushAsyncUi() {
         await Promise.resolve();
     }
 }
+
+test('position updates do not resize the canvas; explicit scale changes do', async () => {
+    const layout = {
+        extraTop: 190, reservedLeft: 110, reservedRight: 110,
+        baseBounds: { width: 216, height: 288 },
+        visibleBounds: { left: 0, top: 190, right: 436, bottom: 478 }
+    };
+    const { root } = installFakeDom({ layout });
+    let resizes = 0;
+    window.addEventListener('resize', () => resizes++);
+    const cleanup = installAvatarDialogueBubble({ rootElement: root, variant: 'pet' });
+    await flushAsyncUi();
+    const initialResizes = resizes;
+    for (const top of [100, 0, 190, 0]) {
+        window.publishLayout({ ...layout, visibleBounds: { ...layout.visibleBounds, top } });
+        assert.equal(root.style.values.get('--pet-avatar-width'), '216px');
+        assert.equal(root.style.values.get('--pet-avatar-height'), '288px');
+    }
+    assert.equal(resizes, initialResizes);
+    window.publishLayout({ ...layout, baseBounds: { width: 360, height: 480 } });
+    assert.equal(root.style.values.get('--pet-avatar-height'), '480px');
+    assert.equal(resizes, initialResizes + 1);
+    cleanup();
+    assert.equal(window.publishLayout, null);
+});
 
 test('pet dialogue bubble reserves and releases Electron overlay space', async () => {
     const expandCalls = [];

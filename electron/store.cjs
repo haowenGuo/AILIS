@@ -2,15 +2,16 @@ const fs = require('fs');
 const crypto = require('crypto');
 const path = require('path');
 const { screen } = require('electron');
+const { DEFAULT_HOSTED_TTS_BASE_URL, normalizeHostedTtsBaseUrl } = require('./desktop-hosted-tts.cjs');
 
 const STATE_FILE_NAME = 'desktop-state.json';
-const STATE_VERSION = 32;
+const STATE_VERSION = 33;
 // Transparent Electron frame size. Avatar visual size is compensated in the pet renderer.
 const PET_BASE_WIDTH = 720;
 const PET_BASE_HEIGHT = 960;
 const PET_SCALE_OPTIONS = [0.3, 0.4, 0.5, 0.6, 0.7, 0.85, 1, 1.15, 1.3];
 const DEFAULT_PET_SCALE = 0.85;
-const SPEECH_MODE_OPTIONS = ['off', 'server', 'cosyvoice3'];
+const SPEECH_MODE_OPTIONS = ['off', 'hosted', 'server', 'cosyvoice3'];
 const RECOGNITION_MODE_OPTIONS = ['fast-vad', 'auto-vad', 'continuous', 'manual'];
 // Legacy daily preferences normalize to the single main-agent path.
 const CONVERSATION_MODE_OPTIONS = ['assistant'];
@@ -337,6 +338,33 @@ function normalizeLlmBaseUrl(value) {
 function normalizeLlmModel(value) {
     const normalizedValue = String(value || '').trim();
     return normalizedValue || DEFAULT_LLM_MODEL;
+}
+
+function getLlmConnectionMode(provider) {
+    return provider === 'ailis-cloud' ? 'server' : provider === 'ollama' ? 'local' : 'direct';
+}
+
+function normalizeLlmConnectionProfiles(value = {}, active = {}) {
+    const profiles = {};
+    for (const mode of ['direct', 'server', 'local']) {
+        const entry = value?.[mode];
+        if (!entry || !LLM_PROVIDER_OPTIONS.includes(entry.provider) ||
+            getLlmConnectionMode(entry.provider) !== mode) continue;
+        // Connection history never duplicates credentials or arbitrary renderer data.
+        profiles[mode] = {
+            provider: entry.provider,
+            baseUrl: String(entry.baseUrl || '').trim(),
+            model: String(entry.model || '').trim()
+        };
+    }
+    if (LLM_PROVIDER_OPTIONS.includes(active.llmProvider)) {
+        profiles[getLlmConnectionMode(active.llmProvider)] = {
+            provider: active.llmProvider,
+            baseUrl: String(active.llmBaseUrl || '').trim(),
+            model: String(active.llmModel || '').trim()
+        };
+    }
+    return profiles;
 }
 
 function normalizeOllamaModelHistory(value) {
@@ -983,6 +1011,7 @@ function getDefaultState() {
             petSkipTaskbar: true,
             petScale,
             speechMode: 'off',
+            hostedTtsBaseUrl: DEFAULT_HOSTED_TTS_BASE_URL,
             recognitionMode: 'auto-vad',
             conversationMode: DEFAULT_CONVERSATION_MODE,
             uiLanguage: DEFAULT_UI_LANGUAGE,
@@ -994,6 +1023,11 @@ function getDefaultState() {
             ailisStateDir: DEFAULT_AILIS_STATE_DIR,
             voiceRuntimeRoot: '',
             llmProvider: DEFAULT_LLM_PROVIDER,
+            llmConnectionProfiles: normalizeLlmConnectionProfiles({}, {
+                llmProvider: DEFAULT_LLM_PROVIDER,
+                llmBaseUrl: DEFAULT_LLM_BASE_URL,
+                llmModel: DEFAULT_LLM_MODEL
+            }),
             llmBaseUrl: DEFAULT_LLM_BASE_URL,
             llmModel: DEFAULT_LLM_MODEL,
             ollamaTarget: {
@@ -1145,6 +1179,7 @@ function normalizeState(inputState) {
 
     normalizedState.preferences.petScale = normalizePetScale(normalizedState.preferences.petScale);
     normalizedState.preferences.speechMode = normalizeSpeechMode(normalizedState.preferences.speechMode);
+    normalizedState.preferences.hostedTtsBaseUrl = normalizeHostedTtsBaseUrl(normalizedState.preferences.hostedTtsBaseUrl) || DEFAULT_HOSTED_TTS_BASE_URL;
     normalizedState.preferences.recognitionMode = normalizeRecognitionMode(normalizedState.preferences.recognitionMode);
     normalizedState.preferences.conversationMode = normalizeConversationMode(
         normalizedState.preferences.conversationMode
@@ -1200,7 +1235,9 @@ function normalizeState(inputState) {
         normalizedState.preferences.ollamaTarget,
         {
             ollamaDeploymentMode: normalizedState.preferences.ollamaDeploymentMode,
-            llmModel: normalizedState.preferences.llmModel,
+            llmModel: normalizedState.preferences.llmProvider === 'ollama'
+                ? normalizedState.preferences.llmModel
+                : normalizedState.preferences.llmConnectionProfiles.local?.model || LLM_PROVIDER_DEFAULT_MODELS.ollama,
             localModelPath: normalizedState.preferences.ollamaLocalModelPath
         }
     );
@@ -1262,6 +1299,10 @@ function normalizeState(inputState) {
     normalizedState.preferences.visionLlmModel = String(
         normalizedState.preferences.visionLlmModel || DEFAULT_VISION_LLM_MODEL
     ).trim();
+    normalizedState.preferences.llmConnectionProfiles = normalizeLlmConnectionProfiles(
+        normalizedState.preferences.llmConnectionProfiles,
+        normalizedState.preferences
+    );
     normalizedState.preferences.visionLlmApiKey = normalizeLlmApiKey(
         normalizedState.preferences.visionLlmApiKey
     );
@@ -1677,6 +1718,8 @@ module.exports = {
     normalizeLlmApiKeyProfiles,
     normalizeLlmBaseUrl,
     normalizeLlmModel,
+    getLlmConnectionMode,
+    normalizeLlmConnectionProfiles,
     normalizeLlmProvider,
     normalizeLlmRequestTimeoutMs,
     normalizeLlmTemperature,

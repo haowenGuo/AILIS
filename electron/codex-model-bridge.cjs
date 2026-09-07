@@ -1332,10 +1332,44 @@ function proxyAuthorizationHeader(proxyUrl) {
     return `Basic ${Buffer.from(credentials).toString('base64')}`;
 }
 
-function connectCodexProxy(proxyUrl, targetHost, targetPort, timeoutMs) {
+function connectCodexProxy(proxyUrl, targetHost, targetPort, timeoutMs, {
+    signal = null,
+    onStage = () => {}
+} = {}) {
     return new Promise((resolve, reject) => {
         const proxy = new URL(proxyUrl);
         const requestModule = proxy.protocol === 'https:' ? https : http;
+        let request = null;
+        let socket = null;
+        let secureSocket = null;
+        let settled = false;
+        let phase = 'proxy_connect';
+        const cleanup = () => {
+            clearTimeout(timer);
+            signal?.removeEventListener('abort', onAbort);
+        };
+        const fail = (error) => {
+            if (settled) return;
+            settled = true;
+            error.transportPhase = phase;
+            cleanup();
+            // CONNECT detaches the raw socket from ClientRequest. Destroy all
+            // owned handles, including TLS sockets still awaiting secureConnect.
+            secureSocket?.destroy();
+            socket?.destroy();
+            request?.destroy();
+            reject(error);
+        };
+        const onAbort = () => fail(Object.assign(new Error('Codex connection was aborted.'), { code: 'ABORT_ERR' }));
+        const timer = setTimeout(() => fail(Object.assign(new Error(
+            `Codex ${phase === 'tls_handshake' ? 'TLS handshake' : 'proxy CONNECT'} timed out after ${timeoutMs}ms.`
+        ), { code: 'ETIMEDOUT' })), timeoutMs);
+        if (signal?.aborted) {
+            onAbort();
+            return;
+        }
+        signal?.addEventListener('abort', onAbort, { once: true });
+        onStage('proxy_connect_started', { proxyHost: proxy.hostname, proxyPort: Number(proxy.port) || (proxy.protocol === 'https:' ? 443 : 80) });
         const headers = {
             Host: `${targetHost}:${targetPort}`
         };
@@ -1343,39 +1377,56 @@ function connectCodexProxy(proxyUrl, targetHost, targetPort, timeoutMs) {
         if (proxyAuthorization) {
             headers['Proxy-Authorization'] = proxyAuthorization;
         }
-        const request = requestModule.request({
-            host: proxy.hostname,
-            port: Number(proxy.port) || (proxy.protocol === 'https:' ? 443 : 80),
-            method: 'CONNECT',
-            path: `${targetHost}:${targetPort}`,
-            headers,
-            rejectUnauthorized: true
-        });
-        request.setTimeout(timeoutMs, () => {
-            request.destroy(new Error(`Codex proxy CONNECT timed out after ${timeoutMs}ms.`));
-        });
-        request.once('connect', (response, socket, head) => {
-            if (response.statusCode !== 200) {
-                socket.destroy();
-                reject(new Error(`Codex proxy CONNECT failed with status ${response.statusCode}.`));
-                return;
-            }
-            if (head?.length) {
-                socket.unshift(head);
-            }
-            const secureSocket = tls.connect({
-                socket,
-                servername: targetHost
+        try {
+            request = requestModule.request({
+                host: proxy.hostname,
+                port: Number(proxy.port) || (proxy.protocol === 'https:' ? 443 : 80),
+                method: 'CONNECT',
+                path: `${targetHost}:${targetPort}`,
+                headers,
+                rejectUnauthorized: true
             });
-            secureSocket.once('secureConnect', () => resolve(secureSocket));
-            secureSocket.once('error', reject);
-        });
-        request.once('error', reject);
-        request.end();
+            request.once('socket', (assigned) => {
+                socket = assigned;
+                if (settled) { assigned.destroy(); return; }
+                assigned.once('connect', () => onStage('proxy_tcp_connected', {
+                    localAddress: assigned.localAddress, localPort: assigned.localPort,
+                    remoteAddress: assigned.remoteAddress, remotePort: assigned.remotePort
+                }));
+            });
+            request.once('connect', (response, connectedSocket, head) => {
+                socket = connectedSocket;
+                if (settled) { socket.destroy(); return; }
+                onStage('proxy_connect_response', { status: response.statusCode });
+                if (response.statusCode !== 200) {
+                    fail(Object.assign(new Error(`Codex proxy CONNECT failed with status ${response.statusCode}.`), { code: 'EPROXYCONNECT' }));
+                    return;
+                }
+                if (head?.length) socket.unshift(head);
+                phase = 'tls_handshake';
+                onStage('tls_handshake_started');
+                socket.once('error', fail);
+                socket.once('close', () => fail(Object.assign(new Error('Codex connection closed before TLS handshake completed.'), { code: 'ECONNRESET' })));
+                try {
+                    secureSocket = tls.connect({ socket, servername: targetHost });
+                    secureSocket.once('secureConnect', () => {
+                        if (settled) { secureSocket.destroy(); return; }
+                        settled = true;
+                        cleanup();
+                        onStage('tls_connected');
+                        resolve(secureSocket);
+                    });
+                    secureSocket.once('error', fail);
+                    secureSocket.once('close', () => fail(Object.assign(new Error('Codex TLS connection closed before handshake completed.'), { code: 'ECONNRESET' })));
+                } catch (error) { fail(error); }
+            });
+            request.once('error', fail);
+            request.end();
+        } catch (error) { fail(error); }
     });
 }
 
-async function createCodexResponsesAgent(settings = {}, timeoutMs = 120000) {
+async function createCodexResponsesAgent(settings = {}, timeoutMs = 120000, options = {}) {
     const proxyUrl = resolveCodexProxyUrl(settings);
     if (!proxyUrl) {
         return {
@@ -1384,11 +1435,16 @@ async function createCodexResponsesAgent(settings = {}, timeoutMs = 120000) {
         };
     }
     const endpoint = new URL(CODEX_CHATGPT_BACKEND_URL);
-    const socket = await connectCodexProxy(proxyUrl, endpoint.hostname, 443, timeoutMs);
+    const socket = await connectCodexProxy(proxyUrl, endpoint.hostname, 443, timeoutMs, options);
+    if (options.signal?.aborted) {
+        socket.destroy();
+        throw Object.assign(new Error('Codex connection was aborted.'), { code: 'ABORT_ERR' });
+    }
     const agent = new https.Agent({ keepAlive: false });
     agent.createConnection = () => socket;
     return {
         agent,
+        socket,
         proxy: proxyUrl
     };
 }
@@ -1446,24 +1502,57 @@ function runCodexResponsesInference(settings = {}, auth = {}, requestBody = {}, 
     responseMode = 'sse',
     clientMetadata = null,
     reuseTurnState = true,
-    extraHeaders = null
+    extraHeaders = null,
+    transportContext = null
 } = {}) {
     const effectiveTimeoutMs = Math.max(1, Number(timeoutMs) || 120000);
+    const boundedTimeout = (value, fallback) => Math.min(effectiveTimeoutMs,
+        Number.isFinite(Number(value)) && Number(value) > 0 ? Number(value) : fallback);
+    const connectTimeoutMs = boundedTimeout(settings.codexConnectTimeoutMs, 30000);
+    const streamIdleTimeoutMs = boundedTimeout(settings.codexStreamIdleTimeoutMs, effectiveTimeoutMs);
     const protocolAudit = resolveCodexProtocolAudit(settings, { protocolAuditPath, protocolAuditMode });
-    const protocolAuditId = protocolAudit
-        ? `request-${process.pid}-${Date.now()}-${++codexProtocolAuditSequence}`
-        : '';
+    const protocolAuditId = `request-${process.pid}-${Date.now()}-${++codexProtocolAuditSequence}`;
     let protocolAuditStarted = false;
     return new Promise((resolve) => {
         let agentInfo = null;
         let settled = false;
         let clientRequest = null;
+        let requestSocket = null;
+        let clientResponse = null;
         let hardTimeout = null;
+        let connectTimeout = null;
+        let phase = 'connect';
+        let requestSent = false;
+        let proxyUsed = false;
+        let receivedBytes = 0;
+        const startedAt = Date.now();
+        const connectionController = new AbortController();
+        const logTransport = (stage, details = {}) => appendCodexProtocolAudit(protocolAudit, {
+            event: 'transport', requestId: protocolAuditId,
+            callId: transportContext?.callId, attempt: transportContext?.attempt,
+            maxAttempts: transportContext?.maxAttempts,
+            stage, phase, elapsedMs: Date.now() - startedAt, ...details
+        });
+        const onConnectionStage = (stage, details) => {
+            if (settled) return;
+            if (stage.startsWith('proxy_')) { phase = 'proxy_connect'; proxyUsed = true; }
+            if (stage.startsWith('tls_')) phase = 'tls_handshake';
+            logTransport(stage, details);
+        };
+        const destroyAgent = (info) => {
+            info?.socket?.destroy?.();
+            info?.agent?.destroy?.();
+        };
         const finish = (result) => {
             if (settled) {
                 return;
             }
             settled = true;
+            logTransport('attempt_finished', {
+                ok: result?.ok === true, code: result?.code || '',
+                errorCode: result?.errorCode || '', requestSent,
+                receivedBytes, status: Number(result?.status) || (result?.ok ? 200 : 0)
+            });
             if (protocolAuditStarted) {
                 appendCodexProtocolAudit(protocolAudit, {
                     event: 'response',
@@ -1479,17 +1568,24 @@ function runCodexResponsesInference(settings = {}, auth = {}, requestBody = {}, 
                 });
             }
             clearTimeout(hardTimeout);
+            clearTimeout(connectTimeout);
             if (typeof signal?.removeEventListener === 'function') {
                 signal.removeEventListener('abort', onAbort);
             }
-            agentInfo?.agent?.destroy?.();
+            connectionController.abort();
+            clientResponse?.destroy?.();
+            clientRequest?.destroy?.();
+            requestSocket?.destroy?.();
+            destroyAgent(agentInfo);
             resolve({
                 ...result,
-                proxyUsed: Boolean(agentInfo?.proxy)
+                proxyUsed: proxyUsed || Boolean(agentInfo?.proxy),
+                transportPhase: phase,
+                transportRequestId: protocolAuditId,
+                requestSent
             });
         };
         const onAbort = () => {
-            clientRequest?.destroy(new Error('Codex model request was aborted.'));
             finish({
                 ok: false,
                 code: 'aborted',
@@ -1500,14 +1596,18 @@ function runCodexResponsesInference(settings = {}, auth = {}, requestBody = {}, 
             const error = new Error(
                 `Codex model request exceeded the absolute deadline of ${effectiveTimeoutMs}ms.`
             );
-            clientRequest?.destroy(error);
             finish({
                 ok: false,
                 code: 'timeout',
                 error: error.message
             });
         };
+        logTransport('attempt_started', { connectTimeoutMs, timeoutMs: effectiveTimeoutMs, streamIdleTimeoutMs });
         hardTimeout = setTimeout(onHardTimeout, effectiveTimeoutMs);
+        connectTimeout = setTimeout(() => finish({
+            ok: false, code: 'timeout', errorCode: 'ETIMEDOUT',
+            error: `Codex ${phase === 'tls_handshake' ? 'TLS handshake' : phase === 'proxy_connect' ? 'proxy CONNECT' : 'connection'} timed out after ${connectTimeoutMs}ms.`
+        }), connectTimeoutMs);
         if (signal?.aborted) {
             onAbort();
             return;
@@ -1517,18 +1617,30 @@ function runCodexResponsesInference(settings = {}, auth = {}, requestBody = {}, 
         }
         (async () => {
             try {
-                agentInfo = await createAgent(settings, effectiveTimeoutMs);
+                agentInfo = await createAgent(settings, connectTimeoutMs, {
+                    signal: connectionController.signal,
+                    onStage: onConnectionStage
+                });
             } catch (error) {
+                if (settled) return;
+                phase = error?.transportPhase || phase;
                 finish({
                     ok: false,
-                    code: 'codex_network_error',
+                    code: error?.code === 'ABORT_ERR' ? 'aborted' : error?.code === 'ETIMEDOUT' ? 'timeout' : 'codex_network_error',
+                    errorCode: error?.code || '',
                     error: error?.message || String(error)
                 });
                 return;
             }
             if (settled) {
-                agentInfo?.agent?.destroy?.();
+                destroyAgent(agentInfo);
                 return;
+            }
+            // Proxy agents already completed TLS. Direct agents complete it on
+            // the request socket; injected agents own their connection lifecycle.
+            if (agentInfo.socket || createAgent !== createCodexResponsesAgent) {
+                clearTimeout(connectTimeout);
+                phase = 'request';
             }
             const body = JSON.stringify(requestBody);
             const endpoint = new URL(CODEX_CHATGPT_BACKEND_URL);
@@ -1586,6 +1698,24 @@ function runCodexResponsesInference(settings = {}, auth = {}, requestBody = {}, 
                     'Content-Length': Buffer.byteLength(body)
                 }
             }, (response) => {
+                if (settled) { response.destroy?.(); return; }
+                clearTimeout(connectTimeout);
+                clientResponse = response;
+                requestSent = true;
+                phase = 'response_body';
+                logTransport('response_headers', { status: Number(response.statusCode) || 0 });
+                let responseEnded = false;
+                const interrupted = (error) => {
+                    if (settled || responseEnded) return;
+                    finish({
+                        ok: false, code: 'codex_network_error',
+                        errorCode: error?.code || 'ECONNRESET',
+                        error: 'Codex model response connection closed before completion.'
+                    });
+                };
+                response.once('aborted', () => interrupted());
+                response.once('error', interrupted);
+                response.once('close', () => { if (!response.complete) interrupted(); });
                 const returnedTurnState = response.headers?.['x-codex-turn-state'];
                 if (Number(response.statusCode) >= 200 && Number(response.statusCode) < 300) {
                     setCodexTurnState(promptCacheKey, returnedTurnState);
@@ -1593,12 +1723,18 @@ function runCodexResponsesInference(settings = {}, auth = {}, requestBody = {}, 
                 let raw = '';
                 response.setEncoding('utf8');
                 response.on('data', (chunk) => {
+                    if (settled) return;
+                    if (!receivedBytes) logTransport('response_first_byte');
+                    receivedBytes += Buffer.byteLength(chunk);
                     raw += chunk;
                     if (Buffer.byteLength(raw) > CODEX_RESPONSES_MAX_BYTES) {
                         clientRequest.destroy(new Error('Codex Responses stream exceeded the bridge size limit.'));
                     }
                 });
                 response.on('end', () => {
+                    if (settled) return;
+                    responseEnded = true;
+                    logTransport('response_end', { receivedBytes });
                     const status = Number(response.statusCode) || 0;
                     if (status < 200 || status >= 300) {
                         let message = '';
@@ -1665,10 +1801,31 @@ function runCodexResponsesInference(settings = {}, auth = {}, requestBody = {}, 
                     });
                 });
             });
-            clientRequest.setTimeout(effectiveTimeoutMs, () => {
-                clientRequest.destroy(
-                    new Error(`Codex model request was idle for ${effectiveTimeoutMs}ms.`)
-                );
+            clientRequest.once('socket', (socket) => {
+                requestSocket = socket;
+                if (settled) { socket.destroy(); return; }
+                logTransport('socket_assigned');
+                if (!agentInfo.socket) {
+                    socket.once('connect', () => {
+                        if (settled) return;
+                        phase = 'tls_handshake';
+                        logTransport('tcp_connected');
+                        logTransport('tls_handshake_started');
+                    });
+                    socket.once('secureConnect', () => {
+                        if (settled) return;
+                        clearTimeout(connectTimeout);
+                        logTransport('tls_connected');
+                        phase = 'request';
+                    });
+                }
+            });
+            clientRequest.once('finish', () => {
+                if (!settled) { requestSent = true; logTransport('request_sent'); }
+            });
+            clientRequest.setTimeout(streamIdleTimeoutMs, () => {
+                finish({ ok: false, code: 'timeout', errorCode: 'ETIMEDOUT',
+                    error: `Codex model request was idle for ${streamIdleTimeoutMs}ms.` });
             });
             clientRequest.once('error', (error) => {
                 if (settled) {
@@ -1677,6 +1834,7 @@ function runCodexResponsesInference(settings = {}, auth = {}, requestBody = {}, 
                 const aborted = signal?.aborted || /aborted/i.test(error?.message || '');
                 finish({
                     ok: false,
+                    errorCode: error?.code || '',
                     code: aborted
                         ? 'aborted'
                         : /timed out|timeout|deadline|idle/i.test(error?.message || '')
@@ -1685,6 +1843,7 @@ function runCodexResponsesInference(settings = {}, auth = {}, requestBody = {}, 
                     error: error?.message || String(error)
                 });
             });
+            logTransport('request_created');
             clientRequest.end(body);
         })().catch((error) => finish({
             ok: false,
@@ -2307,7 +2466,7 @@ async function callCodexAppServerBridgeOnce(settings = {}, payload = {}, message
     }
 }
 
-async function callCodexModelBridgeOnce(settings = {}, payload = {}, messages = []) {
+async function callCodexModelBridgeOnce(settings = {}, payload = {}, messages = [], transportContext = null) {
     if (!Array.isArray(payload.input) && (!Array.isArray(messages) || !messages.length)) {
         return { ok: false, code: 'empty_messages', error: 'AILIS model input is empty.' };
     }
@@ -2330,7 +2489,8 @@ async function callCodexModelBridgeOnce(settings = {}, payload = {}, messages = 
     }
     const processResult = await runCodexResponsesInference(settings, auth, requestBody, {
         timeoutMs,
-        signal: payload.abortSignal || payload.signal || null
+        signal: payload.abortSignal || payload.signal || null,
+        transportContext
     });
     if (!processResult.ok) {
         return processResult;
@@ -2558,10 +2718,11 @@ function waitForCodexBridgeRetry(settings = {}, payload = {}, failedAttempt = 1)
 
 async function callCodexModelBridge(settings = {}, payload = {}, messages = []) {
     const maxAttempts = resolveCodexBridgeMaxAttempts(settings);
+    const callId = randomUUID();
     const failureCodes = [];
     let result = null;
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-        result = await callCodexModelBridgeOnce(settings, payload, messages);
+        result = await callCodexModelBridgeOnce(settings, payload, messages, { callId, attempt, maxAttempts });
         if (result?.ok) {
             return {
                 ...result,

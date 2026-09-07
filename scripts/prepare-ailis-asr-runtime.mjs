@@ -26,7 +26,8 @@ const TORCH_CPU_INDEX_URL = 'https://download.pytorch.org/whl/cpu';
 
 const ASR_BASE_PACKAGES = Object.freeze([
     'numpy>=1.26,<3.0',
-    'transformers>=4.52,<6.0',
+    // 4.53.3 includes the upstream WhisperNoSpeechDetection input_ids fix.
+    'transformers>=4.53.3,<5.0',
     'accelerate>=1.0,<2.0',
     'huggingface_hub>=0.24',
     'soundfile>=0.12',

@@ -2177,7 +2177,11 @@ async function callDesktopLlmProvider(settings = {}, payload = {}) {
             {
                 ...resolvedSettings,
                 codexEntrypoint: settings.codexEntrypoint,
-                reasoningEffort: settings.reasoningEffort
+                reasoningEffort: settings.reasoningEffort,
+                codexConnectTimeoutMs: settings.codexConnectTimeoutMs,
+                codexStreamIdleTimeoutMs: settings.codexStreamIdleTimeoutMs,
+                codexProtocolAuditPath: settings.codexProtocolAuditPath,
+                codexProtocolAuditMode: settings.codexProtocolAuditMode
             },
             {
                 ...payload,
@@ -2353,6 +2357,8 @@ async function compactDesktopLlmProvider(settings = {}, payload = {}) {
                 reasoningEffort: settings.reasoningEffort,
                 codexHome: settings.codexHome,
                 codexProxyUrl: settings.codexProxyUrl,
+                codexConnectTimeoutMs: settings.codexConnectTimeoutMs,
+                codexStreamIdleTimeoutMs: settings.codexStreamIdleTimeoutMs,
                 codexProtocolAuditPath: settings.codexProtocolAuditPath,
                 codexProtocolAuditMode: settings.codexProtocolAuditMode
             },

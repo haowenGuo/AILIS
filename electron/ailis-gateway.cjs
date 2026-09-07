@@ -2684,6 +2684,10 @@ class AILISGateway extends EventEmitter {
             if (!toolId) {
                 throw new GatewayHttpError(400, 'missing_tool', 'tools.call requires a tool name');
             }
+            // Apply host capability limits to virtual/MCP tools as well as registered tools.
+            if (this.toolAllowlist && !this.toolAllowlist.has(toolId)) {
+                throw new GatewayHttpError(403, 'tool_not_allowed', 'Tool is not allowed by this host capability profile');
+            }
             if (!isExternalVirtualToolId(toolId)) {
                 const contractValidation = validateToolContract(toolId, args);
                 if (!contractValidation.ok) {
@@ -3218,7 +3222,7 @@ class AILISGateway extends EventEmitter {
             record.finalizing = true;
             const delivered = await finalize(result);
             const finalCheckpoint = this.extractPersonaResultCheckpoint(result);
-            if (finalCheckpoint) {
+            if (finalCheckpoint && !input.abortSignal?.aborted) {
                 if (delivered?.status === 'blocked' && result?.status !== 'blocked') {
                     finalCheckpoint.items.push({ type: 'message', role: 'developer', content: [{
                         type: 'input_text', text: 'The preceding final response was blocked by the output safety gate and was not delivered. Do not treat it as a successful answer or repeat it.'
@@ -3290,6 +3294,12 @@ class AILISGateway extends EventEmitter {
             null
         );
         const finalize = async (result) => {
+            // External transports may cancel before/after the runner registers its controller.
+            // A late model answer must not be delivered or recorded as a successful memory.
+            if (input.abortSignal?.aborted) {
+                return { ok: false, status: 'interrupted', runId: result?.runId || runId,
+                    sessionId, displayText: '', speechText: '' };
+            }
             const emitControlledRunFinished = (payload = {}) => {
                 if (!unifiedOwnsTurn || result?.deferAssistantCommit === true) {
                     return;

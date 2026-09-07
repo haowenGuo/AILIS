@@ -69,6 +69,15 @@ class AILISDesktopPlatformAdapter {
         };
     }
 
+    clampPositionToDisplay(bounds) {
+        const { workArea } = this.getDisplayMatching(bounds);
+        return {
+            ...bounds,
+            x: Math.min(Math.max(bounds.x, workArea.x), workArea.x + Math.max(0, workArea.width - bounds.width)),
+            y: Math.min(Math.max(bounds.y, workArea.y), workArea.y + Math.max(0, workArea.height - bounds.height))
+        };
+    }
+
     buildWindowOptions(options = {}) {
         const icon = options.icon || this.icon;
         const webPreferences = {
@@ -263,36 +272,33 @@ class AILISDesktopPlatformAdapter {
         return image;
     }
 
-    getExpandedWindowLayout({ baseBounds, requestedExtraTop = 0, requestedExtraWidth = 0, minimumWidth = 320, minimumHeight = 320, normalizeExtraTop, normalizeExtraWidth } = {}) {
-        const safeBaseBounds = this.clampBoundsToDisplay(baseBounds, minimumWidth, minimumHeight);
+    getExpandedWindowLayout({ baseBounds, requestedExtraTop = 0, requestedExtraWidth = 0, normalizeExtraTop, normalizeExtraWidth } = {}) {
+        const safeBaseBounds = this.clampPositionToDisplay(baseBounds);
         const display = this.getDisplayMatching(safeBaseBounds);
         const workArea = display.workArea;
         const extraTopNormalizer = typeof normalizeExtraTop === 'function' ? normalizeExtraTop : (value) => Math.max(0, Number(value) || 0);
         const extraWidthNormalizer = typeof normalizeExtraWidth === 'function' ? normalizeExtraWidth : (value) => Math.max(0, Number(value) || 0);
         const requestedTop = extraTopNormalizer(requestedExtraTop);
         const requestedWidth = extraWidthNormalizer(requestedExtraWidth);
-        const availableTop = Math.max(0, safeBaseBounds.y - workArea.y);
-        const extraTop = Math.min(
-            requestedTop,
-            availableTop,
-            Math.max(0, workArea.height - safeBaseBounds.height)
-        );
-        const targetWidth = Math.min(
-            safeBaseBounds.width + requestedWidth,
-            workArea.width
-        );
-        const baseCenterX = safeBaseBounds.x + safeBaseBounds.width / 2;
-        const centeredX = Math.round(baseCenterX - targetWidth / 2);
-        const expandedX = Math.min(
-            Math.max(centeredX, workArea.x),
-            workArea.x + workArea.width - targetWidth
-        );
-        const reservedLeft = Math.max(0, safeBaseBounds.x - expandedX);
-        const reservedRight = Math.max(
-            0,
-            expandedX + targetWidth - (safeBaseBounds.x + safeBaseBounds.width)
-        );
-        const extraWidth = Math.max(0, Math.round(reservedLeft + reservedRight));
+        // Only transparent padding may leave the display; the avatar's size
+        // and local origin must not change while dragging.
+        const extraTop = Math.round(requestedTop);
+        const extraWidth = Math.round(requestedWidth);
+        const reservedLeft = Math.floor(extraWidth / 2);
+        const reservedRight = extraWidth - reservedLeft;
+        const expandedBounds = {
+            ...safeBaseBounds,
+            x: safeBaseBounds.x - reservedLeft,
+            y: safeBaseBounds.y - extraTop,
+            width: safeBaseBounds.width + extraWidth,
+            height: safeBaseBounds.height + extraTop
+        };
+        const visibleBounds = {
+            left: Math.max(0, workArea.x - expandedBounds.x),
+            top: Math.max(0, workArea.y - expandedBounds.y),
+            right: Math.min(expandedBounds.width, workArea.x + workArea.width - expandedBounds.x),
+            bottom: Math.min(expandedBounds.height, workArea.y + workArea.height - expandedBounds.y)
+        };
 
         return {
             baseBounds: safeBaseBounds,
@@ -300,13 +306,8 @@ class AILISDesktopPlatformAdapter {
             extraWidth,
             reservedLeft,
             reservedRight,
-            expandedBounds: {
-                ...safeBaseBounds,
-                x: expandedX,
-                y: safeBaseBounds.y - extraTop,
-                width: targetWidth,
-                height: safeBaseBounds.height + extraTop
-            }
+            expandedBounds,
+            visibleBounds
         };
     }
 }
