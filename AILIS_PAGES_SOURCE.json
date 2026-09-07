@@ -1,5 +1,19 @@
 {
   "schema": "ailis.pages-publication.v1",
+  "releaseDownloadUpdate": {
+    "version": "1.4.2",
+    "sourceCommit": "5c5a3a47b7144e5e4e79a5218b68d953ee63aaba",
+    "verificationRun": "https://github.com/haowenGuo/AILIS/actions/runs/34118589197",
+    "scope": "Download information only. The original build metadata below describes the preserved web demo. These hashes supersede historical buildFiles hashes for the listed pages.",
+    "publishedFiles": [
+      {"file": "index.html", "sha256": "f74f477a1cfdda0224de4ac55422f259cb9562d38e7ed5fb1cccd199aee85ddf"},
+      {"file": "about-aigl.html", "sha256": "f74f477a1cfdda0224de4ac55422f259cb9562d38e7ed5fb1cccd199aee85ddf"},
+      {"file": "about-ailis.html", "sha256": "f74f477a1cfdda0224de4ac55422f259cb9562d38e7ed5fb1cccd199aee85ddf"},
+      {"file": "zh-CN.html", "sha256": "f74f477a1cfdda0224de4ac55422f259cb9562d38e7ed5fb1cccd199aee85ddf"},
+      {"file": "en.html", "sha256": "cac24a94c8d4956eed42bad596ba446a234fce0ac8c0500a4f24d30cda64b73d"},
+      {"file": "ja.html", "sha256": "b004d9b163b8a5bbc9002d3bd638c1250191f18ed6c0992837c775dbf206b891"}
+    ]
+  },
   "sourceCommit": "3e40611b5f7f7e77de462527742ded6b9aca1c5f",
   "previousPagesCommit": "79d90bf0190e988c3aedb08d0a8f0050a04f65e6",
   "build": "pnpm build:demo",
