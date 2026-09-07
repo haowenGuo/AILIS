@@ -75,6 +75,7 @@ jobs:
           tests/ailis-production-closure.test.mjs
           tests/ailis-code-mode-packaging.test.mjs
           tests/ailis-unified-agent.test.mjs
+          tests/ailis-unified-compaction.test.mjs
           tests/ailis-tool-output-integrity.test.mjs
           tests/local-asr-manager.test.mjs
           tests/asr-latency-presets.test.mjs

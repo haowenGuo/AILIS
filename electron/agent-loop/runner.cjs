@@ -9350,7 +9350,7 @@ class AILISAgentRunner {
                 directModelInputPrompt.contextPackage?.budgetReport?.level
             ).toLowerCase();
             if (
-                ['task_agent', 'persona'].includes(agentContextMode) &&
+                ['task_agent', 'persona', 'unified'].includes(agentContextMode) &&
                 ['hard', 'stop'].includes(pendingCompactionLevel)
             ) {
                 const packageBefore = directModelInputPrompt.contextPackage;
