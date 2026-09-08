@@ -10,7 +10,7 @@ const STATE_VERSION = 33;
 const PET_BASE_WIDTH = 720;
 const PET_BASE_HEIGHT = 960;
 const PET_SCALE_OPTIONS = [0.3, 0.4, 0.5, 0.6, 0.7, 0.85, 1, 1.15, 1.3];
-const DEFAULT_PET_SCALE = 0.85;
+const DEFAULT_PET_SCALE = 0.3;
 const SPEECH_MODE_OPTIONS = ['off', 'hosted', 'server', 'cosyvoice3'];
 const RECOGNITION_MODE_OPTIONS = ['fast-vad', 'auto-vad', 'continuous', 'manual'];
 // Legacy daily preferences normalize to the single main-agent path.
@@ -151,9 +151,9 @@ const DEFAULT_ELEVENLABS_VOICE_PROFILES = Object.freeze({
 const DEFAULT_COMPUTER_CONTROL_ENABLED = true;
 const EMBER_HARNESS_MODE_OPTIONS = ['off', 'observe', 'enforce'];
 const DEFAULT_EMBER_HARNESS_MODE = 'off';
-const DEFAULT_CAMERA_DISTANCE = 1.1;
-const DEFAULT_CAMERA_HEIGHT = 1.3;
-const DEFAULT_CAMERA_TARGET_Y = 1;
+const DEFAULT_CAMERA_DISTANCE = 1.08;
+const DEFAULT_CAMERA_HEIGHT = 1.34;
+const DEFAULT_CAMERA_TARGET_Y = 0.96;
 const RENDER_PROFILE_OPTIONS = [
     'ailis_soft_anime_mtoon',
     'ailis_bright_companion_mtoon',
@@ -161,14 +161,14 @@ const RENDER_PROFILE_OPTIONS = [
     'ailis_material_hybrid_npr',
     'ailis_hard_cel_mtoon'
 ];
-const DEFAULT_RENDER_PROFILE_ID = 'ailis_soft_anime_mtoon';
-const DEFAULT_RENDER_LIGHT_YAW_DEG = 0;
-const DEFAULT_RENDER_KEY_LIGHT_SCALE = 1;
-const DEFAULT_RENDER_AMBIENT_FILL_SCALE = 1;
-const DEFAULT_RENDER_OUTLINE_SCALE = 0.72;
+const DEFAULT_RENDER_PROFILE_ID = 'ailis_bright_companion_mtoon';
+const DEFAULT_RENDER_LIGHT_YAW_DEG = -10;
+const DEFAULT_RENDER_KEY_LIGHT_SCALE = 1.31;
+const DEFAULT_RENDER_AMBIENT_FILL_SCALE = 0.97;
+const DEFAULT_RENDER_OUTLINE_SCALE = 0.3;
 const DEFAULT_RENDER_SHADOW_ENABLED = true;
 const DEFAULT_RENDER_RESOLUTION_SCALE = 2;
-const DEFAULT_RENDER_FPS_LIMIT = 60;
+const DEFAULT_RENDER_FPS_LIMIT = 30;
 const DEFAULT_RENDER_SHADOW_QUALITY = 3;
 const DEFAULT_RENDER_OUTLINE_ENABLED = true;
 const DEFAULT_RENDER_ANTIALIAS_ENABLED = true;
@@ -351,18 +351,31 @@ function normalizeLlmConnectionProfiles(value = {}, active = {}) {
         if (!entry || !LLM_PROVIDER_OPTIONS.includes(entry.provider) ||
             getLlmConnectionMode(entry.provider) !== mode) continue;
         // Connection history never duplicates credentials or arbitrary renderer data.
-        profiles[mode] = {
-            provider: entry.provider,
-            baseUrl: String(entry.baseUrl || '').trim(),
-            model: String(entry.model || '').trim()
-        };
+        profiles[mode] = mode === 'server'
+            ? {
+                  provider: AILIS_CLOUD_PROVIDER,
+                  baseUrl: DEFAULT_LLM_BASE_URL,
+                  model: DEFAULT_LLM_MODEL
+              }
+            : {
+                  provider: entry.provider,
+                  baseUrl: String(entry.baseUrl || '').trim(),
+                  model: String(entry.model || '').trim()
+              };
     }
     if (LLM_PROVIDER_OPTIONS.includes(active.llmProvider)) {
-        profiles[getLlmConnectionMode(active.llmProvider)] = {
-            provider: active.llmProvider,
-            baseUrl: String(active.llmBaseUrl || '').trim(),
-            model: String(active.llmModel || '').trim()
-        };
+        const activeMode = getLlmConnectionMode(active.llmProvider);
+        profiles[activeMode] = activeMode === 'server'
+            ? {
+                  provider: AILIS_CLOUD_PROVIDER,
+                  baseUrl: DEFAULT_LLM_BASE_URL,
+                  model: DEFAULT_LLM_MODEL
+              }
+            : {
+                  provider: active.llmProvider,
+                  baseUrl: String(active.llmBaseUrl || '').trim(),
+                  model: String(active.llmModel || '').trim()
+              };
     }
     return profiles;
 }
@@ -1010,9 +1023,9 @@ function getDefaultState() {
         preferences: {
             petSkipTaskbar: true,
             petScale,
-            speechMode: 'off',
+            speechMode: 'hosted',
             hostedTtsBaseUrl: DEFAULT_HOSTED_TTS_BASE_URL,
-            recognitionMode: 'auto-vad',
+            recognitionMode: 'fast-vad',
             conversationMode: DEFAULT_CONVERSATION_MODE,
             uiLanguage: DEFAULT_UI_LANGUAGE,
             preferredMicDeviceId: '',
@@ -1228,6 +1241,10 @@ function normalizeState(inputState) {
             ? LLM_PROVIDER_DEFAULT_MODELS.ollama
             : normalizedState.preferences.llmModel
     );
+    if (normalizedState.preferences.llmProvider === AILIS_CLOUD_PROVIDER) {
+        normalizedState.preferences.llmBaseUrl = DEFAULT_LLM_BASE_URL;
+        normalizedState.preferences.llmModel = DEFAULT_LLM_MODEL;
+    }
     normalizedState.preferences.ollamaLocalModelPath = String(
         normalizedState.preferences.ollamaLocalModelPath || ''
     ).trim();

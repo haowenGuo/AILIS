@@ -3072,6 +3072,11 @@ function isLocalAgentLlmProvider(provider = '') {
         normalizedProvider === 'codex-model-bridge';
 }
 
+function agentLlmProviderRequiresApiKey(provider = '') {
+    const normalizedProvider = normalizeText(provider).toLowerCase();
+    return normalizedProvider !== 'ailis-cloud' && !isLocalAgentLlmProvider(normalizedProvider);
+}
+
 function isConstrainedLocalAgentProvider(provider = '') {
     const normalizedProvider = normalizeText(provider).toLowerCase();
     return normalizedProvider === 'ollama';
@@ -3127,7 +3132,7 @@ function isAgentLlmSettingsMissing(settings = {}) {
     if (!settings.baseUrl || !settings.model) {
         return true;
     }
-    return !isLocalAgentLlmProvider(settings.provider) && !settings.apiKey;
+    return agentLlmProviderRequiresApiKey(settings.provider) && !settings.apiKey;
 }
 
 function extractJsonObject(text) {

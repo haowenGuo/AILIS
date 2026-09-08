@@ -449,7 +449,7 @@
                             </button>
                         </div>
                         <div class="field-help" id="llm-connection-mode-help" aria-live="polite"></div>
-                        <details class="model-status-board">
+                        <details class="model-status-board" id="llm-model-status-board" hidden>
                             <summary id="model-active-summary">正在读取模型状态...</summary>
                             <div class="model-status-details">
                                 <div class="model-status-copy" id="model-active-subtitle">这里会显示 AILIS 当前准备使用的模型，以及是否还需要保存、部署或测试。</div>
@@ -498,7 +498,7 @@
                         </label>
                         </div>
 
-                        <label class="field">
+                        <label class="field" id="llm-base-field" hidden>
                             <div class="field-meta"><span class="field-label" id="llm-base-label">API Base</span></div>
                             <input id="llm-base-url" type="text" autocomplete="off" placeholder="https://api.deepseek.com">
                             <div class="field-help" id="llm-base-help"></div>
@@ -614,7 +614,7 @@
                             <div class="field-help" id="llm-key-state">Key 状态读取中...</div>
                         </div>
 
-                        <div class="field connection-check">
+                        <div class="field connection-check" id="llm-health-check-field" hidden>
                             <div class="field-meta">
                                 <span class="field-label">连接测试</span>
                                 <button id="llm-health-check-btn" class="ghost-btn" type="button">测试连接</button>
@@ -622,7 +622,7 @@
                             <div class="field-help" id="llm-health-state">尚未测试当前模型。</div>
                         </div>
 
-                        <details class="advanced-section">
+                        <details class="advanced-section" id="llm-advanced-settings" hidden>
                             <summary>高级：协议、模型 ID 与请求参数</summary>
                             <div class="section-body">
                                 <div class="field-help" id="llm-preset-help">选择服务商后填写对应配置；本地 Ollama 通常不需要 API Key。</div>
@@ -669,7 +669,7 @@
                     </div>
                 </section>
 
-                <section class="panel-section section-model" id="section-vision-model">
+                <section class="panel-section section-model" id="section-vision-model" hidden>
                     <details class="advanced-section" id="vision-model-settings">
                     <summary>可选：独立视觉模型</summary>
                     <div class="section-body">

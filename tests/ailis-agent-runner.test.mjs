@@ -2443,7 +2443,14 @@ test('AILIS sanitized agent fork follows Codex rollout filtering rules', () => {
     assert.equal(recentCheckpoint.reference_context_item, null);
 });
 
-test('AILIS Agent Runner accepts local vLLM and Ollama settings without API keys', () => {
+test('AILIS Agent Runner accepts managed AILIS Cloud and local settings without API keys', () => {
+    assert.equal(isAgentLlmSettingsMissing({
+        provider: 'ailis-cloud',
+        baseUrl: 'https://101.133.239.56/api/llm/v1',
+        model: 'ailis-cloud',
+        apiKey: ''
+    }), false);
+
     assert.equal(isAgentLlmSettingsMissing({
         provider: 'vllm',
         baseUrl: 'http://127.0.0.1:8000/v1',

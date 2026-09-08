@@ -31,6 +31,31 @@ test('legacy active configuration migrates without changing the selected provide
     });
 });
 
+test('managed AILIS Cloud profile always uses the official endpoint and model', () => {
+    const profiles = normalizeLlmConnectionProfiles({
+        server: {
+            provider: 'ailis-cloud',
+            baseUrl: 'https://private.example/api/llm/v1',
+            model: 'user-selected-model'
+        }
+    });
+    assert.deepEqual(profiles.server, {
+        provider: 'ailis-cloud',
+        baseUrl: 'https://101.133.239.56/api/llm/v1',
+        model: 'ailis-cloud'
+    });
+
+    const normalized = getDefaultState();
+    Object.assign(normalized.preferences, {
+        llmProvider: 'ailis-cloud',
+        llmBaseUrl: 'https://private.example/api/llm/v1',
+        llmModel: 'user-selected-model'
+    });
+    const saved = normalizeLlmConnectionProfiles({}, normalized.preferences);
+    assert.equal(saved.server.baseUrl, 'https://101.133.239.56/api/llm/v1');
+    assert.equal(saved.server.model, 'ailis-cloud');
+});
+
 test('all three profiles survive disk reload; key and Ollama histories stay separate', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ailis-mode-test-'));
     const app = { getPath: () => root };
@@ -43,7 +68,7 @@ test('all three profiles survive disk reload; key and Ollama histories stay sepa
         });
         state = saveDesktopState(app, state);
         for (const [provider, baseUrl, model] of [
-            ['ailis-cloud', 'https://server.example/api/llm/v1', 'ailis-cloud'],
+            ['ailis-cloud', 'https://server.example/api/llm/v1', 'user-selected-model'],
             ['ollama', 'http://127.0.0.1:11434', 'local-model']
         ]) {
             Object.assign(state.preferences, { llmProvider: provider, llmBaseUrl: baseUrl, llmModel: model, llmApiKey: '' });
@@ -52,7 +77,8 @@ test('all three profiles survive disk reload; key and Ollama histories stay sepa
         }
         assert.equal(state.preferences.llmProvider, 'ollama');
         assert.equal(state.preferences.llmConnectionProfiles.direct.model, 'direct-model');
-        assert.equal(state.preferences.llmConnectionProfiles.server.baseUrl, 'https://server.example/api/llm/v1');
+        assert.equal(state.preferences.llmConnectionProfiles.server.baseUrl, 'https://101.133.239.56/api/llm/v1');
+        assert.equal(state.preferences.llmConnectionProfiles.server.model, 'ailis-cloud');
         assert.equal(state.preferences.llmConnectionProfiles.local.model, 'local-model');
         assert.equal(state.preferences.llmApiKeyProfiles.deepseek.keys[0].value, 'test-only-key');
         assert.equal(state.preferences.ollamaTarget.modelId, 'local-model');

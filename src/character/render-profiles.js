@@ -1,4 +1,4 @@
-export const DEFAULT_RENDER_PROFILE_ID = 'ailis_soft_anime_mtoon';
+export const DEFAULT_RENDER_PROFILE_ID = 'ailis_bright_companion_mtoon';
 
 export const RENDER_PROFILE_IDS = Object.freeze([
     'ailis_soft_anime_mtoon',

@@ -12,8 +12,13 @@ const elements = {
     llmModeButtons: [...document.querySelectorAll('[data-llm-mode]')],
     llmModeHelp: document.getElementById('llm-connection-mode-help'),
     llmDirectFields: document.getElementById('llm-direct-fields'),
+    llmModelStatusBoard: document.getElementById('llm-model-status-board'),
+    llmBaseField: document.getElementById('llm-base-field'),
     llmBaseLabel: document.getElementById('llm-base-label'),
     llmBaseHelp: document.getElementById('llm-base-help'),
+    llmHealthCheckField: document.getElementById('llm-health-check-field'),
+    llmAdvancedSettings: document.getElementById('llm-advanced-settings'),
+    visionModelSection: document.getElementById('section-vision-model'),
     llmAdvancedProviderField: document.getElementById('llm-advanced-provider-field'),
     llmAdvancedModelField: document.getElementById('llm-advanced-model-field'),
     appVersion: document.getElementById('app-version'),
@@ -1687,14 +1692,18 @@ function normalizePreferences(preferences = {}) {
     );
     const autoChatModeSettings = getAutoChatModeSettings(autoChatMode);
 
-    const rawLlmProvider = String(preferences.llmProvider || 'openai-compatible');
+    const rawLlmProvider = String(preferences.llmProvider || 'ailis-cloud');
     const normalizedLlmProvider = rawLlmProvider === 'vllm' ? 'ollama' : rawLlmProvider;
     const normalizedLlmBaseUrl = rawLlmProvider === 'vllm'
         ? fallbackLlmProviderDefaultBaseUrls.ollama
-        : String(preferences.llmBaseUrl || 'https://ark.cn-beijing.volces.com/api/v3');
+        : normalizedLlmProvider === 'ailis-cloud'
+            ? fallbackLlmProviderDefaultBaseUrls['ailis-cloud']
+            : String(preferences.llmBaseUrl || 'https://ark.cn-beijing.volces.com/api/v3');
     const normalizedLlmModel = rawLlmProvider === 'vllm'
         ? fallbackLlmProviderDefaultModels.ollama
-        : String(preferences.llmModel || 'doubao-seed-2-0-mini-260215');
+        : normalizedLlmProvider === 'ailis-cloud'
+            ? fallbackLlmProviderDefaultModels['ailis-cloud']
+            : String(preferences.llmModel || 'doubao-seed-2-0-mini-260215');
     const normalizedOllamaTarget = normalizeOllamaTarget(preferences.ollamaTarget || {}, {
         ollamaDeploymentMode: preferences.ollamaDeploymentMode,
         modelId: normalizedLlmProvider === 'ollama'
@@ -1704,12 +1713,12 @@ function normalizePreferences(preferences = {}) {
     });
 
     return {
-        petScale: String(preferences.petScale ?? '0.85'),
+        petScale: String(preferences.petScale ?? '0.3'),
         petSkipTaskbar: Boolean(preferences.petSkipTaskbar),
-        speechMode: String(preferences.speechMode || 'off'),
+        speechMode: String(preferences.speechMode || 'hosted'),
         hostedTtsBaseUrl: String(preferences.hostedTtsBaseUrl || '').trim(),
         chunkedTtsEnabled: preferences.chunkedTtsEnabled !== false,
-        recognitionMode: String(preferences.recognitionMode || 'auto-vad'),
+        recognitionMode: String(preferences.recognitionMode || 'fast-vad'),
         conversationMode: 'assistant',
         uiLanguage: normalizeUiLanguage(preferences.uiLanguage || 'zh-CN'),
         preferredMicDeviceId: String(preferences.preferredMicDeviceId || ''),
@@ -1782,22 +1791,22 @@ function normalizePreferences(preferences = {}) {
         autoChatMinIntervalSec: autoChatModeSettings.minIntervalSec,
         autoChatMaxIntervalSec: autoChatModeSettings.maxIntervalSec,
         emailProfiles,
-        cameraDistance: Number(preferences.cameraDistance ?? 1.1),
-        cameraHeight: Number(preferences.cameraHeight ?? 1.3),
-        cameraTargetY: Number(preferences.cameraTargetY ?? 1),
+        cameraDistance: Number(preferences.cameraDistance ?? 1.08),
+        cameraHeight: Number(preferences.cameraHeight ?? 1.34),
+        cameraTargetY: Number(preferences.cameraTargetY ?? 0.96),
         renderProfileId: Object.prototype.hasOwnProperty.call(
             renderProfileLabels,
             String(preferences.renderProfileId || '')
         )
             ? String(preferences.renderProfileId)
-            : 'ailis_soft_anime_mtoon',
-        renderLightYawDeg: clampNumber(preferences.renderLightYawDeg, -75, 75, 0, 0),
-        renderKeyLightScale: clampNumber(preferences.renderKeyLightScale, 0.65, 1.45, 1, 2),
-        renderAmbientFillScale: clampNumber(preferences.renderAmbientFillScale, 0.55, 1.35, 1, 2),
-        renderOutlineScale: clampNumber(preferences.renderOutlineScale, 0.25, 1.2, 0.72, 2),
+            : 'ailis_bright_companion_mtoon',
+        renderLightYawDeg: clampNumber(preferences.renderLightYawDeg, -75, 75, -10, 0),
+        renderKeyLightScale: clampNumber(preferences.renderKeyLightScale, 0.65, 1.45, 1.31, 2),
+        renderAmbientFillScale: clampNumber(preferences.renderAmbientFillScale, 0.55, 1.35, 0.97, 2),
+        renderOutlineScale: clampNumber(preferences.renderOutlineScale, 0.25, 1.2, 0.3, 2),
         renderShadowEnabled: preferences.renderShadowEnabled !== false,
         renderResolutionScale: normalizeRenderResolutionScale(preferences.renderResolutionScale, 2),
-        renderFpsLimit: normalizeRenderFpsLimit(preferences.renderFpsLimit, 60),
+        renderFpsLimit: normalizeRenderFpsLimit(preferences.renderFpsLimit, 30),
         renderShadowQuality: normalizeQualityLevel(preferences.renderShadowQuality, 3),
         renderOutlineEnabled: preferences.renderOutlineEnabled !== false,
         renderAntialiasEnabled: preferences.renderAntialiasEnabled !== false,
@@ -5251,12 +5260,21 @@ function captureLlmConnectionDraft(provider = elements.llmProvider?.value) {
 
 function renderLlmConnectionMode() {
     const mode = getLlmConnectionMode();
+    const managedServer = mode === 'server';
     for (const button of elements.llmModeButtons) {
         const active = button.dataset.llmMode === mode;
         button.classList.toggle('is-active', active);
         button.setAttribute('aria-pressed', String(active));
     }
     if (elements.llmDirectFields) elements.llmDirectFields.hidden = mode !== 'direct';
+    if (elements.llmModelStatusBoard) elements.llmModelStatusBoard.hidden = managedServer;
+    if (elements.llmBaseField) elements.llmBaseField.hidden = managedServer;
+    if (elements.llmHealthCheckField) elements.llmHealthCheckField.hidden = managedServer;
+    if (elements.visionModelSection) elements.visionModelSection.hidden = managedServer;
+    if (elements.llmAdvancedSettings) {
+        elements.llmAdvancedSettings.hidden = managedServer;
+        if (managedServer) elements.llmAdvancedSettings.open = false;
+    }
     if (elements.llmAdvancedProviderField) elements.llmAdvancedProviderField.hidden = mode !== 'direct';
     if (elements.llmAdvancedModelField) elements.llmAdvancedModelField.hidden = mode === 'server';
     const descriptions = {
@@ -5304,7 +5322,7 @@ function setLlmConnectionFields(connection, previousProvider = elements.llmProvi
 
 function selectLlmConnectionMode(mode) {
     if (!['direct', 'server', 'local'].includes(mode) || mode === getLlmConnectionMode()) return;
-    const saved = llmConnectionProfiles[mode];
+    const saved = mode === 'server' ? null : llmConnectionProfiles[mode];
     const provider = saved?.provider || ({ direct: 'deepseek', server: 'ailis-cloud', local: 'ollama' })[mode];
     setLlmConnectionFields({
         provider,

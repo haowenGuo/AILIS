@@ -170,13 +170,22 @@ if (process.type === 'renderer') {
             $('llm-api-key').value = 'unsaved-test-key';
             $('llm-api-key-label').value = 'Draft label';
             mode('server');
-            result.server = !visible('llm-direct-fields') && !visible('llm-credential-fields') && !visible('local-llm-runtime-panel') && $('llm-provider').value === 'ailis-cloud';
+            result.server = !visible('llm-direct-fields') &&
+                !visible('llm-credential-fields') &&
+                !visible('local-llm-runtime-panel') &&
+                !visible('llm-model-status-board') &&
+                !visible('llm-base-field') &&
+                !visible('llm-health-check-field') &&
+                !visible('llm-advanced-settings') &&
+                !visible('section-vision-model') &&
+                $('llm-provider').value === 'ailis-cloud';
             result.noLeakedKey = $('llm-api-key').value === '';
             $('llm-base-url').value = 'https://private.example/api/llm/v1';
             mode('local');
             result.local = visible('local-llm-runtime-panel') && !visible('llm-direct-fields') && $('llm-model').value === 'local-test';
             mode('server');
-            result.serverRestored = $('llm-base-url').value === 'https://private.example/api/llm/v1';
+            result.serverRestored = $('llm-base-url').value === 'https://101.133.239.56/api/llm/v1' &&
+                $('llm-model').value === 'ailis-cloud';
             mode('direct');
             result.directRestored = $('llm-model').value === 'my-ds-model' && $('llm-base-url').value === 'https://direct.example/v1';
             result.draftRestored = $('llm-api-key').value === 'unsaved-test-key' && $('llm-api-key-label').value === 'Draft label' && $('llm-api-key-select').value === 'ds-key';
@@ -192,7 +201,8 @@ if (process.type === 'renderer') {
         await evaluate(() => document.getElementById('save-btn').click());
         for (let i = 0; i < 40 && !saves; i++) await new Promise((resolve) => setTimeout(resolve, 50));
         assert.equal(saves, 1);
-        assert.equal(prefs.llmConnectionProfiles.server.baseUrl, 'https://private.example/api/llm/v1');
+        assert.equal(prefs.llmConnectionProfiles.server.baseUrl, 'https://101.133.239.56/api/llm/v1');
+        assert.equal(prefs.llmConnectionProfiles.server.model, 'ailis-cloud');
         assert.equal(prefs.ollamaTarget.modelId, 'local-test');
         assert.equal(prefs.desktopNativeTtsRate, 1.23, 'removed legacy controls must not reset saved values');
         assert.equal(prefs.desktopNativeTtsPitch, 0.87);
@@ -210,7 +220,7 @@ if (process.type === 'renderer') {
             document.querySelector('[data-llm-mode="server"]').click();
             return document.getElementById('llm-base-url').value;
         });
-        assert.equal(restored, 'https://private.example/api/llm/v1');
+        assert.equal(restored, 'https://101.133.239.56/api/llm/v1');
         assert.ok((await evaluate(() => document.getElementById('model-active-provider').textContent)).includes('AILIS Cloud'));
         await new Promise((resolve) => setTimeout(resolve, 500));
         const screenshot = path.join(temp, 'server-mode.png');
@@ -228,7 +238,9 @@ if (process.type === 'renderer') {
         }
         await evaluate(() => {
             document.getElementById('tab-model').click();
-            document.querySelector('[data-llm-mode="server"]').click();
+            document.querySelector('[data-llm-mode="direct"]').click();
+            document.getElementById('llm-base-url').value = 'https://draft.example/v1';
+            document.getElementById('llm-base-url').dispatchEvent(new Event('input', { bubbles: true }));
         });
         await window.setSize(640, 900);
         const fits = await evaluate(() => [...document.querySelectorAll('[data-llm-mode]')].every((button) => {
@@ -247,7 +259,7 @@ if (process.type === 'renderer') {
         }
         assert.ok(reportedFailure, 'save error should remain visible');
         assert.equal(await evaluate(() => document.getElementById('footer-bar').dataset.state), 'dirty');
-        assert.equal(await evaluate(() => document.getElementById('llm-base-url').value), 'https://private.example/api/llm/v1', 'failed save must preserve draft');
+        assert.equal(await evaluate(() => document.getElementById('llm-base-url').value), 'https://draft.example/v1', 'failed save must preserve direct-provider draft');
         for (const width of [1280, 960, 640, 400]) {
             window.setSize(width, 900);
             await new Promise((resolve) => setTimeout(resolve, 100));

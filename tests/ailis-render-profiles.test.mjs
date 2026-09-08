@@ -122,7 +122,7 @@ test('desktop store normalizes render profile preferences', () => {
     assert.equal(store.normalizeRenderProfileId('ailis_wuwa_cinematic'), 'ailis_cinematic_rim_toon');
     assert.equal(store.normalizeRenderProfileId('ailis_cel_anime_hard'), 'ailis_hard_cel_mtoon');
     assert.equal(store.normalizeRenderProfileId('bad-profile'), DEFAULT_RENDER_PROFILE_ID);
-    assert.equal(store.DEFAULT_RENDER_OUTLINE_SCALE, 0.72);
+    assert.equal(store.DEFAULT_RENDER_OUTLINE_SCALE, 0.3);
     assert.equal(store.normalizeRenderOutlineScale(99), 1.2);
     assert.equal(store.normalizeRenderLightYawDeg(-99), -75);
     assert.equal(store.normalizeRenderShadowEnabled(false), false);
@@ -134,6 +134,20 @@ test('desktop store normalizes render profile preferences', () => {
     assert.equal(store.normalizeRenderShadowQuality(2), 2);
     assert.equal(store.normalizeRenderOutlineEnabled(false), false);
     assert.equal(store.normalizeRenderAntialiasEnabled(false), false);
+    const defaults = store.getDefaultState().preferences;
+    assert.equal(defaults.petScale, 0.3);
+    assert.equal(defaults.speechMode, 'hosted');
+    assert.equal(defaults.recognitionMode, 'fast-vad');
+    assert.equal(defaults.llmProvider, 'ailis-cloud');
+    assert.equal(defaults.cameraDistance, 1.08);
+    assert.equal(defaults.cameraHeight, 1.34);
+    assert.equal(defaults.cameraTargetY, 0.96);
+    assert.equal(defaults.renderProfileId, 'ailis_bright_companion_mtoon');
+    assert.equal(defaults.renderLightYawDeg, -10);
+    assert.equal(defaults.renderKeyLightScale, 1.31);
+    assert.equal(defaults.renderAmbientFillScale, 0.97);
+    assert.equal(defaults.renderOutlineScale, 0.3);
+    assert.equal(defaults.renderFpsLimit, 30);
     assert.equal(store.normalizeState({}).preferences.renderResolutionScale, 2);
     assert.equal(store.normalizeState({
         version: 22,
@@ -330,7 +344,7 @@ test('VRM model system exposes a safe default scene mood before model load', asy
     const mood = vrmSystem.getDefaultSceneMood();
 
     assert.equal(mood.state, 'idle');
-    assert.equal(mood.camera.distance, 1.1);
+    assert.equal(mood.camera.distance, 1.08);
     assert.equal(mood.background, '#f0f8ff');
 });
 
