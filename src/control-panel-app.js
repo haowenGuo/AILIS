@@ -728,6 +728,7 @@ let llmProviderDefaultBaseUrls = { ...fallbackLlmProviderDefaultBaseUrls };
 let llmProviderDefaultModels = { ...fallbackLlmProviderDefaultModels };
 let lastLlmProviderValue = 'openai-compatible';
 let llmConnectionProfiles = {};
+let managedLlmActivationPromise = null;
 const llmCredentialDrafts = new Map();
 let lastVisionLlmProviderValue = 'openai-compatible';
 let vllmModelCatalogResults = [];
@@ -5320,8 +5321,60 @@ function setLlmConnectionFields(connection, previousProvider = elements.llmProvi
     syncSaveButton();
 }
 
+async function persistManagedAilisCloudSelection() {
+    if (!window.ailisDesktop?.savePreferences) {
+        return null;
+    }
+    if (managedLlmActivationPromise) {
+        return managedLlmActivationPromise;
+    }
+
+    const managedConnection = {
+        provider: 'ailis-cloud',
+        baseUrl: getProviderDefaultBaseUrl('ailis-cloud'),
+        model: getProviderDefaultModel('ailis-cloud')
+    };
+    const partial = {
+        llmProvider: managedConnection.provider,
+        llmBaseUrl: managedConnection.baseUrl,
+        llmModel: managedConnection.model,
+        llmConnectionProfiles: {
+            ...llmConnectionProfiles,
+            server: managedConnection
+        }
+    };
+
+    managedLlmActivationPromise = window.ailisDesktop.savePreferences(partial)
+        .then((savedPreferences) => {
+            currentPreferences = normalizePreferences({
+                ...(currentPreferences || {}),
+                ...(savedPreferences || {}),
+                ...partial
+            });
+            llmConnectionProfiles = structuredClone(currentPreferences.llmConnectionProfiles);
+            syncSaveButton();
+            setStatus('AILIS 服务器已启用。');
+            return currentPreferences;
+        })
+        .catch((error) => {
+            syncSaveButton();
+            setStatus(`AILIS 服务器启用失败：${error.message || error}`);
+            return null;
+        })
+        .finally(() => {
+            managedLlmActivationPromise = null;
+        });
+    return managedLlmActivationPromise;
+}
+
 function selectLlmConnectionMode(mode) {
-    if (!['direct', 'server', 'local'].includes(mode) || mode === getLlmConnectionMode()) return;
+    if (!['direct', 'server', 'local'].includes(mode)) return;
+    if (mode === getLlmConnectionMode()) {
+        if (mode === 'server' && currentPreferences?.llmProvider !== 'ailis-cloud') {
+            void persistManagedAilisCloudSelection();
+        }
+        return;
+    }
     const saved = mode === 'server' ? null : llmConnectionProfiles[mode];
     const provider = saved?.provider || ({ direct: 'deepseek', server: 'ailis-cloud', local: 'ollama' })[mode];
     setLlmConnectionFields({
@@ -5331,6 +5384,9 @@ function selectLlmConnectionMode(mode) {
             ? currentPreferences?.ollamaUsedModels?.[0] || getProviderDefaultModel(provider)
             : getProviderDefaultModel(provider))
     });
+    if (mode === 'server') {
+        void persistManagedAilisCloudSelection();
+    }
 }
 
 function applyLlmPreset(presetId, { preserveModel = false } = {}) {

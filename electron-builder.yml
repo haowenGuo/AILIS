@@ -21,6 +21,7 @@ asarUnpack:
   - electron/**/*.py
   - scripts/**/*.cjs
   - scripts/**/*.py
+  - node_modules/stockfish/bin/stockfish-18-lite-single.*
   - vendor/ragflow-lite/**/*
 npmRebuild: false
 win:

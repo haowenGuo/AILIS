@@ -59,6 +59,7 @@ function Assert-AppStaysRunning {
     param(
         [string]$Executable,
         [string]$Label,
+        [string]$UserDataDir,
         [int]$WaitSeconds = 35
     )
 
@@ -66,7 +67,7 @@ function Assert-AppStaysRunning {
     $stderrPath = Join-Path $ReportRoot "$Label.stderr.log"
     $env:ELECTRON_ENABLE_LOGGING = "1"
     $process = Start-Process -FilePath $Executable `
-        -ArgumentList @("--disable-gpu", "--enable-logging") `
+        -ArgumentList @("--disable-gpu", "--enable-logging", "--user-data-dir=$UserDataDir") `
         -PassThru `
         -RedirectStandardOutput $stdoutPath `
         -RedirectStandardError $stderrPath
@@ -113,9 +114,14 @@ try {
     Add-Check -Name "portable-package-found" -Ok ([bool]$portable) -Detail ($portable.FullName ?? "missing")
 
     $installRoot = Join-Path $env:RUNNER_TEMP "ailis-clean-install"
+    $userDataRoot = Join-Path $env:RUNNER_TEMP "ailis-clean-user-data"
     if (Test-Path -LiteralPath $installRoot) {
         Remove-Item -LiteralPath $installRoot -Recurse -Force
     }
+    if (Test-Path -LiteralPath $userDataRoot) {
+        Remove-Item -LiteralPath $userDataRoot -Recurse -Force
+    }
+    New-Item -ItemType Directory -Force -Path $userDataRoot | Out-Null
     Stop-AilisProcesses
 
     $install = Start-Process -FilePath $setup.FullName `
@@ -129,11 +135,12 @@ try {
     $installedVersion = (Get-Item -LiteralPath $installedExe).VersionInfo.ProductVersion
     Add-Check -Name "installed-version" -Ok ($installedVersion -like "$ExpectedVersion*") -Detail $installedVersion
 
-    Assert-AppStaysRunning -Executable $installedExe -Label "installed" -WaitSeconds 35
+    Assert-AppStaysRunning -Executable $installedExe -Label "installed" -UserDataDir $userDataRoot -WaitSeconds 35
 
     $stateCandidates = @(
-        (Join-Path $env:APPDATA "ailis\desktop-state.json"),
-        (Join-Path $env:APPDATA "AILIS\desktop-state.json")
+        (Join-Path $userDataRoot "desktop-state.json"),
+        (Join-Path $userDataRoot "AILIS\desktop-state.json"),
+        (Join-Path $userDataRoot "ailis\desktop-state.json")
     )
     $statePath = $stateCandidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
     Add-Check -Name "first-run-state-created" -Ok ([bool]$statePath) -Detail ($statePath ?? ($stateCandidates -join ";"))
@@ -143,7 +150,7 @@ try {
         Add-Check -Name "first-run-cloud-model" -Ok ($state.preferences.llmModel -eq "ailis-cloud") -Detail ([string]$state.preferences.llmModel)
     }
 
-    Assert-AppStaysRunning -Executable $portable.FullName -Label "portable" -WaitSeconds 45
+    Assert-AppStaysRunning -Executable $portable.FullName -Label "portable" -UserDataDir $userDataRoot -WaitSeconds 45
 
     $uninstaller = Join-Path $installRoot "Uninstall AILIS.exe"
     Add-Check -Name "uninstaller-present" -Ok (Test-Path -LiteralPath $uninstaller) -Detail $uninstaller

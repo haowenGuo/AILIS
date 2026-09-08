@@ -110,9 +110,9 @@ Humanlike checkpoints come from 30-day companion scenarios, not a 30-day real-us
 
 ## Quick Start
 
-### v1.4.2 update
+### v1.4.4 update
 
-This release includes the unified Agent/session runtime, redesigned chat and settings, avatar quick controls, configuration persistence improvements, and local ASR fixes. The Windows packages remain lightweight, without Unity or large voice/model runtimes. See the [release notes](docs/releases/v1.4.2.md) for requirements and limits, and the [v1.4.2 downloads](https://github.com/haowenGuo/AILIS/releases/tag/v1.4.2) for installers and integrity hashes.
+AILIS Server now activates reliably on upgraded installations and other computers without asking users for an API Base, model ID, or API key. This release also verifies the packaged terminal and lightweight chess runtime, while keeping the Windows packages free of Unity and large voice/model weights. See the [release notes](docs/releases/v1.4.4.md) and [v1.4.4 downloads](https://github.com/haowenGuo/AILIS/releases/tag/v1.4.4).
 
 ### Use AILIS
 

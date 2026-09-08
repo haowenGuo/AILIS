@@ -2607,6 +2607,30 @@ function buildTemporaryLlmSettings(settings = {}) {
     };
 }
 
+function resolveAgentRunLlmSettings(settings) {
+    const persisted = getResolvedLlmSettings();
+    if (!settings || typeof settings !== 'object' || Array.isArray(settings)) {
+        return persisted;
+    }
+
+    const provider = normalizeLlmProvider(settings.provider || settings.llmProvider || persisted.provider);
+    if (provider === 'ailis-cloud') {
+        return buildTemporaryLlmSettings({
+            provider,
+            baseUrl: getDefaultProviderBaseUrl(provider),
+            model: getDefaultProviderModel(provider),
+            apiKey: ''
+        });
+    }
+
+    const inherited = persisted.provider === provider ? persisted : {};
+    return buildTemporaryLlmSettings({
+        ...inherited,
+        ...settings,
+        provider
+    });
+}
+
 function getPersistedEmailProfiles() {
     return normalizeEmailProfiles(desktopState?.preferences?.emailProfiles || {});
 }
@@ -5579,7 +5603,7 @@ function registerIpc() {
         await ensureAILISGatewayStarted('agent_run');
         return ensureAILISGateway().runAgent({
             ...(payload || {}),
-            llmSettings: payload?.llmSettings || getResolvedLlmSettings()
+            llmSettings: resolveAgentRunLlmSettings(payload?.llmSettings)
         });
     });
     ipcMain.handle('ailis:gateway-agent-interrupt', async (_event, payload = {}) =>
@@ -5600,13 +5624,13 @@ function registerIpc() {
     ipcMain.handle('ailis:agent-lab-run', async (_event, payload = {}) =>
         ensureAILISGateway().runAgentAnalysis({
             ...(payload || {}),
-            llmSettings: payload?.llmSettings || getResolvedLlmSettings()
+            llmSettings: resolveAgentRunLlmSettings(payload?.llmSettings)
         })
     );
     ipcMain.handle('ailis:agent-lab-continue', async (_event, payload = {}) =>
         ensureAILISGateway().continueAgentAnalysis({
             ...(payload || {}),
-            llmSettings: payload?.llmSettings || getResolvedLlmSettings()
+            llmSettings: resolveAgentRunLlmSettings(payload?.llmSettings)
         })
     );
     ipcMain.handle('ailis:agent-lab-interrupt', async (_event, payload = {}) =>
