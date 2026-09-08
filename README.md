@@ -110,9 +110,9 @@ Humanlike checkpoints come from 30-day companion scenarios, not a 30-day real-us
 
 ## Quick Start
 
-### v1.4.4 update
+### v1.4.5 update
 
-AILIS Server now activates reliably on upgraded installations and other computers without asking users for an API Base, model ID, or API key. This release also verifies the packaged terminal and lightweight chess runtime, while keeping the Windows packages free of Unity and large voice/model weights. See the [release notes](docs/releases/v1.4.4.md) and [v1.4.4 downloads](https://github.com/haowenGuo/AILIS/releases/tag/v1.4.4).
+AILIS Server is now the Agent Runner's fail-safe default, not only a control-panel or desktop IPC default. Every packaged release must complete a real managed-model Agent turn in a fully isolated user environment before publication. See the [release notes](docs/releases/v1.4.5.md) and [v1.4.5 downloads](https://github.com/haowenGuo/AILIS/releases/tag/v1.4.5).
 
 ### Use AILIS
 

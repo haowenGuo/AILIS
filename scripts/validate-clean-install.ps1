@@ -150,6 +150,30 @@ try {
         Add-Check -Name "first-run-cloud-model" -Ok ($state.preferences.llmModel -eq "ailis-cloud") -Detail ([string]$state.preferences.llmModel)
     }
 
+    # Starting successfully and writing defaults are insufficient: exercise the
+    # packaged Electron IPC -> Gateway -> Agent Runner -> managed LLM path from a
+    # second, fully isolated user environment with all model env vars removed.
+    $agentTurnValidator = Join-Path $PSScriptRoot "validate-clean-agent-turn.mjs"
+    $agentTurnOutput = (& node $agentTurnValidator `
+        "--artifact=$installedExe" `
+        "--expected-version=$ExpectedVersion" 2>&1 | Out-String).Trim()
+    $agentTurnExitCode = $LASTEXITCODE
+    $agentTurn = $null
+    try {
+        $agentTurn = $agentTurnOutput | ConvertFrom-Json
+    } catch {
+        $agentTurn = $null
+    }
+    $agentTurnDetail = if ($agentTurn) {
+        "status=$($agentTurn.agentTurn.status); durationMs=$($agentTurn.agentTurn.durationMs); provider=$($agentTurn.preferences.llmProvider); nonceMatched=$($agentTurn.agentTurn.nonceMatched)"
+    } else {
+        "exitCode=$agentTurnExitCode; output=$agentTurnOutput"
+    }
+    Add-Check -Name "installed-clean-agent-turn" `
+        -Ok ($agentTurnExitCode -eq 0 -and $agentTurn.ok -eq $true -and $agentTurn.agentTurn.configError -eq $false) `
+        -Detail $agentTurnDetail
+    $report.cleanAgentTurn = $agentTurn
+
     Assert-AppStaysRunning -Executable $portable.FullName -Label "portable" -UserDataDir $userDataRoot -WaitSeconds 45
 
     $uninstaller = Join-Path $installRoot "Uninstall AILIS.exe"

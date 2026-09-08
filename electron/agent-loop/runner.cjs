@@ -2,8 +2,11 @@ const fs = require('fs');
 const path = require('path');
 const { createHash, randomUUID } = require('crypto');
 const {
+    AILIS_CLOUD_PROVIDER,
     callDesktopLlmProvider,
-    compactDesktopLlmProvider
+    compactDesktopLlmProvider,
+    getDefaultProviderBaseUrl,
+    getDefaultProviderModel
 } = require('../desktop-llm-provider.cjs');
 const { VISION_TOOL_ID } = require('../ailis-vision-tool.cjs');
 const {
@@ -3041,13 +3044,18 @@ function resolveAgentContextMode(request = {}, requestContext = {}) {
 
 function resolveAgentLlmSettings(request = {}, requestContext = {}) {
     const settings = request.llmSettings || requestContext.llmSettings || requestContext.llm || request.llm || {};
+    const provider = normalizeText(
+        settings.provider || process.env.AILIS_AGENT_LLM_PROVIDER,
+        AILIS_CLOUD_PROVIDER
+    );
     return {
-        provider: normalizeText(settings.provider || process.env.AILIS_AGENT_LLM_PROVIDER, 'openai-compatible'),
+        provider,
         baseUrl: normalizeText(
             settings.baseUrl ||
                 settings.apiBase ||
                 process.env.AILIS_AGENT_LLM_BASE_URL ||
-                process.env.AILIS_LLM_BASE_URL
+                process.env.AILIS_LLM_BASE_URL ||
+                getDefaultProviderBaseUrl(provider)
         ),
         apiKey: normalizeText(
             settings.apiKey ||
@@ -3058,7 +3066,8 @@ function resolveAgentLlmSettings(request = {}, requestContext = {}) {
         model: normalizeText(
             settings.model ||
                 process.env.AILIS_AGENT_LLM_MODEL ||
-                process.env.AILIS_LLM_MODEL
+                process.env.AILIS_LLM_MODEL ||
+                getDefaultProviderModel(provider)
         ),
         temperature: settings.temperature ?? 0.2,
         timeoutMs: settings.timeoutMs || settings.requestTimeoutMs || 45000
@@ -12227,6 +12236,7 @@ module.exports = {
     buildToolResultEvent,
     sanitizeAgentToolCall,
     isAgentLlmSettingsMissing,
+    resolveAgentLlmSettings,
     buildAgentDecisionLowLatencyPayload,
     buildAgentContextBudgetConfig,
     buildToolExecutionGroups,

@@ -110,9 +110,9 @@ Humanlike 检查点来自 30 天陪伴场景，不代表真实用户连续使用
 
 ## 快速开始
 
-### v1.4.4 更新
+### v1.4.5 更新
 
-AILIS 服务器现在可以在升级安装和其他电脑上可靠启用，不再要求用户填写 API Base、模型 ID 或 API Key。本版同时验证了安装包内的终端与轻量棋类运行时，并继续保持 Windows 安装包不捆绑 Unity 和大型语音、模型权重。详见[版本说明](docs/releases/v1.4.4.md)与 [v1.4.4 下载](https://github.com/haowenGuo/AILIS/releases/tag/v1.4.4)。
+AILIS 服务器现在是 Agent Runner 最底层的兜底默认值，而不再只依赖控制面板或桌面 IPC 注入配置。每个安装包发布前都必须在完全隔离的用户环境中完成一次真实的托管模型 Agent 对话。详见[版本说明](docs/releases/v1.4.5.md)与 [v1.4.5 下载](https://github.com/haowenGuo/AILIS/releases/tag/v1.4.5)。
 
 ### 直接使用
 

@@ -39,6 +39,7 @@ const {
     isTerminalAgentDecisionFailure,
     looksLikeLeakedAgentProtocol,
     resolveAgentDirectToolChoice,
+    resolveAgentLlmSettings,
     resolveDirectToolTransportTimeoutMs,
     resolveMemoryPolicy,
     stageFileAttachmentsForWorkspace,
@@ -2471,6 +2472,37 @@ test('AILIS Agent Runner accepts managed AILIS Cloud and local settings without 
         model: 'demo-model',
         apiKey: ''
     }), true);
+});
+
+test('AILIS Agent Runner defaults to managed cloud when an entry point omits llmSettings', () => {
+    const environmentKeys = [
+        'AILIS_AGENT_LLM_PROVIDER',
+        'AILIS_AGENT_LLM_BASE_URL',
+        'AILIS_AGENT_LLM_API_KEY',
+        'AILIS_AGENT_LLM_MODEL',
+        'AILIS_LLM_BASE_URL',
+        'AILIS_LLM_API_KEY',
+        'AILIS_LLM_MODEL'
+    ];
+    const previous = Object.fromEntries(environmentKeys.map((key) => [key, process.env[key]]));
+    environmentKeys.forEach((key) => delete process.env[key]);
+    try {
+        const settings = resolveAgentLlmSettings({}, {});
+        assert.deepEqual(settings, {
+            provider: 'ailis-cloud',
+            baseUrl: 'https://101.133.239.56/api/llm/v1',
+            apiKey: '',
+            model: 'ailis-cloud',
+            temperature: 0.2,
+            timeoutMs: 45000
+        });
+        assert.equal(isAgentLlmSettingsMissing(settings), false);
+    } finally {
+        for (const key of environmentKeys) {
+            if (previous[key] === undefined) delete process.env[key];
+            else process.env[key] = previous[key];
+        }
+    }
 });
 
 test('Gateway preserves DeepSeek tool-call reasoning metadata across canonical replay', async () => {
