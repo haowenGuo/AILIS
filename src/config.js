@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { getLoadableMotionFiles } from './character/motion-intake-catalog.js';
 import { DEFAULT_RENDER_PROFILE_ID, normalizeRenderProfileId } from './character/render-profiles.js';
 
-const CLOUD_BACKEND_BASE_URL = 'https://101.133.239.56';
+const CLOUD_BACKEND_BASE_URL = 'https://150.109.13.189';
 const RUNTIME_HOSTNAME = typeof window !== 'undefined'
     ? window.location.hostname.toLowerCase()
     : '';

@@ -450,7 +450,7 @@ const llmProviderLabels = {
 };
 
 const fallbackLlmProviderDefaultBaseUrls = {
-    'ailis-cloud': 'https://101.133.239.56/api/llm/v1',
+    'ailis-cloud': 'https://150.109.13.189/api/llm/v1',
     'openai-compatible': 'https://ark.cn-beijing.volces.com/api/v3',
     doubao: 'https://ark.cn-beijing.volces.com/api/v3',
     deepseek: 'https://api.deepseek.com',
@@ -488,7 +488,7 @@ const llmPresetCatalog = [
         label: 'AILIS Cloud（推荐，免 API Key）',
         help: 'Agent、记忆与电脑工具留在本机，仅模型推理经 AILIS 服务器中转。',
         provider: 'ailis-cloud',
-        baseUrl: 'https://101.133.239.56/api/llm/v1',
+        baseUrl: 'https://150.109.13.189/api/llm/v1',
         models: [
             { id: 'ailis-cloud', label: 'AILIS 托管模型（服务器自动选择）' }
         ]

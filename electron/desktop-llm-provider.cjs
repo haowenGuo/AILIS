@@ -78,7 +78,7 @@ const PROVIDER_OPTIONS = Object.freeze([
 ]);
 
 const DEFAULT_PROVIDER_BASE_URLS = Object.freeze({
-    [AILIS_CLOUD_PROVIDER]: 'https://101.133.239.56/api/llm/v1',
+    [AILIS_CLOUD_PROVIDER]: 'https://150.109.13.189/api/llm/v1',
     [OPENAI_COMPATIBLE_PROVIDER]: 'https://ark.cn-beijing.volces.com/api/v3',
     [DOUBAO_PROVIDER]: 'https://ark.cn-beijing.volces.com/api/v3',
     [DEEPSEEK_PROVIDER]: 'https://api.deepseek.com',

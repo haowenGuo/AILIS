@@ -41,7 +41,7 @@ test('managed AILIS Cloud profile always uses the official endpoint and model', 
     });
     assert.deepEqual(profiles.server, {
         provider: 'ailis-cloud',
-        baseUrl: 'https://101.133.239.56/api/llm/v1',
+        baseUrl: 'https://150.109.13.189/api/llm/v1',
         model: 'ailis-cloud'
     });
 
@@ -52,7 +52,7 @@ test('managed AILIS Cloud profile always uses the official endpoint and model', 
         llmModel: 'user-selected-model'
     });
     const saved = normalizeLlmConnectionProfiles({}, normalized.preferences);
-    assert.equal(saved.server.baseUrl, 'https://101.133.239.56/api/llm/v1');
+    assert.equal(saved.server.baseUrl, 'https://150.109.13.189/api/llm/v1');
     assert.equal(saved.server.model, 'ailis-cloud');
 });
 
@@ -77,7 +77,7 @@ test('all three profiles survive disk reload; key and Ollama histories stay sepa
         }
         assert.equal(state.preferences.llmProvider, 'ollama');
         assert.equal(state.preferences.llmConnectionProfiles.direct.model, 'direct-model');
-        assert.equal(state.preferences.llmConnectionProfiles.server.baseUrl, 'https://101.133.239.56/api/llm/v1');
+        assert.equal(state.preferences.llmConnectionProfiles.server.baseUrl, 'https://150.109.13.189/api/llm/v1');
         assert.equal(state.preferences.llmConnectionProfiles.server.model, 'ailis-cloud');
         assert.equal(state.preferences.llmConnectionProfiles.local.model, 'local-model');
         assert.equal(state.preferences.llmApiKeyProfiles.deepseek.keys[0].value, 'test-only-key');
