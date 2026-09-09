@@ -265,7 +265,7 @@ test('AILIS computer tool provides filesystem and process control with approval 
 
         const exec = await callTool(baseUrl, {
             tool: 'computer',
-            args: { action: 'exec', command: 'node -e "console.log(\'COMPUTER_EXEC_OK\')"', timeoutMs: 10000 },
+            args: { action: 'exec', command: 'echo COMPUTER_EXEC_OK', timeoutMs: 10000 },
             context: { workspace: workspaceRoot, approved: true }
         });
         assert.equal(exec.body.ok, true, exec.body.error);
@@ -302,7 +302,8 @@ test('AILIS computer tool provides filesystem and process control with approval 
             tool: 'computer',
             args: {
                 action: 'session_start',
-                command: 'node -e "console.log(\'SESSION_READY\'); setTimeout(function(){}, 30000)"',
+                command: process.execPath,
+                args: ['-e', "console.log('SESSION_READY'); setTimeout(function(){}, 30000)"],
                 timeoutMs: 60000
             },
             context: { workspace: workspaceRoot, approved: true }
@@ -337,7 +338,8 @@ test('AILIS computer tool provides filesystem and process control with approval 
             tool: 'computer',
             args: {
                 action: 'exec_command',
-                cmd: 'node -e "console.log(\'UNIFIED_READY\'); setTimeout(function(){}, 30000)"',
+                cmd: process.execPath,
+                args: ['-e', "console.log('UNIFIED_READY'); setTimeout(function(){}, 30000)"],
                 yield_time_ms: 300,
                 max_output_tokens: 2000
             },

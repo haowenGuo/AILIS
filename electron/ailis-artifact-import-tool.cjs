@@ -232,6 +232,12 @@ async function executeArtifactImportTool(args = {}, context = {}, runtime = {}) 
         stderr = executed.stderr || '';
         workerResult = extractJsonObject(executed.stdout);
     } catch (error) {
+        if (error?.code === 'ENOENT') {
+            return createErrorResult('dependency_unavailable', `Python interpreter is unavailable: ${python}. The optional table-import runtime is required; this is not a shell or model-connection failure.`, {
+                action, parserId, path: resolvedPath, workerPath, dependency: 'python',
+                executable: python, cause: error.message
+            });
+        }
         const stdout = error?.stdout || '';
         stderr = error?.stderr || '';
         let parsed = null;

@@ -92,7 +92,7 @@ function unwrapGatewayToolEnvelope(value) {
         value &&
         typeof value === 'object' &&
         !Array.isArray(value) &&
-        Object.prototype.hasOwnProperty.call(value, 'result') &&
+        (Object.prototype.hasOwnProperty.call(value, 'result') || value.ok === false) &&
         ('callId' in value || 'durationMs' in value || 'tool' in value)
     ) {
         return { envelope: value, result: value.result };
@@ -202,11 +202,14 @@ class AILISCodeModeRuntime {
         if (toolName === 'exec_command' || toolName === 'write_stdin') {
             const details = result?.details && typeof result.details === 'object' ? result.details : {};
             const hasExecShape = 'output' in details || 'exit_code' in details || 'session_id' in details || 'sessionId' in details;
-            if (envelope?.ok === false && !hasExecShape) {
-                throw new Error(normalizeString(
-                    envelope.error || textFromToolResult(result),
+            const processFailure = ['error', 'timeout'].includes(details.process_status);
+            if ((envelope?.ok === false || result?.isError === true) && (!hasExecShape || processFailure)) {
+                const reason = normalizeString(
+                    details.error || envelope?.error || textFromToolResult(result),
                     `${toolName} failed`
-                ));
+                );
+                const output = typeof details.output === 'string' ? details.output : '';
+                throw new Error(output && !reason.includes(output) ? `${reason}\n${output}` : reason);
             }
             return compactUnifiedExecResult(result, {
                 envelope,

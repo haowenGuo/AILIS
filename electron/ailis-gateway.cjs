@@ -2,6 +2,8 @@ const http = require('http');
 const fs = require('fs');
 const fsp = require('fs/promises');
 const path = require('path');
+const { assertRealPathInside, initializeOwnedWorkspace } = require('./ailis-filesystem-boundary.cjs');
+const { applyLocalPatch } = require('./ailis-local-patch.cjs');
 const { EventEmitter } = require('events');
 const { randomUUID } = require('crypto');
 const { pathToFileURL } = require('url');
@@ -1174,6 +1176,7 @@ class AILISGateway extends EventEmitter {
         this.app = options.app;
         this.projectRoot = path.resolve(options.projectRoot || PROJECT_ROOT);
         this.workspaceRoot = path.resolve(options.workspaceRoot || this.projectRoot);
+        this.initializeOwnedWorkspace = options.initializeOwnedWorkspace === true;
         this.taskVerificationExecutor = typeof options.taskVerificationExecutor === 'function'
             ? options.taskVerificationExecutor
             : null;
@@ -1563,6 +1566,7 @@ class AILISGateway extends EventEmitter {
             return this.getStatus({ includeAgentRunner: false });
         }
 
+        if (this.initializeOwnedWorkspace) await initializeOwnedWorkspace(this.workspaceRoot);
         await fsp.mkdir(this.auditDir, { recursive: true });
         this.server = http.createServer((req, res) => {
             this.handleHttpRequest(req, res).catch((error) => {
@@ -4879,13 +4883,6 @@ class AILISGateway extends EventEmitter {
             });
         }
         if (toolId === COMPUTER_TOOL_ID) {
-            const action = normalizeString(args.action || args.operation || args.intent).toLowerCase().replace(/[-\s]+/g, '_');
-            if (['exec_command', 'exec', 'run'].includes(action)) {
-                const interceptedPatch = this.extractPatchFromCommand(args.cmd || args.command);
-                if (interceptedPatch) {
-                    return await this.executeLocalApplyPatch(interceptedPatch, workspaceDir, context);
-                }
-            }
             return await this.computerTool.execute(args, context, {
                 workspaceDir,
                 workspaceRoot: this.workspaceRoot,
@@ -4992,16 +4989,6 @@ class AILISGateway extends EventEmitter {
                 reason
             }
         };
-    }
-
-    extractPatchFromCommand(command = '') {
-        const text = normalizeString(command);
-        const start = text.indexOf('*** Begin Patch');
-        const end = text.indexOf('*** End Patch');
-        if (start < 0 || end < start) {
-            return '';
-        }
-        return text.slice(start, end + '*** End Patch'.length).trim();
     }
 
     parseLocalPatch(input = '') {
@@ -5117,36 +5104,15 @@ class AILISGateway extends EventEmitter {
     async executeLocalApplyPatch(input, workspaceDir, context = {}) {
         this.assertPatchInsideWorkspace(input, workspaceDir, context);
         const operations = this.parseLocalPatch(input);
-        const changedFiles = [];
-        for (const operation of operations) {
-            const target = this.resolveToolPath(operation.path, workspaceDir, 'patchPath', context);
-            if (operation.type === 'add') {
-                const content = this.patchBodyToText(operation.body);
-                await fsp.mkdir(path.dirname(target), { recursive: true });
-                await fsp.writeFile(target, content, 'utf8');
-                changedFiles.push({ action: 'add', path: target, bytes: Buffer.byteLength(content, 'utf8') });
-                continue;
-            }
-            if (operation.type === 'delete') {
-                await fsp.rm(target, { force: true });
-                changedFiles.push({ action: 'delete', path: target });
-                continue;
-            }
-            const source = await fsp.readFile(target, 'utf8').catch((error) => {
-                throwBlocked(`apply_patch update target not found: ${operation.path}`, { error: error?.message || String(error) });
-            });
-            const next = this.applyUpdatePatchText(source, operation.body);
-            await fsp.writeFile(target, next, 'utf8');
-            changedFiles.push({ action: 'update', path: target, bytes: Buffer.byteLength(next, 'utf8') });
-        }
-        return {
-            content: [{ type: 'text', text: `apply_patch completed: ${changedFiles.length} file(s)` }],
-            details: {
-                status: 'completed',
-                action: 'apply_patch',
-                changedFiles
-            }
-        };
+        return applyLocalPatch({ operations,
+            resolveTarget: (rawPath) => {
+                const target = this.resolveToolPath(rawPath, workspaceDir, 'patchPath', context);
+                assertRealPathInside(workspaceDir, target);
+                return target;
+            },
+            addText: (body) => this.patchBodyToText(body),
+            updateText: (source, body) => this.applyUpdatePatchText(source, body)
+        });
     }
 
     async executeLocalCoreTool({ toolId, args, context, workspaceDir }) {
@@ -5213,10 +5179,6 @@ class AILISGateway extends EventEmitter {
         }
 
         if (toolId === 'exec_command') {
-            const interceptedPatch = this.extractPatchFromCommand(args.cmd || args.command);
-            if (interceptedPatch) {
-                return await this.executeLocalApplyPatch(interceptedPatch, workspaceDir, context);
-            }
             const workdir = this.resolveToolPath(args.workdir || workspaceDir, workspaceDir, 'workdir', context);
             return await this.computerTool.execute(
                 {
@@ -5265,10 +5227,6 @@ class AILISGateway extends EventEmitter {
         }
 
         if (toolId === 'exec') {
-            const interceptedPatch = this.extractPatchFromCommand(args.command || args.cmd);
-            if (interceptedPatch) {
-                return await this.executeLocalApplyPatch(interceptedPatch, workspaceDir, context);
-            }
             const finalArgs = this.prepareToolArgs({ toolId, args, context, workspaceDir });
             return await this.computerTool.execute(
                 {
@@ -5416,6 +5374,7 @@ class AILISGateway extends EventEmitter {
                 workspaceDir
             });
         }
+        assertRealPathInside(workspaceDir, target);
         return target;
     }
 

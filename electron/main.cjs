@@ -3126,6 +3126,7 @@ function ensureAILISGateway() {
         } : {}),
         projectRoot: getProjectRoot(),
         workspaceRoot: getGatewayWorkspaceRoot(),
+        initializeOwnedWorkspace: app.isPackaged === true,
         auditDir: getPersistedAILISStateDir(),
         emberHarnessEnabled: emberHarnessMode !== 'off',
         emberHarnessMode: emberHarnessMode === 'enforce' ? 'enforce' : 'observe',

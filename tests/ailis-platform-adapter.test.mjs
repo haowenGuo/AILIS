@@ -40,7 +40,9 @@ test('AILIS platform adapter normalizes OS-specific path and shell behavior', ()
     });
     assert.equal(windows.id, 'windows');
     assert.equal(windows.isPathInside('C:\\Work', 'C:\\WORK\\note.txt'), true);
-    assert.equal(windows.pathKey('C:\\Work\\Note.txt'), path.resolve('C:\\Work\\Note.txt').toLowerCase());
+    assert.equal(windows.pathKey('C:\\Work\\Note.txt'), path.win32.resolve('C:\\Work\\Note.txt').toLowerCase());
+    assert.equal(windows.isPathInside('C:\\', 'C:\\Work\\note.txt'), true);
+    assert.equal(windows.isPathInside('C:\\Work', 'D:\\Work\\note.txt'), false);
     assert.deepEqual(windows.shellArgs('echo hi'), ['/d', '/s', '/c', 'echo hi']);
     const multilinePowerShell = [
         "$value = @'",
@@ -65,6 +67,7 @@ test('AILIS platform adapter normalizes OS-specific path and shell behavior', ()
     assert.equal(linux.id, 'linux');
     assert.equal(linux.isPathInside('/tmp/work', '/tmp/work/note.txt'), true);
     assert.equal(linux.isPathInside('/tmp/work', '/tmp/work-other/note.txt'), false);
+    assert.equal(linux.isPathInside('/', '/tmp/work/note.txt'), true);
     assert.deepEqual(linux.shellArgs('echo hi'), ['-lc', 'echo hi']);
     const linuxSpawn = linux.commandSpawnSpec('printf "one\\ntwo\\n"');
     assert.equal(linuxSpawn.command, 'bash');

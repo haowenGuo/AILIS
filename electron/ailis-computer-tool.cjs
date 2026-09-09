@@ -2,6 +2,7 @@ const fs = require('fs');
 const fsp = require('fs/promises');
 const os = require('os');
 const path = require('path');
+const { shellArgsForExecutable } = require('./ailis-shell-launch.cjs');
 const crypto = require('crypto');
 const zlib = require('zlib');
 const { execFile, spawn } = require('child_process');
@@ -160,7 +161,7 @@ function explicitShellSpawnSpec(shell = '', command = '', { cwd, env, login = tr
         return {
             supported: true,
             command: executable,
-            args: ['/d', '/s', '/c', command],
+            args: shellArgsForExecutable(executable, command, { login }),
             options: spawnOptions,
             targetCommand: command,
             backend: 'explicit-cmd'
@@ -170,7 +171,7 @@ function explicitShellSpawnSpec(shell = '', command = '', { cwd, env, login = tr
         return {
             supported: true,
             command: executable,
-            args: ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', command],
+            args: shellArgsForExecutable(executable, command, { login }),
             options: spawnOptions,
             targetCommand: command,
             backend: 'explicit-powershell'
@@ -179,7 +180,7 @@ function explicitShellSpawnSpec(shell = '', command = '', { cwd, env, login = tr
     return {
         supported: true,
         command: executable,
-        args: [login === false ? '-c' : '-lc', command],
+        args: shellArgsForExecutable(executable, command, { login }),
         options: spawnOptions,
         targetCommand: command,
         backend: 'explicit-shell'
@@ -2037,6 +2038,18 @@ function resolveWorkdir(args, context, runtime) {
     return resolveTargetPath(args.workdir || args.cwd || runtime.workspaceDir || runtime.workspaceRoot || '.', runtime);
 }
 
+function validateWorkingDirectory(workdir) {
+    try {
+        if (!fs.statSync(workdir).isDirectory()) {
+            const error = new Error('not a directory'); error.code = 'ENOTDIR'; throw error;
+        }
+    } catch (cause) {
+        const error = new Error(`Invalid working directory: ${workdir} (${cause.code || cause.message})`, { cause });
+        error.code = 'invalid_working_directory';
+        throw error;
+    }
+}
+
 function appendBounded(buffer, chunk, maxBytes = DEFAULT_PROCESS_BUFFER_BYTES) {
     const text = Buffer.isBuffer(chunk) ? chunk.toString('utf8') : String(chunk);
     const merged = buffer + text;
@@ -2432,7 +2445,7 @@ class ComputerRuntime {
             record.updatedAt = Date.now();
         });
         child.on('exit', (code, signal) => {
-            record.status = 'exited';
+            if (record.status !== 'timeout') record.status = 'exited';
             record.exitCode = code;
             record.signal = signal;
             record.updatedAt = Date.now();
@@ -2452,6 +2465,9 @@ class ComputerRuntime {
         });
         child.on('error', (error) => {
             record.status = 'error';
+            record.error = error.message || String(error);
+            record.errorCode = error.code;
+            if (record.timeout) { clearTimeout(record.timeout); record.timeout = null; }
             record.stderr = appendBounded(record.stderr, `\n${error.message || error}`);
             record.outputCapture?.append('stderr', `\n${error.message || error}`);
             record.updatedAt = Date.now();
@@ -2518,7 +2534,9 @@ class ComputerRuntime {
         const running = record.status === 'running';
         const outputStore = record.outputStore || summarizeExecOutputCapture(record.outputCapture);
         return {
-            status: 'completed',
+            status: ['error', 'timeout'].includes(record.status) ? 'error' : 'completed',
+            error: record.error || (record.status === 'timeout' ? 'Process timed out' : undefined),
+            errorCode: record.errorCode,
             action: options.action || 'exec_command',
             command: record.command,
             workdir: record.workdir,
@@ -2619,11 +2637,13 @@ class ComputerRuntime {
             });
         }
         const cols = normalizeNumber(args.cols, 100, 20, 400);
+        validateWorkingDirectory(workdir);
         const rows = normalizeNumber(args.rows, 30, 5, 200);
         const ptySpec = getRuntimePlatform(runtime).ptySpawnOptions({
             command,
             executable: args.executable || args.shell,
             args: args.args,
+            login: args.login !== false,
             cwd: workdir,
             env: args.env,
             term: normalizeString(args.term, 'xterm-256color'),
@@ -2659,6 +2679,12 @@ class ComputerRuntime {
             record.exitCode = exitCode;
             record.signal = signal;
             record.updatedAt = Date.now();
+            // node-pty 1.1.x closes ConPTY's output socket on natural exit but
+            // leaves its relay worker alive. Release only that owned IPC worker;
+            // do not call kill() with an exited/reusable process id.
+            if (process.platform === 'win32') {
+                terminal._agent?._conoutSocketWorker?.dispose?.();
+            }
         });
         this.ptySessions.set(record.id, record);
         return createTextResult(JSON.stringify(this.publicPty(record), null, 2), {
@@ -2815,6 +2841,7 @@ class ComputerRuntime {
                 workdir
             });
         }
+        validateWorkingDirectory(workdir);
         const timeoutMs = normalizeNumber(args.timeoutMs || args.timeout, DEFAULT_EXEC_TIMEOUT_MS, 1000, 10 * 60 * 1000);
         const maxOutputTokens = normalizeNumber(args.max_output_tokens || args.maxOutputTokens, DEFAULT_EXEC_MAX_OUTPUT_TOKENS, 256, 100000);
         const startedAt = Date.now();
@@ -2995,6 +3022,7 @@ class ComputerRuntime {
             details.stdout = details.output;
             return createTextResult(details.output || JSON.stringify(details, null, 2), details);
         }
+        validateWorkingDirectory(workdir);
         const timeoutMs = normalizeNumber(args.timeoutMs || args.timeout, DEFAULT_SESSION_TIMEOUT_MS, 1000, 24 * 60 * 60 * 1000);
         const platformAdapter = getRuntimePlatform(runtime);
         const spawnSpec = explicitShellSpawnSpec(args.shell, command, {
@@ -3059,7 +3087,8 @@ class ComputerRuntime {
             annotateExecDetails(details, { command, args: commandArgs, platformAdapter }),
             outputStore
         );
-        return createTextResult(formatExecContent(annotatedDetails), annotatedDetails);
+        return { ...createTextResult(formatExecContent(annotatedDetails), annotatedDetails),
+            ...(annotatedDetails.status === 'error' ? { isError: true } : {}) };
     }
 
     async sessionStart(args, context, runtime) {
@@ -3084,6 +3113,7 @@ class ComputerRuntime {
                 workdir
             });
         }
+        validateWorkingDirectory(workdir);
         const timeoutMs = normalizeNumber(args.timeoutMs || args.timeout, DEFAULT_SESSION_TIMEOUT_MS, 1000, 24 * 60 * 60 * 1000);
         const platformAdapter = getRuntimePlatform(runtime);
         const spawnSpec = platformAdapter.commandSpawnSpec
@@ -3214,7 +3244,8 @@ class ComputerRuntime {
             details.bytes_written = Buffer.byteLength(input);
             const outputStore = await summarizeRecordOutputStore(processRecord);
             const withOutputStore = attachOutputStoreDetails(details, outputStore);
-            return createTextResult(formatExecContent(withOutputStore), withOutputStore);
+            return { ...createTextResult(formatExecContent(withOutputStore), withOutputStore),
+                ...(withOutputStore.status === 'error' ? { isError: true } : {}) };
         }
         if (input && ptyRecord.status !== 'running') {
             return createErrorResult('error', `PTY 会话不是 running：${ptyRecord.status}`, { sessionId: id, status: ptyRecord.status });
