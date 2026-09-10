@@ -79,8 +79,13 @@ async function main() {
         return child;
     };
     const { DesktopASRManager } = require(path.join(resources,'app.asar/electron/local-asr-manager.cjs'));
+    const { VoiceRuntimeBootstrap } = require(path.join(resources,'app.asar/electron/voice-runtime-bootstrap.cjs'));
+    const userData=path.join(clean.APPDATA,'AILIS');
+    // Match main.cjs wiring, including its empty-profile runtime-path provider.
+    const voiceRuntime=new VoiceRuntimeBootstrap({projectRoot:path.join(resources,'app.asar'),
+        userDataPath:userData,appDataPath:clean.APPDATA,runtimeRoot:path.join(userData,'local-runtimes'),platform:process.platform});
     const manager = new DesktopASRManager({ app: { isPackaged:true,
-        getPath: name => name === 'appData' ? clean.APPDATA : path.join(clean.APPDATA,'AILIS') } });
+        getPath: name => name === 'appData' ? clean.APPDATA : userData },getRuntimePaths:()=>voiceRuntime.getPaths() });
     const report = { platform: process.platform, arch:process.arch, packageDir, executable:process.execPath,
         freshProfile:true, systemOnlyPath:clean.PATH, poisonedDeveloperPaths:true, nativeCleanOS:false,
         pythonNetworkGuard:true, fixtures:[], success:false, acceptanceScope:'runtime readiness; accuracy reported separately' };
