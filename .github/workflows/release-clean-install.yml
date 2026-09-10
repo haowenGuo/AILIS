@@ -49,7 +49,11 @@ jobs:
           tests/voice-runtime-bootstrap.test.mjs
           tests/ailis-code-mode-packaging.test.mjs
       - name: Fresh-profile system-only-PATH source execution
+        id: cold
         run: node scripts/test-clean-runtime.mjs --output release/evidence/${{ matrix.target }}/source-cold-runtime.json
+      - name: Collect native Windows shell startup evidence on failure
+        if: failure() && runner.os == 'Windows' && steps.cold.conclusion == 'failure'
+        run: node scripts/probe-cold-shells.mjs release/evidence/win32-x64/shell-startup-diagnostic.json
       - name: Stage pinned private Python, native CPU dependencies and complete Whisper Small
         run: node scripts/prepare-bundled-asr.mjs
       - name: Build native versioned release artifacts (no publishing)

@@ -25,7 +25,7 @@ function resolveCodeModeWorkerLaunch({ moduleDir = __dirname, electron = process
     // Resolve directory aliases before entering the permission-restricted child
     // (e.g. macOS /var -> /private/var). Permit only the same physical worker,
     // not the alias's parents or any additional workspace content.
-    const workerPath = fs.realpathSync(unpackedWorkerPath);
+    const workerPath = fs.realpathSync.native(unpackedWorkerPath);
     if (!fs.statSync(workerPath).isFile()) throw new Error(`exec worker is not a file: ${workerPath}`);
     return {
         workerPath,
