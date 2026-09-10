@@ -4,13 +4,14 @@
   "outputRoot": "F:/AILIS/Build/AILIS",
   "profiles": {
     "core": {
-      "title": "Core lightweight installer",
-      "description": "Build the default lightweight installer and portable package. Runtime components stay optional and are not bundled.",
+      "title": "Default installer with offline Whisper Small ASR",
+      "description": "Fixed defaults: hosted Microsoft TTS and self-contained CPU Whisper Small ASR. No optional component page or post-install model download.",
       "buildFrontend": true,
       "buildDesktop": true,
       "builderConfig": "electron-builder.yml",
       "builderTargets": ["--win", "nsis", "portable"],
       "runtimeComponents": [],
+      "bundledRuntimeComponents": ["asr-runtime"],
       "buildRuntimePacks": false,
       "stageRuntimePacks": false,
       "outputSubdir": "core"

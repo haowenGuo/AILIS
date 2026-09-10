@@ -236,6 +236,7 @@ function buildPlanForProfile(profileName, profile, options, componentManifest, o
         outputDir,
         runtimePackOutput,
         runtimeComponents,
+        bundledRuntimeComponents: profile.bundledRuntimeComponents || [],
         commands
     };
 }
@@ -256,6 +257,7 @@ async function writeReleaseManifest(plan, dryRun) {
         generatedAt: new Date().toISOString(),
         outputDir: plan.outputDir,
         runtimeComponents: plan.runtimeComponents,
+        bundledRuntimeComponents: plan.bundledRuntimeComponents,
         commands: plan.commands.map(commandToString),
         artifacts
     };

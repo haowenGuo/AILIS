@@ -1,0 +1,15 @@
+{
+  "source": "https://download.pytorch.org/whl/cpu/",
+  "wheels": [
+    {
+      "file": "torch-2.6.0+cpu-cp312-cp312-win_amd64.whl",
+      "url": "https://download.pytorch.org/whl/cpu/torch-2.6.0%2Bcpu-cp312-cp312-win_amd64.whl",
+      "sha256": "4027d982eb2781c93825ab9527f17fbbb12dbabf422298e4b954be60016f87d8"
+    },
+    {
+      "file": "torchaudio-2.6.0+cpu-cp312-cp312-win_amd64.whl",
+      "url": "https://download.pytorch.org/whl/cpu/torchaudio-2.6.0%2Bcpu-cp312-cp312-win_amd64.whl",
+      "sha256": "75266c25d394bb5d70f83a38b1b4d858c074a767c18f7ff87443bdf193c1b236"
+    }
+  ]
+}

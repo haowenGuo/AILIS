@@ -1,7 +1,13 @@
 // Shared build-time allowlist, consumed by both desktop release variants.
 const { desktopFiles, assertDesktopBuild } = require('./scripts/production-closure.cjs');
+const { assertBundledAsr } = require('./scripts/bundled-asr-contract.cjs');
 module.exports = {
-    beforePack: async context => assertDesktopBuild(context.packager.projectDir),
+    beforePack: async context => {
+        assertDesktopBuild(context.packager.projectDir);
+        if (context.packager.config.extraMetadata?.ailisBundledAsr) {
+            await assertBundledAsr(context.packager.projectDir, context.electronPlatformName, context.arch);
+        }
+    },
     files: [
         'dist/**/*', ...desktopFiles(), 'package.json',
         '!**/*.map',

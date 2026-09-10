@@ -102,10 +102,20 @@ function buildRuntimeEnv(runtimeRoot, manifest = {}) {
     const pythonPathEntries = normalizeManifestPathList(runtimeRoot, manifest.pythonPath);
     const pathEntries = normalizeManifestPathList(runtimeRoot, manifest.pathAppend);
     const env = {};
+    if (manifest.selfContained === true) {
+        // Bundled Python must not inherit a developer's package/model locations.
+        const cache = normalizeRelativePath(runtimeRoot, manifest.asrCache || 'asr-cache');
+        Object.assign(env, {
+            PYTHONHOME: '', PYTHONNOUSERSITE: '1', PYTHONDONTWRITEBYTECODE: '1',
+            PYTHONPATH: pythonPathEntries.join(path.delimiter),
+            HF_HOME: cache, HF_HUB_CACHE: cache, TRANSFORMERS_CACHE: cache,
+            HF_HUB_OFFLINE: '1', TRANSFORMERS_OFFLINE: '1', HF_DATASETS_OFFLINE: '1'
+        });
+    }
     if (pythonPathEntries.length) {
         env.PYTHONPATH = [
             ...pythonPathEntries,
-            process.env.PYTHONPATH || ''
+            manifest.selfContained === true ? '' : (process.env.PYTHONPATH || '')
         ].filter(Boolean).join(path.delimiter);
     }
     if (pathEntries.length) {
