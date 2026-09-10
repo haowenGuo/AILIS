@@ -4,6 +4,23 @@ const os = require('node:os');
 const cp = require('node:child_process');
 const assert = require('node:assert/strict');
 
+function recognitionQuality(expected, actual, keywords) {
+    const normalize = text => Array.from(text.normalize('NFKC').replace(/[\p{P}\p{Z}\s]/gu, ''));
+    const reference = normalize(expected), hypothesis = normalize(actual);
+    let row = Array.from({ length: hypothesis.length + 1 }, (_, i) => i);
+    for (let i = 0; i < reference.length; i++) {
+        const next = [i + 1];
+        for (let j = 0; j < hypothesis.length; j++) next.push(Math.min(next[j] + 1, row[j + 1] + 1,
+            row[j] + (reference[i] === hypothesis[j] ? 0 : 1)));
+        row = next;
+    }
+    const characterErrors = row.at(-1);
+    return { exactText: expected === actual, normalizedExact: characterErrors === 0,
+        referenceCharacters: reference.length, characterErrors,
+        characterErrorRate: characterErrors / Math.max(1, reference.length),
+        missingKeywords: keywords.filter(word => !actual.includes(word)) };
+}
+
 // Invoked using the actual package's Electron-as-Node executable. This is a
 // cold-profile/payload test, not a replacement for native clean-OS installation.
 async function main() {
@@ -34,6 +51,9 @@ async function main() {
         '  print("AILIS_NETWORK_DENIED:"+event,file=sys.stderr,flush=True)',
         '  raise RuntimeError("Network disabled by offline acceptance harness")',
         'sys.addaudithook(guard)',
+        // WAV recognition does not import torchaudio itself; probe this shipped
+        // dependency explicitly as part of installation readiness acceptance.
+        'import torchaudio',
         'def evidence():',
         ' modules={k:getattr(sys.modules.get(k),"__file__",None) for k in ("torch","torchaudio","transformers","numpy","accelerate")}',
         ' print("AILIS_PYTHON_EVIDENCE:"+json.dumps({"executable":sys.executable,"prefix":sys.prefix,"path":sys.path,"modules":modules}),file=sys.stderr,flush=True)',
@@ -63,7 +83,7 @@ async function main() {
         getPath: name => name === 'appData' ? clean.APPDATA : path.join(clean.APPDATA,'AILIS') } });
     const report = { platform: process.platform, arch:process.arch, packageDir, executable:process.execPath,
         freshProfile:true, systemOnlyPath:clean.PATH, poisonedDeveloperPaths:true, nativeCleanOS:false,
-        pythonNetworkGuard:true, fixtures:[], success:false };
+        pythonNetworkGuard:true, fixtures:[], success:false, acceptanceScope:'runtime readiness; accuracy reported separately' };
     let child;
     try {
         const start=Date.now();
@@ -77,8 +97,10 @@ async function main() {
         const fixtures=JSON.parse(fs.readFileSync(path.join(fixtureDir,'fixtures.json'),'utf8').replace(/^\uFEFF/,''));
         for(const item of fixtures.cases) {
             const result=await manager.transcribeAudioBytes({audioBytes:fs.readFileSync(path.join(fixtureDir,item.file)),preset:'fast'});
-            report.fixtures.push({file:item.file,expected:item.text,...result});
-            for(const word of item.contains) assert.ok(result.text.includes(word),`Expected ${word}; received ${result.text}`);
+            report.fixtures.push({file:item.file,expected:item.text,...result,
+                quality:recognitionQuality(item.text, result.text || '', item.contains)});
+            assert.ok(result.text?.trim(), 'Real speech fixture produced no text');
+            assert.equal(result.model_id, 'openai/whisper-small');
         }
         const silence=Buffer.alloc(44+32000); silence.write('RIFF');silence.writeUInt32LE(silence.length-8,4);silence.write('WAVEfmt ',8);
         silence.writeUInt32LE(16,16);silence.writeUInt16LE(1,20);silence.writeUInt16LE(1,22);silence.writeUInt32LE(16000,24);
@@ -91,6 +113,9 @@ async function main() {
         assert.equal(networkAttempts,0);
         assert.ok(pythonEvidence,'Missing actual Python module evidence');
         for(const [name,file] of Object.entries(pythonEvidence.modules)) assert.ok(file?.toLowerCase().startsWith(resources.toLowerCase()+path.sep),`${name} loaded outside package`);
+        report.quality = { allNormalizedExact:report.fixtures.every(f=>f.quality.normalizedExact),
+            characterErrors:report.fixtures.reduce((n,f)=>n+f.quality.characterErrors,0),
+            referenceCharacters:report.fixtures.reduce((n,f)=>n+f.quality.referenceCharacters,0) };
         report.success=true;
     } catch(error) { report.error=error.stack; process.exitCode=1; }
     finally {

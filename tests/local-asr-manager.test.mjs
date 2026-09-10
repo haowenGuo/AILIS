@@ -6,7 +6,15 @@ import { afterEach, beforeEach, test } from 'node:test';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const { DesktopASRManager, probeAsrPython } = require('../electron/local-asr-manager.cjs');
+const { DesktopASRManager: RuntimeASRManager, probeAsrPython } = require('../electron/local-asr-manager.cjs');
+
+// Unit fixtures must not discover the release payload left in build-cache.
+// Real packaged discovery is covered separately by installer acceptance.
+class DesktopASRManager extends RuntimeASRManager {
+    getPackagedAsrRuntimeRoots() {
+        return process.env.AILIS_ASR_RUNTIME_DIR ? [process.env.AILIS_ASR_RUNTIME_DIR] : [];
+    }
+}
 
 let tempRoot;
 let oldRuntimeDir;
