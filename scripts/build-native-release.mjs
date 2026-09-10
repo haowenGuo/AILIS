@@ -28,6 +28,7 @@ async function build() {
     for(const file of required)identity.files.push({file,sha256:await sha(path.join(root,file))});
     await fs.mkdir(release,{recursive:true});
     await fs.writeFile(path.join(release,`source-identity-${key}.json`),JSON.stringify(identity,null,2));
+    await run(process.execPath,[path.join(root,'scripts/prepare-native-node.cjs')]);
     await pnpm('build:desktop');
     const flag=process.platform==='win32'?'--win':process.platform==='darwin'?'--mac':'--linux';
     await pnpm('exec','electron-builder','--config','electron-builder.yml',flag,`--${process.arch}`,'--publish','never',

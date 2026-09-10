@@ -40,6 +40,8 @@ jobs:
           enable-cache: false
       - name: Install build dependencies on the native runner
         run: pnpm install --frozen-lockfile
+      - name: Prepare native terminal executable permissions
+        run: node scripts/prepare-native-node.cjs
       - name: Source packaging and ASR contracts
         run: >-
           node --test --test-concurrency=1

@@ -25,6 +25,7 @@ extraResources:
       - "!**/*.incomplete"
 asar: true
 asarUnpack:
+  - node_modules/node-pty/**/*
   - dist/**/*
   - electron/**/*.cjs
   - electron/**/*.py
