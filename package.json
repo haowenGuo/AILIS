@@ -1,6 +1,6 @@
 {
   "name": "ailis",
-  "version": "1.4.3",
+  "version": "1.4.4",
   "description": "AILIS desktop embodied-agent companion with VRM avatar, realtime voice, memory, and native AILIS agent runtime.",
   "type": "module",
   "main": "electron/main.cjs",
@@ -31,6 +31,8 @@
     "ailis:runtime-packs:build:asr": "node scripts/build-ailis-runtime-packs.mjs --components python-runtime,asr-runtime",
     "ailis:runtime-packs:build:web": "node scripts/build-ailis-runtime-packs.mjs --components web-runtime",
     "release:plan": "node scripts/build-ailis-release.mjs --profile core --dry-run",
+    "release:native": "node scripts/build-native-release.mjs",
+    "release:native:verify": "node scripts/build-native-release.mjs --verify",
     "release:core": "node scripts/build-ailis-release.mjs --profile core",
     "release:runtime-packs": "node scripts/build-ailis-release.mjs --profile runtime-packs",
     "release:with-packs": "node scripts/build-ailis-release.mjs --profile with-packs",

@@ -1,0 +1,24 @@
+﻿{
+    "voice":  "Microsoft Huihui Desktop",
+    "cases":  [
+                  {
+                      "contains":  [
+                                       "检查",
+                                       "磁盘",
+                                       "空间"
+                                   ],
+                      "file":  "chinese-basic.wav",
+                      "text":  "你好，请帮我检查电脑的磁盘空间。"
+                  },
+                  {
+                      "contains":  [
+                                       "文件夹",
+                                       "创建",
+                                       "文本文件"
+                                   ],
+                      "file":  "chinese-instruction.wav",
+                      "text":  "请打开工作文件夹，然后创建一个文本文件。"
+                  }
+              ],
+    "sampleRate":  16000
+}

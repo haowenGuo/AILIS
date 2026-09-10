@@ -6,7 +6,7 @@ electronDist: node_modules/electron/dist
 icon: build/icon.png
 afterPack: scripts/fix-windows-exe-icon.cjs
 directories:
-  output: F:/AILIS/Build/AILIS
+  output: release
 electronLanguages:
   - en-US
   - zh-CN
@@ -51,10 +51,27 @@ nsis:
   include: installer/ailis-runtime-components.nsh
 portable:
   artifactName: ${productName}-Portable-${version}-win-${arch}.${ext}
+mac:
+  artifactName: ${productName}-${version}-mac-${arch}.${ext}
+  category: public.app-category.productivity
+  identity: "-"
+  hardenedRuntime: false
+  minimumSystemVersion: "14.0"
+  signIgnore:
+    - .*/ailis-asr-runtime/.*
+  extendInfo:
+    NSMicrophoneUsageDescription: AILIS uses the microphone for local speech recognition when you start recording.
+    NSCameraUsageDescription: AILIS uses the camera only when you enable camera input.
+  target:
+    - dmg
+    - zip
+dmg:
+  artifactName: ${productName}-${version}-mac-${arch}.${ext}
 linux:
   icon: build/icon.png
   executableName: ailis
   category: Utility
+  artifactName: ${productName}-${version}-linux-${arch}.${ext}
   target:
     - target: AppImage
       arch:

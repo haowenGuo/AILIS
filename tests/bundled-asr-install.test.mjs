@@ -44,7 +44,7 @@ test('packaged ASR isolates Python and model imports from developer environment'
 });
 
 test('build gate rejects absent runtime and mismatched target platform', async () => {
-    await assert.rejects(assertBundledAsr('missing-project', 'darwin', 'arm64'), /Windows x64 only/);
+    await assert.rejects(assertBundledAsr('missing-project', 'linux', 'ia32'), /Unsupported bundled ASR target/);
     await assert.rejects(assertBundledAsr('missing-project', 'win32', 'x64'), /ENOENT/);
 });
 

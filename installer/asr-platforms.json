@@ -1,0 +1,15 @@
+{
+  "win32-x64": { "platform": "win32", "arch": "x64", "python": "python.exe", "uvPlatform": "x86_64-pc-windows-msvc", "lock": "asr-requirements-win-x64.lock", "numpy": "2.2.6", "wheelsFile": "asr-wheels.json" },
+  "linux-x64": { "platform": "linux", "arch": "x64", "python": "bin/python3.12", "uvPlatform": "x86_64-manylinux_2_35", "lock": "asr-locks/linux-x64.txt", "numpy": "2.2.6", "wheels": [
+    { "file": "torch-2.6.0+cpu-cp312-cp312-linux_x86_64.whl", "url": "https://download.pytorch.org/whl/cpu/torch-2.6.0%2Bcpu-cp312-cp312-linux_x86_64.whl", "sha256": "59e78aa0c690f70734e42670036d6b541930b8eabbaa18d94e090abf14cc4d91" },
+    { "file": "torchaudio-2.6.0+cpu-cp312-cp312-linux_x86_64.whl", "url": "https://download.pytorch.org/whl/cpu/torchaudio-2.6.0%2Bcpu-cp312-cp312-linux_x86_64.whl", "sha256": "dfb1ae1d7da1e869a6a6a315cc2b2652c43e3aabb5184da4d363d1b4bb2c86a4" }
+  ] },
+  "darwin-x64": { "platform": "darwin", "arch": "x64", "python": "bin/python3.12", "uvPlatform": "x86_64-apple-darwin", "lock": "asr-locks/darwin-x64.txt", "numpy": "1.26.4", "wheels": [
+    { "file": "torch-2.2.2-cp312-none-macosx_10_9_x86_64.whl", "url": "https://download.pytorch.org/whl/cpu/torch-2.2.2-cp312-none-macosx_10_9_x86_64.whl", "sha256": "49508cb377ac965185a5c94e18a7719ad386a35e6f0a5f999f542f6e80f3c5ec" },
+    { "file": "torchaudio-2.2.2-cp312-cp312-macosx_10_13_x86_64.whl", "url": "https://download.pytorch.org/whl/cpu/torchaudio-2.2.2-cp312-cp312-macosx_10_13_x86_64.whl", "sha256": "da3cc523696166ea525d2b3377d789da5388f36d94a20a324b09df00f1c43458" }
+  ] },
+  "darwin-arm64": { "platform": "darwin", "arch": "arm64", "python": "bin/python3.12", "uvPlatform": "aarch64-apple-darwin", "lock": "asr-locks/darwin-arm64.txt", "numpy": "2.2.6", "wheels": [
+    { "file": "torch-2.6.0-cp312-none-macosx_11_0_arm64.whl", "url": "https://download.pytorch.org/whl/cpu/torch-2.6.0-cp312-none-macosx_11_0_arm64.whl", "sha256": "9a610afe216a85a8b9bc9f8365ed561535c93e804c2a317ef7fabcc5deda0989" },
+    { "file": "torchaudio-2.6.0-cp312-cp312-macosx_11_0_arm64.whl", "url": "https://download.pytorch.org/whl/cpu/torchaudio-2.6.0-cp312-cp312-macosx_11_0_arm64.whl", "sha256": "7d0e4b08c42325bf4b887de9a25c44ed882997001740e1bd7d901f65581cf1ab" }
+  ] }
+}

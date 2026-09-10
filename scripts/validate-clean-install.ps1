@@ -4,7 +4,9 @@ param(
 
     [string]$ExpectedVersion = "",
 
-    [string]$ReportRoot = ""
+    [string]$ReportRoot = "",
+
+    [switch]$VerifyBundledRuntime
 )
 
 $ErrorActionPreference = "Stop"
@@ -50,7 +52,11 @@ function Add-Check {
 }
 
 function Stop-AilisProcesses {
-    Get-Process -Name "AILIS" -ErrorAction SilentlyContinue |
+    Get-Process -Name "AILIS" -ErrorAction SilentlyContinue | Where-Object {
+        $_.Path -and (($_.Path.StartsWith($ArtifactRoot + '\', [StringComparison]::OrdinalIgnoreCase)) -or
+        ($script:installRoot -and $_.Path.StartsWith($script:installRoot + '\', [StringComparison]::OrdinalIgnoreCase)) -or
+        ($env:CI -eq 'true' -and $_.Path.StartsWith($env:TEMP + '\', [StringComparison]::OrdinalIgnoreCase)))
+    } |
         Stop-Process -Force -ErrorAction SilentlyContinue
     Start-Sleep -Seconds 2
 }
@@ -66,6 +72,7 @@ function Assert-AppStaysRunning {
     $stderrPath = Join-Path $ReportRoot "$Label.stderr.log"
     $env:ELECTRON_ENABLE_LOGGING = "1"
     $process = Start-Process -FilePath $Executable `
+        -WindowStyle Hidden `
         -ArgumentList @("--disable-gpu", "--enable-logging") `
         -PassThru `
         -RedirectStandardOutput $stdoutPath `
@@ -112,13 +119,11 @@ try {
     Add-Check -Name "setup-package-found" -Ok ([bool]$setup) -Detail ($setup.FullName ?? "missing")
     Add-Check -Name "portable-package-found" -Ok ([bool]$portable) -Detail ($portable.FullName ?? "missing")
 
-    $installRoot = Join-Path $env:RUNNER_TEMP "ailis-clean-install"
-    if (Test-Path -LiteralPath $installRoot) {
-        Remove-Item -LiteralPath $installRoot -Recurse -Force
-    }
+    $installRoot = Join-Path $env:RUNNER_TEMP ("ailis-clean-install-" + [guid]::NewGuid().ToString('N'))
     Stop-AilisProcesses
 
     $install = Start-Process -FilePath $setup.FullName `
+        -WindowStyle Hidden `
         -ArgumentList @("/S", "/D=$installRoot") `
         -Wait `
         -PassThru
@@ -128,6 +133,19 @@ try {
     Add-Check -Name "installed-executable-present" -Ok (Test-Path -LiteralPath $installedExe) -Detail $installedExe
     $installedVersion = (Get-Item -LiteralPath $installedExe).VersionInfo.ProductVersion
     Add-Check -Name "installed-version" -Ok ($installedVersion -like "$ExpectedVersion*") -Detail $installedVersion
+
+    if ($VerifyBundledRuntime) {
+        $priorNodeMode = $env:ELECTRON_RUN_AS_NODE
+        $env:ELECTRON_RUN_AS_NODE = '1'
+        try {
+            & $installedExe (Join-Path $PSScriptRoot 'probe-native-package.cjs') $installRoot (Join-Path $ArtifactRoot 'source-identity-win32-x64.json') (Join-Path $ReportRoot 'installed-source-identity.json')
+            Add-Check -Name 'installed-source-identity' -Ok ($LASTEXITCODE -eq 0) -Detail 'Verified installed source and all bundled runtime hashes'
+            & $installedExe (Join-Path $PSScriptRoot 'verify-bundled-asr.cjs') $installRoot (Join-Path $PSScriptRoot '../tests/fixtures/asr-install') (Join-Path $ReportRoot 'installed-offline-asr.json')
+            Add-Check -Name 'installed-offline-asr' -Ok ($LASTEXITCODE -eq 0) -Detail 'Empty profile, no developer PATH, Python network guard'
+            & $installedExe (Join-Path $PSScriptRoot 'test-clean-runtime.mjs') --module-root (Join-Path $installRoot 'resources/app.asar/electron') --output (Join-Path $ReportRoot 'installed-cold-runtime.json') tests/ailis-clean-environment.test.mjs
+            Add-Check -Name 'installed-cold-runtime' -Ok ($LASTEXITCODE -eq 0) -Detail 'Actual installed shell, EXEC and apply_patch contracts'
+        } finally { $env:ELECTRON_RUN_AS_NODE = $priorNodeMode }
+    }
 
     Assert-AppStaysRunning -Executable $installedExe -Label "installed" -WaitSeconds 35
 
@@ -147,7 +165,7 @@ try {
 
     $uninstaller = Join-Path $installRoot "Uninstall AILIS.exe"
     Add-Check -Name "uninstaller-present" -Ok (Test-Path -LiteralPath $uninstaller) -Detail $uninstaller
-    $uninstall = Start-Process -FilePath $uninstaller -ArgumentList @("/S") -Wait -PassThru
+    $uninstall = Start-Process -FilePath $uninstaller -ArgumentList @("/S") -WindowStyle Hidden -Wait -PassThru
     Add-Check -Name "silent-uninstall-exit" -Ok ($uninstall.ExitCode -eq 0) -Detail "exitCode=$($uninstall.ExitCode)"
     Start-Sleep -Seconds 3
     Add-Check -Name "uninstall-removed-executable" -Ok (-not (Test-Path -LiteralPath $installedExe)) -Detail $installedExe

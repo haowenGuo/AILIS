@@ -26,8 +26,10 @@ function recognitionQuality(expected, actual, keywords) {
 async function main() {
     const [packageDir, fixtureDir, reportPath] = process.argv.slice(2).map(p => path.resolve(p));
     if (!packageDir || !fixtureDir || !reportPath) throw new Error('Usage: <package-dir> <fixtures-dir> <report.json>');
-    assert.equal(path.resolve(process.execPath).toLowerCase(), path.join(packageDir, 'AILIS.exe').toLowerCase());
-    const resources = path.join(packageDir, 'resources');
+    const executable = path.join(packageDir, process.platform === 'darwin' ? 'Contents/MacOS/AILIS' : process.platform === 'win32' ? 'AILIS.exe' : 'ailis');
+    assert.equal(path.resolve(process.execPath).toLowerCase(), executable.toLowerCase());
+    const resources = path.join(packageDir, process.platform === 'darwin' ? 'Contents/Resources' : 'resources');
+    fs.mkdirSync(path.dirname(reportPath), { recursive:true });
     const profile = fs.mkdtempSync(path.join(path.dirname(reportPath), 'cold-profile-'));
     const systemRoot = process.env.SystemRoot || 'C:\\Windows';
     const clean = { SystemRoot: systemRoot, WINDIR: systemRoot, ComSpec: path.join(systemRoot, 'System32/cmd.exe'),
@@ -38,6 +40,12 @@ async function main() {
         PYTHONHOME: path.join(profile,'missing-python'), PYTHONPATH: path.join(profile,'missing-packages'),
         HF_HOME: path.join(profile,'empty-models'), HF_HUB_CACHE: path.join(profile,'empty-models'),
         AILIS_ASR_LOCAL_ONLY: '1', AILIS_ASR_LANGUAGE: 'zh', ELECTRON_RUN_AS_NODE: '1' };
+    if (process.platform !== 'win32') {
+        for (const name of ['SystemRoot','WINDIR','ComSpec','PATHEXT']) delete clean[name];
+        Object.assign(clean, { PATH:'/usr/bin:/bin:/usr/sbin:/sbin', TMPDIR:profile, LANG:'en_US.UTF-8',
+            XDG_CONFIG_HOME:path.join(profile,'config'), XDG_CACHE_HOME:path.join(profile,'cache'),
+            APPDATA:path.join(profile,process.platform === 'darwin' ? 'Library/Application Support' : '.config') });
+    }
     for (const key of Object.keys(process.env)) delete process.env[key];
     Object.assign(process.env, clean);
     for (const dir of [clean.APPDATA,clean.LOCALAPPDATA,clean.HF_HOME]) fs.mkdirSync(dir,{recursive:true});

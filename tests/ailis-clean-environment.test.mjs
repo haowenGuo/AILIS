@@ -242,7 +242,11 @@ test('Agent Loop -> EXEC worker -> local tools -> model-visible receipt works wi
     t.after(() => new Promise(resolve => server.close(resolve)));
     const patch = '*** Begin Patch\n*** Add File: via-exec.txt\n+EXEC_PATCH_OK\n*** End Patch';
     const cases = [
-        { name: 'success', code: `text(await tools.exec_command({cmd:"echo EXEC_COMMAND_OK"}));text(await tools.apply_patch(${JSON.stringify(patch)}));`, expected: /EXEC_COMMAND_OK/, permission: 'workspace-write' },
+        // Shell startup may legitimately yield a live session on a busy clean VM.
+        // The deterministic provider fixture must consume that session, just as
+        // a caller would, before asserting the final stdout. No runtime timeout
+        // or model instruction is changed by this test-only lifecycle handling.
+        { name: 'success', code: `let r=await tools.exec_command({cmd:"echo EXEC_COMMAND_OK"});text(r);for(let n=0;r.session_id&&n<30;n++){r=await tools.write_stdin({session_id:r.session_id,chars:"",yield_time_ms:1000});text(r);}if(r.session_id)throw Error("Probe shell did not finish");text(await tools.apply_patch(${JSON.stringify(patch)}));`, expected: /EXEC_COMMAND_OK/, permission: 'workspace-write' },
         { name: 'invalid-cwd', code: `text(await tools.exec_command({cmd:"echo NEVER",workdir:${JSON.stringify(path.join(f.workspace, 'missing-directory'))}}));`, expected: /Invalid working directory/, permission: 'workspace-write' },
         { name: 'denied-patch', code: `text(await tools.apply_patch(${JSON.stringify(patch)}));`, expected: /read_only/, permission: 'read-only' }
     ];
