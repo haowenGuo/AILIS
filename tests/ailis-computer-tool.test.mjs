@@ -265,7 +265,7 @@ test('AILIS computer tool provides filesystem and process control with approval 
 
         const exec = await callTool(baseUrl, {
             tool: 'computer',
-            args: { action: 'exec', command: 'echo COMPUTER_EXEC_OK', timeoutMs: 10000 },
+            args: { action: 'exec', command: 'echo COMPUTER_EXEC_OK', timeoutMs: 60000 },
             context: { workspace: workspaceRoot, approved: true }
         });
         assert.equal(exec.body.ok, true, exec.body.error);

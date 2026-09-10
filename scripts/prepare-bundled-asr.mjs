@@ -90,7 +90,7 @@ async function main() {
     }
     const indexArgs = ['--default-index', 'https://pypi.org/simple', '--find-links', wheelRoot];
     if (!(await exists(lock))) throw new Error('Frozen ASR dependency lock missing; do not resolve versions implicitly during release.');
-    await run(uv, ['pip', 'sync', lock, '--python', python, '--target', targetDeps, '--require-hashes', ...indexArgs]);
+    await run(uv, ['pip', 'sync', lock, '--python', python, '--target', targetDeps, '--require-hashes', '--no-build', ...indexArgs]);
     await run(python, ['-c', 'import torch, torchaudio, transformers, accelerate, numpy; assert torch.version.cuda is None; print("CPU ASR imports ready")'],
         { PYTHONPATH: targetDeps });
     await fs.mkdir(output, { recursive: true });

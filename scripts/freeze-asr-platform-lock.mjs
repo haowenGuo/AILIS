@@ -11,7 +11,7 @@ const content=[...spec.wheels.map(w=>`${w.file.split('-')[0]} @ ${w.url}#sha256=
 await fs.writeFile(input,content);
 const lock=path.join('installer',spec.lock);await fs.mkdir(path.dirname(lock),{recursive:true});
 const child=spawn('uv',['pip','compile',input,'--python-version','3.12','--python-platform',spec.uvPlatform,
- '--generate-hashes','--no-header','--output-file',lock,'--default-index','https://pypi.org/simple'],
+ '--generate-hashes','--no-build','--no-header','--output-file',lock,'--default-index','https://pypi.org/simple'],
  {env:{...process.env,UV_NO_CONFIG:'1',UV_HTTP_TIMEOUT:'180',UV_CACHE_DIR:path.join(build,'uv-cache')},windowsHide:true,stdio:['ignore','ignore','pipe']});
 let log='';child.stderr.on('data',b=>{log+=b});
 const code=await new Promise((resolve,reject)=>{child.on('error',reject);child.on('close',resolve)});

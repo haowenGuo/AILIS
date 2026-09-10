@@ -112,7 +112,9 @@ test('real explicit shell executes in both pipe and PTY modes', async t => {
         let result = await f.call('exec_command', { cmd: 'echo SHELL_PROBE_OK', shell, tty, login: false, yield_time_ms: 1000 });
         assert.equal(result.ok, true, JSON.stringify(result));
         let output = result.result.details.output || '';
-        for (let i = 0; result.result.details.session_id && i < 10; i++) {
+        // A clean hosted Windows VM can take ~25 s to cold-start system PS 5.1.
+        // This is a test observation deadline, not a production timeout change.
+        for (let i = 0; result.result.details.session_id && i < 50; i++) {
             result = await f.call('write_stdin', { session_id: result.result.details.session_id, yield_time_ms: 1000 });
             output += result.result.details.output || '';
         }
@@ -133,11 +135,12 @@ test('normal nonzero exit preserves the exit code and stderr for the model', asy
 
 test('a timed-out running command cannot become a successful empty EXEC result', async t => {
     const f = await fixture(t);
-    const shell = process.platform === 'win32' ? path.join(process.env.SystemRoot, 'System32/WindowsPowerShell/v1.0/powershell.exe') : '/bin/sh';
-    const cmd = process.platform === 'win32' ? "Write-Output 'BEFORE_TIMEOUT'; Start-Sleep -Seconds 3" : "echo BEFORE_TIMEOUT; exec sleep 3";
+    // Use the already available app runtime so this test exercises timeout/output
+    // preservation, independently of the native shell's cold-start latency.
     // Use the computer API's existing configurable deadline; the public
     // exec_command schema intentionally does not expose timeoutMs.
-    let result = await f.call('computer', { action: 'exec_command', cmd, shell, login: false, timeoutMs: 1000, yield_time_ms: 1000 });
+    let result = await f.call('computer', { action: 'exec_command', command:process.execPath,
+        args:['-e',"process.stdout.write('BEFORE_TIMEOUT\\n');setTimeout(()=>{},30000)"], timeoutMs: 5000, yield_time_ms: 1000 });
     for (let i = 0; result.result?.details?.session_id && i < 5; i++) {
         result = await f.call('write_stdin', { session_id: result.result.details.session_id, yield_time_ms: 1000 });
     }
@@ -231,11 +234,16 @@ test('Agent Loop -> EXEC worker -> local tools -> model-visible receipt works wi
         let body = ''; for await (const chunk of req) body += chunk;
         const request = JSON.parse(body); scenario.requests.push(request);
         const first = scenario.requests.length === 1;
+        const previousTool = request.messages.filter(m => m.role === 'tool').at(-1)?.content || '';
+        const pendingCell = previousTool.match(/Script running with cell ID ([\w-]+)/)?.[1];
+        const waiting = !first && pendingCell && scenario.requests.length < 8;
         res.writeHead(200, { 'content-type': 'application/json' });
         res.end(JSON.stringify({ choices: [{ message: first ? {
             role: 'assistant', content: '', tool_calls: [{ id: 'isolated-exec-probe', type: 'function',
                 function: { name: 'exec', arguments: JSON.stringify({ input: scenario.code }) } }]
-        } : { role: 'assistant', content: 'LOCAL_TEST_COMPLETE' }, finish_reason: first ? 'tool_calls' : 'stop' }],
+        } : waiting ? {role:'assistant',content:'',tool_calls:[{id:`isolated-wait-${scenario.requests.length}`,type:'function',
+            function:{name:'exec_wait',arguments:JSON.stringify({cell_id:pendingCell,yield_time_ms:10000})}}]}
+            : { role: 'assistant', content: 'LOCAL_TEST_COMPLETE' }, finish_reason: first || waiting ? 'tool_calls' : 'stop' }],
         usage: { prompt_tokens: 100, completion_tokens: 10, total_tokens: 110 } }));
     });
     await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -258,8 +266,8 @@ test('Agent Loop -> EXEC worker -> local tools -> model-visible receipt works wi
                 llmSettings: { provider: 'openai-compatible', baseUrl: `http://127.0.0.1:${server.address().port}/v1`,
                     apiKey: 'loopback-fixture-not-a-real-key', model: 'local-fixture', temperature: 0, timeoutMs: 15000 } } });
         assert.equal(result.status, 'completed', JSON.stringify(result));
-        assert.equal(scenario.requests.length, 2);
-        const observation = scenario.requests[1].messages.filter(m => m.role === 'tool').map(m => m.content).join('\n');
+        assert.ok(scenario.requests.length >= 2 && scenario.requests.length < 8);
+        const observation = scenario.requests.at(-1).messages.filter(m => m.role === 'tool').map(m => m.content).join('\n');
         assert.match(observation, c.expected);
         if (c.name === 'success') assert.equal(await fs.readFile(path.join(f.workspace, 'via-exec.txt'), 'utf8'), 'EXEC_PATCH_OK\n');
     }

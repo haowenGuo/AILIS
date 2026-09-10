@@ -10,6 +10,8 @@ const release=path.join(root,'release');
 const key=`${process.platform}-${process.arch}`;
 const version=JSON.parse(await fs.readFile(path.join(root,'package.json'),'utf8')).version;
 const git=(...args)=>execFileSync('git',args,{cwd:root,encoding:'utf8'}).trim();
+const unpackedDir=()=>path.join(release,process.platform==='win32'?'win-unpacked':process.platform==='linux'?'linux-unpacked':
+    process.arch==='arm64'?'mac-arm64/AILIS.app':'mac/AILIS.app');
 async function run(command,args,env={}) {
     const child=spawn(command,args,{cwd:root,env:{...process.env,...env},stdio:'inherit',windowsHide:true});
     await new Promise((resolve,reject)=>{child.on('error',reject);child.on('close',code=>code===0?resolve():reject(Error(`${path.basename(command)} exited ${code}`)))});
@@ -31,8 +33,16 @@ async function build() {
     await run(process.execPath,[path.join(root,'scripts/prepare-native-node.cjs')]);
     await pnpm('build:desktop');
     const flag=process.platform==='win32'?'--win':process.platform==='darwin'?'--mac':'--linux';
-    await pnpm('exec','electron-builder','--config','electron-builder.yml',flag,`--${process.arch}`,'--publish','never',
+    await pnpm('exec','electron-builder','--config','electron-builder.yml',flag,`--${process.arch}`,'--dir','--publish','never',
         `-c.extraMetadata.ailisSourceCommit=${identity.commit}`);
+    // Prove the native payload works before spending time compressing GB-sized
+    // models. The final extracted archive / installed copy is checked again.
+    await verify({unpacked:true});
+    // Level 6 is ordinary lossless gzip compression for the large Linux tar.
+    // Retain the existing Windows installer compression configuration.
+    if(process.platform==='linux')process.env.ELECTRON_BUILDER_COMPRESSION_LEVEL='6';
+    await pnpm('exec','electron-builder','--config','electron-builder.yml',flag,`--${process.arch}`,'--publish','never',
+        '--prepackaged',unpackedDir());
     const files=[];
     for(const item of await fs.readdir(release,{withFileTypes:true})) {
         if(!item.isFile() || !/\.(exe|dmg|zip|AppImage|deb|tar\.gz|blockmap|yml)$/.test(item.name) || item.name==='builder-debug.yml')continue;
@@ -48,12 +58,13 @@ async function build() {
         included:['application','private Python 3.12.10','CPU inference dependencies','complete Whisper Small model'],
         excluded:['CUDA','CosyVoice','local TTS model','user configuration','API keys']},null,2));
 }
-async function verify() {
+async function verify({unpacked=false}={}) {
     const scratch=await fs.mkdtemp(path.join(os.tmpdir(),'ailis-release-'));
     const relocated=path.join(scratch,'安装验收 with spaces');await fs.mkdir(relocated);
-    const reportDir=path.join(release,'evidence',key);await fs.mkdir(reportDir,{recursive:true});
+    const reportDir=path.join(release,'evidence',key,...(unpacked?['pre-package']:[]));await fs.mkdir(reportDir,{recursive:true});
     let packageDir;
-    if(process.platform==='darwin') {
+    if(unpacked)packageDir=unpackedDir();
+    else if(process.platform==='darwin') {
         const archive=path.join(release,`AILIS-${version}-mac-${process.arch}.zip`);
         await run('ditto',['-x','-k',archive,relocated]);packageDir=path.join(relocated,'AILIS.app');
         await run('codesign',['--verify','--verbose=2',packageDir]);
@@ -71,7 +82,7 @@ async function verify() {
     await run(executable,[path.join(root,'scripts/verify-bundled-asr.cjs'),packageDir,path.join(root,'tests/fixtures/asr-install'),path.join(reportDir,'offline-asr.json')],env);
     await fs.writeFile(path.join(reportDir,'acceptance-scope.json'),JSON.stringify({success:true,platform:process.platform,arch:process.arch,
         realNativeOS:true,hostedRunnerHasBuildTools:true,testsUseSystemOnlyPathAndFreshProfile:true,
-        relocatedArchive:process.platform!=='win32',windowsNSISInstallVerifiedSeparately:process.platform==='win32',
+        relocatedArchive:!unpacked&&process.platform!=='win32',preCompressionPayload:unpacked,windowsNSISInstallVerifiedSeparately:process.platform==='win32',
         realMicrophone:false,realProviderRequests:false,guiAccessibility:false,developerIDNotarization:false,
         scope:'Packaged source identity, shell/PTY, EXEC, apply_patch, workspace errors, offline CPU ASR; not all hardware or GUI permissions.'},null,2));
     // This unique owned scratch is retained until the ephemeral CI VM is disposed.
