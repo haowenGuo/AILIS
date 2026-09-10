@@ -18,8 +18,9 @@ const profile = () => createExecToolSpec([{ type: 'function', name: 'probe', des
 async function packagedWorker(t) {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis packaged worker '));
     t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
-    const physical = path.join(root, 'app.asar.unpacked', 'electron');
-    await fs.mkdir(physical, { recursive: true });
+    const directory = path.join(root, 'app.asar.unpacked', 'electron');
+    await fs.mkdir(directory, { recursive: true });
+    const physical = await fs.realpath(directory);
     await fs.copyFile(path.resolve('electron/ailis-code-mode-worker.cjs'), path.join(physical, 'ailis-code-mode-worker.cjs'));
     return { virtual: path.join(root, 'app.asar', 'electron'), physical };
 }
@@ -60,6 +61,19 @@ test('missing packaged worker fails before spawning, without a virtual-path fall
     await assert.rejects(runtime.execute({ input: 'text(42)', profileId: profile() }), { code: 'ENOENT' });
     assert.equal(spawned, false);
     assert.equal(runtime.cells.size, 0);
+});
+
+test('directory aliases resolve to one physical worker without broadening read permission', async t => {
+    const { physical } = await packagedWorker(t);
+    const alias = path.join(path.dirname(physical), 'worker alias');
+    await fs.symlink(physical, alias, process.platform === 'win32' ? 'junction' : 'dir');
+    const {workerPath,options}=resolveCodeModeWorkerLaunch({moduleDir:alias});
+    assert.equal(workerPath,path.join(physical,'ailis-code-mode-worker.cjs'));
+    assert.deepEqual(options.execArgv.filter(a=>a.startsWith('--allow-fs-read=')),[`--allow-fs-read=${workerPath}`]);
+    const runtime=new AILISCodeModeRuntime({workerModuleDir:alias,dispatchTool:async()=>({answer:42})});
+    const result=await runtime.execute({input:'text(await tools.probe({}))',profileId:profile()});
+    assert.equal(result.status,'completed',result.text);
+    assert.match(result.text,/"answer":42/);
 });
 
 function fakeChild() {

@@ -20,8 +20,12 @@ const MAX_CELL_LIFETIME_MS = 30 * 60 * 1000;
 function resolveCodeModeWorkerLaunch({ moduleDir = __dirname, electron = process.versions.electron, env = process.env } = {}) {
     // ASAR directories are virtual: neither OS cwd nor the isolated Node
     // permission allowlist can use them. The build unpacks this worker.
-    const workerPath = path.join(moduleDir, 'ailis-code-mode-worker.cjs')
+    const unpackedWorkerPath = path.join(moduleDir, 'ailis-code-mode-worker.cjs')
         .replace(/\.asar([\\/])/g, '.asar.unpacked$1');
+    // Resolve directory aliases before entering the permission-restricted child
+    // (e.g. macOS /var -> /private/var). Permit only the same physical worker,
+    // not the alias's parents or any additional workspace content.
+    const workerPath = fs.realpathSync(unpackedWorkerPath);
     if (!fs.statSync(workerPath).isFile()) throw new Error(`exec worker is not a file: ${workerPath}`);
     return {
         workerPath,

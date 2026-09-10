@@ -21,7 +21,7 @@ async function build() {
     if(git('status','--porcelain','--untracked-files=no'))throw Error('Release source must be a clean commit');
     if(process.env.GITHUB_SHA && git('rev-parse','HEAD')!==process.env.GITHUB_SHA)throw Error('CI/source identity mismatch');
     const identity={version,commit:git('rev-parse','HEAD'),platform:process.platform,arch:process.arch,files:[]};
-    const required=['electron/main.cjs','electron/ailis-gateway.cjs','electron/ailis-agent-runner.cjs',
+    const required=['electron/main.cjs','electron/ailis-gateway.cjs','electron/agent-loop/runner.cjs',
         'electron/ailis-code-mode-runtime.cjs','electron/ailis-code-mode-worker.cjs','electron/codex-code-mode-protocol.cjs',
         'electron/ailis-platform-adapter.cjs','electron/ailis-local-patch.cjs','electron/local-asr-manager.cjs',
         'electron/voice-runtime-bootstrap.cjs','electron/desktop_asr_worker.py'];
