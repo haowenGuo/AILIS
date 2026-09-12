@@ -2,11 +2,35 @@ name: Release clean-install gate
 
 on:
   workflow_dispatch:
+    inputs:
+      backup_old_v144:
+        description: Back up the withdrawn original v1.4.4 before replacement
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 jobs:
+  backup-old-v144:
+    if: inputs.backup_old_v144
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Download and verify all original draft assets without changing release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/backup-withdrawn-v144.mjs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: original-v144-backup
+          retention-days: 90
+          compression-level: 0
+          path: release-backup-v144/
   native-release:
     name: Native package and offline acceptance - ${{ matrix.target }}
     strategy:

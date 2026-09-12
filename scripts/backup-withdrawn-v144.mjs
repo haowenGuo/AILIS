@@ -1,0 +1,21 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import crypto from 'node:crypto';
+import {execFileSync} from 'node:child_process';
+const dir=path.resolve('release-backup-v144');fs.mkdirSync(dir,{recursive:true});
+const gh=(...args)=>execFileSync('gh',args,{encoding:'utf8',maxBuffer:16*1024*1024});
+const release=JSON.parse(gh('api','repos/haowenGuo/AILIS/releases/384522096'));
+const ref=JSON.parse(gh('api','repos/haowenGuo/AILIS/git/ref/tags/v1.4.4'));
+if(!release.draft||release.tag_name!=='v1.4.4'||ref.object.sha!=='398cf7de0e9190603bc7c25b8161e17b672a39c8')throw Error('Old release changed; refusing backup assumptions');
+const tag=JSON.parse(gh('api',ref.object.url));
+for(const [name,value] of Object.entries({release,ref,tag}))fs.writeFileSync(path.join(dir,name+'.json'),JSON.stringify(value,null,2));
+gh('release','download','v1.4.4','--repo','haowenGuo/AILIS','--dir',dir);
+const assets=release.assets.map(a=>{
+    if(path.basename(a.name)!==a.name)throw Error('Unsafe asset name');
+    const buffer=fs.readFileSync(path.join(dir,a.name));
+    const digest='sha256:'+crypto.createHash('sha256').update(buffer).digest('hex');
+    if(buffer.length!==a.size||digest!==a.digest)throw Error('Backup mismatch: '+a.name);
+    return {name:a.name,size:a.size,digest};
+});
+fs.writeFileSync(path.join(dir,'verified.json'),JSON.stringify({verifiedAt:new Date().toISOString(),releaseId:release.id,tag:ref.object.sha,assets},null,2));
+console.log(`Verified ${assets.length} original release assets`);

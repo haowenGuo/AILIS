@@ -26,7 +26,10 @@ if (process.platform === 'win32') {
 if (runtimeRoot) env.AILIS_TEST_RUNTIME_ROOT = runtimeRoot;
 await Promise.all([env.APPDATA, env.LOCALAPPDATA].map(p => fs.mkdir(p, { recursive: true })));
 const started = Date.now();
-const child = spawn(process.execPath, ['--test', '--test-reporter=tap', '--test-concurrency=1', '--test-timeout=120000', ...tests], { cwd: source, env, windowsHide: true, stdio: ['ignore','pipe','pipe'] });
+// This bounds each test file, including its sequential cold shell starts. Native
+// Windows CI takes ~23s per PowerShell start; 120s killed a passing file midway.
+// Individual tool deadlines and assertions remain unchanged.
+const child = spawn(process.execPath, ['--test', '--test-reporter=tap', '--test-concurrency=1', '--test-timeout=600000', ...tests], { cwd: source, env, windowsHide: true, stdio: ['ignore','pipe','pipe'] });
 let stdout = '', stderr = '';
 child.stdout.on('data', b => { stdout += b; }); child.stderr.on('data', b => { stderr += b; });
 const exit = await new Promise(resolve => { child.on('error', e => resolve({ error: e.message })); child.on('close', (code, signal) => resolve({ code, signal })); });
