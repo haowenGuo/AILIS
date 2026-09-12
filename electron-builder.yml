@@ -69,6 +69,7 @@ mac:
 dmg:
   artifactName: ${productName}-${version}-mac-${arch}.${ext}
 linux:
+  maintainer: 郭浩文 <13488293+haowenGuo@user.noreply.gitee.com>
   icon: build/icon.png
   executableName: ailis
   category: Utility

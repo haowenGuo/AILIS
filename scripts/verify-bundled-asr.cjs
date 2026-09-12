@@ -27,7 +27,7 @@ async function main() {
     const [packageDir, fixtureDir, reportPath] = process.argv.slice(2).map(p => path.resolve(p));
     if (!packageDir || !fixtureDir || !reportPath) throw new Error('Usage: <package-dir> <fixtures-dir> <report.json>');
     const executable = path.join(packageDir, process.platform === 'darwin' ? 'Contents/MacOS/AILIS' : process.platform === 'win32' ? 'AILIS.exe' : 'ailis');
-    assert.equal(path.resolve(process.execPath).toLowerCase(), executable.toLowerCase());
+    assert.ok(require('./native-path-identity.cjs').sameExecutable(process.execPath, executable), 'ASR verifier must run inside the expected package executable');
     const resources = path.join(packageDir, process.platform === 'darwin' ? 'Contents/Resources' : 'resources');
     fs.mkdirSync(path.dirname(reportPath), { recursive:true });
     const profile = fs.mkdtempSync(path.join(path.dirname(reportPath), 'cold-profile-'));

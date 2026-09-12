@@ -10,6 +10,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot 'invoke-installed-probe.ps1')
 if (-not $ExpectedVersion) {
     $ExpectedVersion = (Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot "../package.json") | ConvertFrom-Json).version
 }
@@ -138,12 +139,12 @@ try {
         $priorNodeMode = $env:ELECTRON_RUN_AS_NODE
         $env:ELECTRON_RUN_AS_NODE = '1'
         try {
-            & $installedExe (Join-Path $PSScriptRoot 'probe-native-package.cjs') $installRoot (Join-Path $ArtifactRoot 'source-identity-win32-x64.json') (Join-Path $ReportRoot 'installed-source-identity.json')
-            Add-Check -Name 'installed-source-identity' -Ok ($LASTEXITCODE -eq 0) -Detail 'Verified installed source and all bundled runtime hashes'
-            & $installedExe (Join-Path $PSScriptRoot 'verify-bundled-asr.cjs') $installRoot (Join-Path $PSScriptRoot '../tests/fixtures/asr-install') (Join-Path $ReportRoot 'installed-offline-asr.json')
-            Add-Check -Name 'installed-offline-asr' -Ok ($LASTEXITCODE -eq 0) -Detail 'Empty profile, no developer PATH, Python network guard'
-            & $installedExe (Join-Path $PSScriptRoot 'test-clean-runtime.mjs') --module-root (Join-Path $installRoot 'resources/app.asar/electron') --output (Join-Path $ReportRoot 'installed-cold-runtime.json') tests/ailis-clean-environment.test.mjs
-            Add-Check -Name 'installed-cold-runtime' -Ok ($LASTEXITCODE -eq 0) -Detail 'Actual installed shell, EXEC and apply_patch contracts'
+            $probeCode = Invoke-InstalledProbe $installedExe @((Join-Path $PSScriptRoot 'probe-native-package.cjs'), $installRoot, (Join-Path $ArtifactRoot 'source-identity-win32-x64.json'), (Join-Path $ReportRoot 'installed-source-identity.json')) (Join-Path $ReportRoot 'identity-probe')
+            Add-Check -Name 'installed-source-identity' -Ok ($probeCode -eq 0) -Detail "exitCode=$probeCode; see identity-probe logs"
+            $probeCode = Invoke-InstalledProbe $installedExe @((Join-Path $PSScriptRoot 'verify-bundled-asr.cjs'), $installRoot, (Join-Path $PSScriptRoot '../tests/fixtures/asr-install'), (Join-Path $ReportRoot 'installed-offline-asr.json')) (Join-Path $ReportRoot 'asr-probe')
+            Add-Check -Name 'installed-offline-asr' -Ok ($probeCode -eq 0) -Detail "exitCode=$probeCode; see asr-probe logs"
+            $probeCode = Invoke-InstalledProbe $installedExe @((Join-Path $PSScriptRoot 'test-clean-runtime.mjs'), '--module-root', (Join-Path $installRoot 'resources/app.asar/electron'), '--output', (Join-Path $ReportRoot 'installed-cold-runtime.json'), 'tests/ailis-clean-environment.test.mjs') (Join-Path $ReportRoot 'runtime-probe')
+            Add-Check -Name 'installed-cold-runtime' -Ok ($probeCode -eq 0) -Detail "exitCode=$probeCode; see runtime-probe logs"
         } finally { $env:ELECTRON_RUN_AS_NODE = $priorNodeMode }
     }
 

@@ -50,6 +50,7 @@ jobs:
           tests/asr-latency-presets.test.mjs
           tests/voice-runtime-bootstrap.test.mjs
           tests/ailis-code-mode-packaging.test.mjs
+          tests/native-path-identity.test.mjs
       - name: Fresh-profile system-only-PATH source execution
         id: cold
         run: node scripts/test-clean-runtime.mjs --output release/evidence/${{ matrix.target }}/source-cold-runtime.json
