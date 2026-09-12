@@ -48,8 +48,8 @@ assert backup['digest'] == 'sha256:2f603ddc0644e09706e062bd193f9abb90140a6c72c6c
 assert api('git/ref/tags/archive/v1.4.4-withdrawn-20260912')['object']['sha'] == OLD_TAG
 old = api(f'releases/{RELEASE}')
 assert old['draft'] and old['tag_name'] == 'v1.4.4'
-assert {a['id'] for a in old['assets']} == OLD_IDS
-assert api('git/ref/tags/v1.4.4')['object']['sha'] == OLD_TAG
+assert not old['assets'], 'Resume only the exact empty draft left by run 34693603221'
+assert api('git/ref/tags/v1.4.4')['object']['sha'] == COMMIT
 (audit/'old-release.json').write_text(json.dumps(old, indent=2))
 before_main = api('git/ref/heads/main')['object']['sha']
 before_v145 = api('git/ref/tags/v1.4.5')['object']['sha']
@@ -116,12 +116,12 @@ expected={f.name:{'size':f.stat().st_size,'digest':'sha256:'+digest(f)} for f in
 (audit/'expected-assets.json').write_text(json.dumps(expected,indent=2))
 assert sum(name.endswith(('.exe','.dmg','.zip','.deb','.tar.gz','.AppImage')) and 'acceptance' not in name for name in expected)==9
 
-# Recheck exact original state immediately before the authorized replacement.
+# The original assets were backed up, then removed by run 34693603221.
+# User-authenticated local gh updated the tag after the integration token was
+# unable to do so. This resume must not mutate tags or delete any further assets.
 current=api(f'releases/{RELEASE}')
-assert current['draft'] and {a['id'] for a in current['assets']} == OLD_IDS
-assert api('git/ref/tags/v1.4.4')['object']['sha'] == OLD_TAG
-for asset in current['assets']: api(f'releases/assets/{asset["id"]}', 'DELETE')
-api('git/refs/tags/v1.4.4','PATCH',{'sha':COMMIT,'force':True})
+assert current['draft'] and not current['assets']
+assert api('git/ref/tags/v1.4.4')['object']['sha'] == COMMIT
 notes=Path('docs/releases/v1.4.4-published.md').read_text()
 api(f'releases/{RELEASE}','PATCH',{'name':'AILIS v1.4.4 — Windows, Linux & macOS / Bundled Offline ASR',
     'body':notes,'target_commitish':COMMIT,'draft':True,'prerelease':False})
