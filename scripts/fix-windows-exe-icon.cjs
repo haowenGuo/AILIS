@@ -135,6 +135,7 @@ function findAppBuilder(projectRoot) {
 
 function resolveAppExe(context, projectRoot) {
     const appOutDir = normalizeString(context?.appOutDir);
+    if (!appOutDir) throw new Error('[AILIS icon] Explicit package output directory is required.');
     const candidates = [
         context?.packager?.appInfo?.productFilename,
         context?.packager?.appInfo?.productName,
@@ -144,14 +145,13 @@ function resolveAppExe(context, projectRoot) {
         .filter(Boolean)
         .map((name) => path.join(appOutDir, `${name}.exe`));
 
-    candidates.push(path.resolve('F:/AILIS/Build/AILIS/win-unpacked/AILIS.exe'));
     return findFirstExisting(candidates);
 }
 
 function fixWindowsExeIcon(context = {}) {
     const projectRoot = path.resolve(__dirname, '..');
     const platformName = normalizeString(context?.electronPlatformName, process.platform);
-    if (platformName !== 'win32' && process.platform !== 'win32') {
+    if (platformName !== 'win32') {
         return;
     }
 

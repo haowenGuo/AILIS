@@ -6,6 +6,11 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 const { sameExecutable } = createRequire(import.meta.url)('../scripts/native-path-identity.cjs');
 const { afterPack } = createRequire(import.meta.url)('../electron-builder.runtime.cjs');
+const fixWindowsIcon = createRequire(import.meta.url)('../scripts/fix-windows-exe-icon.cjs');
+test('icon hook respects target platform and never falls back to another package directory', () => {
+    assert.doesNotThrow(() => fixWindowsIcon({electronPlatformName:'darwin'}));
+    assert.throws(() => fixWindowsIcon({electronPlatformName:'win32'}), /Explicit package output directory/);
+});
 test('Mac signing ignores only verified framework aliases and rejects real or escaping payloads', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ailis-signing-layout-'));
     const framework = path.join(root, 'out/AILIS.app/Contents/Frameworks/Electron Framework.framework');
