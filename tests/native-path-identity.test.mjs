@@ -7,6 +7,12 @@ import { createRequire } from 'node:module';
 const { sameExecutable } = createRequire(import.meta.url)('../scripts/native-path-identity.cjs');
 const { afterPack } = createRequire(import.meta.url)('../electron-builder.runtime.cjs');
 const fixWindowsIcon = createRequire(import.meta.url)('../scripts/fix-windows-exe-icon.cjs');
+test('Mac uses pinned archive extraction instead of copying an unpacked framework', async () => {
+    const { electronDist } = createRequire(import.meta.url)('../electron-builder.runtime.cjs');
+    assert.equal(await electronDist({platformName:'darwin'}), undefined);
+    assert.match(await electronDist({platformName:'win32'}), /node_modules[\\/]electron[\\/]dist$/);
+    assert.match(await electronDist({platformName:'linux'}), /node_modules[\\/]electron[\\/]dist$/);
+});
 test('icon hook respects target platform and never falls back to another package directory', () => {
     assert.doesNotThrow(() => fixWindowsIcon({electronPlatformName:'darwin'}));
     assert.throws(() => fixWindowsIcon({electronPlatformName:'win32'}), /Explicit package output directory/);

@@ -2,6 +2,11 @@
 const { desktopFiles, assertDesktopBuild } = require('./scripts/production-closure.cjs');
 const { assertBundledAsr } = require('./scripts/bundled-asr-contract.cjs');
 module.exports = {
+    // Use builder's version-pinned archive extraction on macOS. Copying an
+    // already-unpacked npm distribution has produced flattened frameworks.
+    // Keep the established local distribution path for Windows/Linux.
+    electronDist: async options => options.platformName === 'darwin' ? undefined :
+        require('node:path').join(__dirname, 'node_modules/electron/dist'),
     afterPack: async context => {
         await require('./scripts/fix-windows-exe-icon.cjs')(context);
         if (context.electronPlatformName !== 'darwin') return;

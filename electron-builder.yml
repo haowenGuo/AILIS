@@ -2,7 +2,6 @@ appId: com.ailis.desktop
 extends: ./electron-builder.runtime.cjs
 productName: AILIS
 artifactName: ${productName}-${version}-${arch}.${ext}
-electronDist: node_modules/electron/dist
 icon: build/icon.png
 directories:
   output: release
