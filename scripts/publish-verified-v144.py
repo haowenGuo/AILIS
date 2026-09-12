@@ -122,9 +122,8 @@ assert sum(name.endswith(('.exe','.dmg','.zip','.deb','.tar.gz','.AppImage')) an
 current=api(f'releases/{RELEASE}')
 assert current['draft'] and not current['assets']
 assert api('git/ref/tags/v1.4.4')['object']['sha'] == COMMIT
-notes=Path('docs/releases/v1.4.4-published.md').read_text()
-api(f'releases/{RELEASE}','PATCH',{'name':'AILIS v1.4.4 — Windows, Linux & macOS / Bundled Offline ASR',
-    'body':notes,'target_commitish':COMMIT,'draft':True,'prerelease':False})
+# Metadata and final publication use the user's authenticated local CLI because
+# this repository's Actions integration cannot PATCH this existing release.
 for file in sorted(stage.iterdir()):
     if file.is_file():
         subprocess.run(['gh','release','upload','v1.4.4',str(file),'--repo',REPO],check=True)
@@ -134,7 +133,6 @@ actual={a['name']:{'size':a['size'],'digest':a.get('digest')} for a in remote['a
 assert actual == expected, 'Remote asset names/size/SHA256 must exactly match before publication'
 assert api('git/ref/heads/main')['object']['sha'] == before_main
 assert api('git/ref/tags/v1.4.5')['object']['sha'] == before_v145
-result=api(f'releases/{RELEASE}','PATCH',{'draft':False,'prerelease':False,'make_latest':'true'})
-assert not result['draft'] and result['published_at']
-(audit/'published-release.json').write_text(json.dumps(result,indent=2))
-print(json.dumps({'published':True,'url':result['html_url'],'assets':len(actual),'commit':COMMIT}),flush=True)
+assert remote['draft']
+(audit/'verified-draft.json').write_text(json.dumps(remote,indent=2))
+print(json.dumps({'readyToPublish':True,'releaseId':RELEASE,'assets':len(actual),'commit':COMMIT}),flush=True)
