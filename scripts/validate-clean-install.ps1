@@ -72,6 +72,7 @@ function Assert-AppStaysRunning {
     $stdoutPath = Join-Path $ReportRoot "$Label.stdout.log"
     $stderrPath = Join-Path $ReportRoot "$Label.stderr.log"
     $env:ELECTRON_ENABLE_LOGGING = "1"
+    $launchTime = Get-Date
     $process = Start-Process -FilePath $Executable `
         -WindowStyle Hidden `
         -ArgumentList @("--disable-gpu", "--enable-logging") `
@@ -79,10 +80,27 @@ function Assert-AppStaysRunning {
         -RedirectStandardOutput $stdoutPath `
         -RedirectStandardError $stderrPath
 
-    Start-Sleep -Seconds $WaitSeconds
-    $running = Get-Process -Name "AILIS" -ErrorAction SilentlyContinue
+    $deadline = $launchTime.AddSeconds($WaitSeconds)
+    $running = @()
+    do {
+        Start-Sleep -Seconds 2
+        $running = @(Get-Process -Name "AILIS" -ErrorAction SilentlyContinue | Where-Object {
+            $_.Path -and $_.StartTime -ge $launchTime -and (
+                $_.Path.StartsWith($script:installRoot + '\', [StringComparison]::OrdinalIgnoreCase) -or
+                ($env:CI -eq 'true' -and $_.Path.StartsWith($env:TEMP + '\', [StringComparison]::OrdinalIgnoreCase))
+            )
+        })
+        $process.Refresh()
+        if ($process.HasExited -and $process.ExitCode -ne 0) { break }
+    } while (-not $running -and (Get-Date) -lt $deadline)
+    if ($running) {
+        # Extraction time is separate from application stability.
+        $observedPids = @($running.Id)
+        Start-Sleep -Seconds 15
+        $running = @(Get-Process -Id $observedPids -ErrorAction SilentlyContinue)
+    }
     $detail = if ($running) {
-        "AILIS remained active for ${WaitSeconds}s; pids=$($running.Id -join ',')"
+        "AILIS started within ${WaitSeconds}s and remained active for 15s; pids=$($running.Id -join ',')"
     } elseif ($process.HasExited) {
         "AILIS exited early with code $($process.ExitCode)"
     } else {
@@ -162,7 +180,7 @@ try {
         Add-Check -Name "first-run-cloud-model" -Ok ($state.preferences.llmModel -eq "ailis-cloud") -Detail ([string]$state.preferences.llmModel)
     }
 
-    Assert-AppStaysRunning -Executable $portable.FullName -Label "portable" -WaitSeconds 45
+    Assert-AppStaysRunning -Executable $portable.FullName -Label "portable" -WaitSeconds 300
 
     $uninstaller = Join-Path $installRoot "Uninstall AILIS.exe"
     Add-Check -Name "uninstaller-present" -Ok (Test-Path -LiteralPath $uninstaller) -Detail $uninstaller
