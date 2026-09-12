@@ -4,7 +4,6 @@ productName: AILIS
 artifactName: ${productName}-${version}-${arch}.${ext}
 electronDist: node_modules/electron/dist
 icon: build/icon.png
-afterPack: scripts/fix-windows-exe-icon.cjs
 directories:
   output: release
 electronLanguages:
@@ -60,6 +59,9 @@ mac:
   minimumSystemVersion: "14.0"
   signIgnore:
     - .*/ailis-asr-runtime/.*
+    # osx-sign follows framework symlink aliases with stat(). Sign the real
+    # Versions/A payload and the framework bundle, not duplicate alias paths.
+    - .*/Electron Framework\.framework/(Electron Framework|Helpers|Libraries|Resources|Versions/Current)(/.*)?$
   extendInfo:
     NSMicrophoneUsageDescription: AILIS uses the microphone for local speech recognition when you start recording.
     NSCameraUsageDescription: AILIS uses the camera only when you enable camera input.

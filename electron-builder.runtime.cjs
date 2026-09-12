@@ -3,6 +3,7 @@ const { desktopFiles, assertDesktopBuild } = require('./scripts/production-closu
 const { assertBundledAsr } = require('./scripts/bundled-asr-contract.cjs');
 module.exports = {
     afterPack: async context => {
+        await require('./scripts/fix-windows-exe-icon.cjs')(context);
         if (context.electronPlatformName !== 'darwin') return;
         const fs = require('node:fs/promises');
         const path = require('node:path');
@@ -22,6 +23,16 @@ module.exports = {
         const output = path.join(context.packager.projectDir, 'release/evidence', `darwin-${process.arch}`);
         await fs.mkdir(output,{recursive:true});
         await fs.writeFile(path.join(output,'framework-before-sign.json'),JSON.stringify(rows,null,2));
+        // Ignored signing aliases must be actual symlinks, never unsigned real
+        // payloads. Their targets remain under Versions/A and are still signed.
+        for (const alias of ['Electron Framework','Helpers','Libraries','Resources','Versions/Current']) {
+            const file = path.join(framework,alias);
+            let stat;
+            try { stat = await fs.lstat(file); } catch (error) { if (error.code === 'ENOENT') continue; throw error; }
+            if (!stat.isSymbolicLink()) throw new Error(`Expected framework signing alias to be a symlink: ${alias}`);
+            const target = await fs.realpath(file);
+            if (!target.startsWith(framework + path.sep)) throw new Error(`Framework alias escapes bundle: ${alias}`);
+        }
     },
     beforePack: async context => {
         assertDesktopBuild(context.packager.projectDir);
