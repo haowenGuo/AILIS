@@ -7,6 +7,10 @@ on:
         description: Back up the withdrawn original v1.4.4 before replacement
         type: boolean
         default: false
+      backup_only:
+        description: Run only the original-release backup
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -14,6 +18,10 @@ permissions:
 jobs:
   backup-old-v144:
     if: inputs.backup_old_v144
+    # GitHub requires write-level release visibility to read unpublished drafts.
+    # The backup script performs only GET/download operations.
+    permissions:
+      contents: write
     runs-on: ubuntu-22.04
     timeout-minutes: 15
     steps:
@@ -32,6 +40,7 @@ jobs:
           compression-level: 0
           path: release-backup-v144/
   native-release:
+    if: ${{ !inputs.backup_only }}
     name: Native package and offline acceptance - ${{ matrix.target }}
     strategy:
       fail-fast: false
