@@ -3,6 +3,10 @@ name: Release clean-install gate
 on:
   workflow_dispatch:
     inputs:
+      publish_verified_v144:
+        description: Publish ONLY verified run 34671515862 after backup and hash gates
+        type: boolean
+        default: false
       backup_old_v144:
         description: Back up the withdrawn original v1.4.4 before replacement
         type: boolean
@@ -16,6 +20,28 @@ permissions:
   contents: read
 
 jobs:
+  publish-verified-v144:
+    if: inputs.publish_verified_v144
+    permissions:
+      contents: write
+      actions: read
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    concurrency:
+      group: publish-verified-v144
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify and publish accepted native artifacts without rebuilding
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/publish-verified-v144.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: v144-publication-audit
+          retention-days: 90
+          path: publication-audit/*.json
   backup-old-v144:
     if: inputs.backup_old_v144
     # GitHub requires write-level release visibility to read unpublished drafts.
@@ -40,7 +66,7 @@ jobs:
           compression-level: 0
           path: release-backup-v144/
   native-release:
-    if: ${{ !inputs.backup_only }}
+    if: ${{ !inputs.backup_only && !inputs.publish_verified_v144 }}
     name: Native package and offline acceptance - ${{ matrix.target }}
     strategy:
       fail-fast: false
