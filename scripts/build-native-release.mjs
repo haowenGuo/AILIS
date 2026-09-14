@@ -26,12 +26,25 @@ async function build() {
     const required=['electron/main.cjs','electron/ailis-gateway.cjs','electron/agent-loop/runner.cjs',
         'electron/ailis-code-mode-runtime.cjs','electron/ailis-code-mode-worker.cjs','electron/codex-code-mode-protocol.cjs',
         'electron/ailis-platform-adapter.cjs','electron/ailis-local-patch.cjs','electron/local-asr-manager.cjs',
-        'electron/voice-runtime-bootstrap.cjs','electron/desktop_asr_worker.py'];
+        'electron/voice-runtime-bootstrap.cjs','electron/desktop_asr_worker.py',
+        'electron/preload.cjs','electron/ailis-task-interaction.cjs','electron/ailis-task-file-diff.cjs',
+        'electron/codex-native-instructions.cjs','electron/prompts/codex-gpt-5.6.instructions.md'];
     for(const file of required)identity.files.push({file,sha256:await sha(path.join(root,file))});
     await fs.mkdir(release,{recursive:true});
     await fs.writeFile(path.join(release,`source-identity-${key}.json`),JSON.stringify(identity,null,2));
     await run(process.execPath,[path.join(root,'scripts/prepare-native-node.cjs')]);
     await pnpm('build:desktop');
+    // Verify the actual built chat UI as well as the host implementation.
+    async function recordDist(dir) {
+        for (const item of await fs.readdir(dir,{withFileTypes:true})) {
+            const file=path.join(dir,item.name);
+            if(item.isDirectory())await recordDist(file);
+            else if(!item.name.endsWith('.map'))identity.files.push({
+                file:path.relative(root,file).split(path.sep).join('/'),sha256:await sha(file)});
+        }
+    }
+    await recordDist(path.join(root,'dist'));
+    await fs.writeFile(path.join(release,`source-identity-${key}.json`),JSON.stringify(identity,null,2));
     const flag=process.platform==='win32'?'--win':process.platform==='darwin'?'--mac':'--linux';
     await pnpm('exec','electron-builder','--config','electron-builder.yml',flag,`--${process.arch}`,'--dir','--publish','never',
         `-c.extraMetadata.ailisSourceCommit=${identity.commit}`);

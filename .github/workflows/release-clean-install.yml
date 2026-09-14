@@ -110,6 +110,12 @@ jobs:
           tests/voice-runtime-bootstrap.test.mjs
           tests/ailis-code-mode-packaging.test.mjs
           tests/native-path-identity.test.mjs
+          tests/ailis-task-interaction.test.mjs
+          tests/ailis-task-interaction-gateway.test.mjs
+          tests/ailis-task-file-diff.test.mjs
+          tests/ailis-task-process-stop.test.mjs
+          tests/ailis-patch-observation.test.mjs
+          tests/codex-native-instructions.test.mjs
       - name: Fresh-profile system-only-PATH source execution
         id: cold
         run: node scripts/test-clean-runtime.mjs --output release/evidence/${{ matrix.target }}/source-cold-runtime.json
@@ -128,14 +134,14 @@ jobs:
         run: >-
           ./scripts/validate-clean-install.ps1
           -ArtifactRoot "${{ github.workspace }}\release"
-          -ExpectedVersion "1.4.4"
+          -ExpectedVersion "1.4.6"
           -ReportRoot "${{ github.workspace }}\release\evidence\win32-x64\nsis"
           -VerifyBundledRuntime
       - name: Upload native packages and evidence even on failure
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ailis-v1.4.4-${{ matrix.target }}-${{ github.sha }}
+          name: ailis-v1.4.6-${{ matrix.target }}-${{ github.sha }}
           compression-level: 0
           retention-days: 7
           path: |
