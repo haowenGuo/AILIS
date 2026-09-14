@@ -19,31 +19,6 @@ function normalizeText(value, fallback = '') {
     return normalized || fallback;
 }
 
-function codexHomeCandidates() {
-    return [...new Set([
-        normalizeText(process.env.CODEX_HOME),
-        process.env.USERPROFILE ? path.join(process.env.USERPROFILE, '.codex') : ''
-    ].filter(Boolean))];
-}
-
-function readCachedModelInstructions(model = DEFAULT_CODEX_MODEL) {
-    for (const codexHome of codexHomeCandidates()) {
-        const cachePath = path.join(codexHome, 'models_cache.json');
-        try {
-            const cache = JSON.parse(fs.readFileSync(cachePath, 'utf8'));
-            const modelEntry = (Array.isArray(cache?.models) ? cache.models : [])
-                .find((entry) => normalizeText(entry?.slug) === model);
-            const instructions = normalizeText(modelEntry?.model_messages?.instructions_template);
-            if (instructions) {
-                return instructions;
-            }
-        } catch {
-            // The bundled snapshot below keeps AILIS deterministic without a local Codex cache.
-        }
-    }
-    return '';
-}
-
 function readBundledInstructions() {
     return normalizeText(fs.readFileSync(BUNDLED_GPT_5_6_INSTRUCTIONS_PATH, 'utf8'));
 }
@@ -53,7 +28,10 @@ function resolveCodexNativeInstructions(model = DEFAULT_CODEX_MODEL) {
     if (resolvedInstructions.has(normalizedModel)) {
         return resolvedInstructions.get(normalizedModel);
     }
-    const instructions = readCachedModelInstructions(normalizedModel) || readBundledInstructions();
+    // Keep the exported name for callers, but AILIS owns this bundled contract.
+    // Never import another application's identity/style from models_cache.json.
+    // AILIS personality and user preferences are supplied by Session memory.
+    const instructions = readBundledInstructions();
     resolvedInstructions.set(normalizedModel, instructions);
     return instructions;
 }

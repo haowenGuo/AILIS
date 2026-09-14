@@ -14,6 +14,7 @@ import {
 } from './realtime-voice/asr-latency-presets.js';
 import { applyI18n, setUiLanguage, t } from './i18n.js';
 import { installChatSearch } from './chat-search.js';
+import { TaskInteractionView } from './task-interaction-view.js';
 
 function getMessageClassName(role) {
     if (role === 'user') {
@@ -55,6 +56,30 @@ window.addEventListener('DOMContentLoaded', () => {
     const latestBtnEl = document.getElementById('scroll-to-latest');
     const moreActionsEl = document.getElementById('chat-more-actions');
     const composerHintEl = document.getElementById('composer-hint');
+    let taskView = null;
+    let taskSending = false;
+    let taskStorageError = '';
+    let taskSendError = '';
+    const taskApi = window.ailisDesktop?.tasks;
+    const taskStop = document.createElement('button');
+    taskStop.id = 'task-stop-button'; taskStop.className = 'task-button'; taskStop.type = 'button';
+    taskStop.textContent = '■'; taskStop.title = '停止当前任务'; taskStop.setAttribute('aria-label', '停止当前任务'); taskStop.hidden = true;
+    sendBtnEl.before(taskStop);
+    if (taskApi) {
+        const submitActions = document.createElement('div'); submitActions.className = 'task-composer-submit';
+        sendBtnEl.before(submitActions); submitActions.append(taskStop, sendBtnEl);
+    }
+    taskStop.addEventListener('click', async () => {
+        if (!taskView) return;
+        taskStop.disabled = true;
+        try { await taskView.stop(); } catch (error) { showSystemNotice({ level: 'error', message: error.message }); }
+        updateComposerState();
+    });
+    if (taskApi?.sessionList) {
+        const historyButton = document.createElement('button'); historyButton.type = 'button'; historyButton.textContent = '历史会话';
+        historyButton.id = 'task-history-button'; historyButton.className = 'icon-btn'; clearChatBtnEl.after(historyButton);
+        historyButton.addEventListener('click', () => taskView?.showHistory());
+    }
 
     let isBusy = false;
     let interruptPending = false;
@@ -88,6 +113,9 @@ window.addEventListener('DOMContentLoaded', () => {
     let activeContinuousRecording = false;
     const speechRecognition = createDesktopSpeechRecognitionService();
     applyI18n(document, { skipSelectors: ['#message-list', '#file-preview'] });
+    if (taskApi) {
+        document.body.classList.add('task-interaction-enabled');
+    }
 
     function scrollToBottom({ force = false } = {}) {
         if (force) followLatest = true;
@@ -122,7 +150,7 @@ window.addEventListener('DOMContentLoaded', () => {
             return speechStatusText || t('正在本地识别语音...');
         }
         if (systemNoticeText) {
-            return systemNoticeText;
+            return taskApi && systemNoticeText === taskStorageError ? '' : systemNoticeText;
         }
         if (speechStatusText) {
             return speechStatusText;
@@ -156,13 +184,15 @@ window.addEventListener('DOMContentLoaded', () => {
 
     function updateComposerState() {
         const hasDraft = Boolean(inputEl.value.trim() || pendingVisionAttachment || pendingFileAttachments.length);
-        sendBtnEl.dataset.mode = isBusy ? 'interrupt' : 'send';
-        setIconButtonLabel(sendBtnEl, isBusy ? (interruptPending ? t('正在中断') : t('中断对话')) : t('发送'));
+        sendBtnEl.dataset.mode = !taskApi && isBusy ? 'interrupt' : 'send';
+        setIconButtonLabel(sendBtnEl, taskApi ? t('发送') : isBusy ? (interruptPending ? t('正在中断') : t('中断对话')) : t('发送'));
         sendBtnEl.disabled = isRecording ||
             isTranscribing ||
             isCapturingVision ||
-            interruptPending ||
-            (!isBusy && !hasDraft);
+            interruptPending || Boolean(taskStorageError) ||
+            taskSending || (taskApi ? !hasDraft : (!isBusy && !hasDraft));
+        taskStop.hidden = !taskApi || !isBusy;
+        taskStop.disabled = interruptPending || Boolean(taskStorageError);
         statusEl.textContent = getStatusText();
         statusEl.title = statusEl.textContent;
         emptyStateEl.hidden = currentMessages.length > 0 || isBusy;
@@ -200,6 +230,9 @@ window.addEventListener('DOMContentLoaded', () => {
 
         if (clearChatBtnEl) {
             clearChatBtnEl.disabled = isBusy || isRecording || isTranscribing || isCapturingVision;
+            if (taskApi) {
+                clearChatBtnEl.disabled ||= taskSending || Boolean(taskStorageError);
+            }
         }
 
         if (copyChatBtnEl) {
@@ -680,7 +713,11 @@ window.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    function clearConversation() {
+    async function clearConversation() {
+        if (taskView) {
+            try { await taskView.newConversation(); } catch (error) { showSystemNotice({ level: 'error', message: error.message }); }
+            return;
+        }
         if (isBusy || isRecording || isTranscribing || isCapturingVision) {
             setTransientStatus(t('当前正在处理，稍后再清空'));
             return;
@@ -695,8 +732,9 @@ window.addEventListener('DOMContentLoaded', () => {
         window.ailisDesktop?.sendChatControl?.({ type: 'clear-conversation' });
     }
 
-    function sendCurrentMessage() {
-        if (isBusy) {
+    async function sendCurrentMessage() {
+        if (taskSending) return;
+        if (isBusy && !taskApi) {
             if (interruptPending) {
                 return;
             }
@@ -723,7 +761,24 @@ window.addEventListener('DOMContentLoaded', () => {
             ...(pendingVisionAttachment ? [pendingVisionAttachment] : []),
             ...pendingFileAttachments
         ]);
-        window.ailisDesktop?.sendChatMessage?.({
+        if (taskView) {
+            if (taskStorageError) { showSystemNotice({ level: 'error', message: taskStorageError }); return; }
+            const draft = inputEl.value;
+            taskSending = true; updateComposerState();
+            try {
+                await taskView.send(content || getDefaultMessageForAttachments(attachments), attachments);
+                if (taskSendError && systemNoticeText === taskSendError) {
+                    window.clearTimeout(systemNoticeTimer); systemNoticeText = ''; delete statusEl.dataset.noticeLevel;
+                }
+                taskSendError = '';
+            } catch (error) {
+                taskSendError = error.message;
+                showSystemNotice({ level: 'error', message: error.message });
+                return;
+            } finally { taskSending = false; updateComposerState(); }
+            // The user may have continued typing while the host acknowledged.
+            if (inputEl.value !== draft) return;
+        } else window.ailisDesktop?.sendChatMessage?.({
             content: content || getDefaultMessageForAttachments(attachments),
             attachments,
             source: 'chat-panel'
@@ -1136,7 +1191,7 @@ window.addEventListener('DOMContentLoaded', () => {
     });
     inputEl.addEventListener('keydown', (event) => {
         if (event.isComposing || event.keyCode === 229) return;
-        if (event.key === 'Enter' && !event.shiftKey && !isBusy) {
+        if (event.key === 'Enter' && !event.shiftKey && (!isBusy || taskApi)) {
             event.preventDefault();
             sendCurrentMessage();
         }
@@ -1256,6 +1311,7 @@ window.addEventListener('DOMContentLoaded', () => {
     });
 
     window.ailisDesktop?.onChatEvent?.((payload = {}) => {
+        if (taskApi) return; // Host task journal, not pet DOM, owns the desktop transcript.
         if (payload.type === 'system-notice') {
             showSystemNotice(payload.notice || {});
             return;
@@ -1311,10 +1367,12 @@ window.addEventListener('DOMContentLoaded', () => {
     });
 
     window.addEventListener('focus', () => {
-        window.ailisDesktop?.requestChatStateSync?.();
+        if (taskView) void taskView.refresh();
+        else window.ailisDesktop?.requestChatStateSync?.();
     });
 
     window.addEventListener('beforeunload', () => {
+        taskView?.dispose();
         disposeChatSearch();
         window.cancelAnimationFrame(scrollFrame);
         viewportObserver.disconnect();
@@ -1326,6 +1384,20 @@ window.addEventListener('DOMContentLoaded', () => {
         }
     });
 
+    if (taskApi) taskView = new TaskInteractionView({
+        api: taskApi, list: messageListEl, dock: document.getElementById('composer-dock'),
+        notice: message => showSystemNotice({ level: 'error', message }),
+        restoreDraft: text => { inputEl.value = inputEl.value ? `${inputEl.value}\n${text}` : text; resizeInput(); updateComposerState(); inputEl.focus(); },
+        onState: snapshot => {
+            taskStorageError = snapshot.storageError || '';
+            isBusy = Boolean(snapshot.activeRunId);
+            interruptPending = snapshot.runs.find(run => run.id === snapshot.activeRunId)?.status === 'stopping';
+            currentMessages = snapshot.runs.flatMap(run => run.items.filter(item => item.kind === 'user' || item.kind === 'assistant').map(item => ({
+                id: item.id, role: item.kind === 'user' ? 'user' : 'assistant', content: item.text, pending: item.status !== 'final' && item.kind !== 'user'
+            })));
+            updateComposerState(); scrollToBottom({ force: !hasSnapshot }); hasSnapshot = true; syncContinuousAsr();
+        }
+    });
     resizeInput();
     updateComposerState();
     syncContinuousAsr(700);

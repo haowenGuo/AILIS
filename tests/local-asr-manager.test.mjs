@@ -91,6 +91,31 @@ test('DesktopASRManager probes packaged ASR runtime before system Python, even w
     assert.deepEqual(probes, [process.execPath]);
 });
 
+test('self-contained ASR isolates Python and model caches from host environment', async () => {
+    const runtimeRoot = path.join(tempRoot, 'bundled');
+    fs.mkdirSync(runtimeRoot, { recursive: true });
+    fs.writeFileSync(path.join(runtimeRoot, 'manifest.json'), JSON.stringify({
+        selfContained: true, asrPython: process.execPath,
+        pythonPath: ['site-packages'], asrCache: 'asr-cache'
+    }));
+    process.env.AILIS_ASR_RUNTIME_DIR = runtimeRoot;
+    const keys = ['PYTHONHOME', 'PYTHONPATH', 'HF_HOME'];
+    const saved = keys.map(key => process.env[key]);
+    try {
+        for (const key of keys) process.env[key] = path.join(tempRoot, 'missing-host-runtime');
+        const manager = new DesktopASRManager({ app: createFakeApp(), probePython: async () => ({ ok: true }) });
+        const { env } = await manager.resolvePythonCommand();
+        assert.equal(env.PYTHONHOME, '');
+        assert.equal(env.PYTHONNOUSERSITE, '1');
+        assert.equal(env.PYTHONPATH, path.join(runtimeRoot, 'site-packages'));
+        assert.equal(env.HF_HOME, path.join(runtimeRoot, 'asr-cache'));
+        assert.equal(env.HF_HUB_OFFLINE, '1');
+        assert.equal(env.TRANSFORMERS_OFFLINE, '1');
+    } finally {
+        keys.forEach((key, index) => saved[index] === undefined ? delete process.env[key] : process.env[key] = saved[index]);
+    }
+});
+
 test('configured voice runtime and ASR cache are reused instead of global Python', async () => {
     const paths = { voiceVenvPython: process.execPath, asrCacheDir: path.join(tempRoot, 'saved-cache') };
     const manager = new DesktopASRManager({
@@ -98,6 +123,8 @@ test('configured voice runtime and ASR cache are reused instead of global Python
         getRuntimePaths: () => paths,
         probePython: async () => ({ ok: true })
     });
+    // This case models a configured runtime without a bundled installation.
+    manager.getPackagedAsrRuntimeRoots = () => [];
     const python = await manager.resolvePythonCommand();
     assert.equal(python.source, 'configured-voice-runtime');
     assert.equal(python.env.PYTHONNOUSERSITE, '1');
@@ -165,6 +192,7 @@ test('runtime path changes invalidate cached selection and cancel an in-flight p
         getRuntimePaths: () => ({ voiceVenvPython: process.execPath }),
         probePython: () => new Promise((resolve) => { release = resolve; })
     });
+    manager.getPackagedAsrRuntimeRoots = () => [];
     const selection = manager.resolvePythonCommand();
     manager.close();
     release({ ok: true });

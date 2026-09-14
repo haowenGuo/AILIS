@@ -2100,7 +2100,8 @@ test('Agentic Executor can execute real native direct tool calls before JSON pla
         assert.ok((llmServer.calls[1].payload.tools || []).length > 0);
         const directInstructions = llmServer.calls[0].payload.messages.find((message) => message.role === 'system')?.content;
         assert.equal(directInstructions, resolveCodexNativeInstructions('mock-direct-tools'));
-        assert.match(directInstructions, /^You are Codex/);
+        assert.match(directInstructions, /^You and the user share one workspace/);
+        assert.doesNotMatch(directInstructions, /You are Codex|As Codex/);
         assert.doesNotMatch(directInstructions, /Responses-Compatible Tool Runtime|coding agent running in AILIS/);
         assert.equal(result.body.steps[0].tool, 'apply_patch');
     } finally {
@@ -2542,7 +2543,7 @@ test('TaskAgent unrestricted mode executes mutating tools without approval or co
         assert.match(text, /Agentic Executor OK/);
         assert.equal(llmServer.calls.length, 3);
         assert.ok(llmServer.calls.every((call) => call.system === resolveCodexNativeInstructions('mock-planner')));
-        assert.match(llmServer.calls[0].system, /^You are Codex/);
+        assert.match(llmServer.calls[0].system, /^You and the user share one workspace/);
         assert.doesNotMatch(llmServer.calls[0].system, /Responses-Compatible Tool Runtime|coding agent running in AILIS/);
         assert.doesNotMatch(llmServer.calls[0].system, /名字固定为AILIS/);
         assert.doesNotMatch(llmServer.calls[0].system, /性格设定/);
@@ -3021,7 +3022,7 @@ test('TaskAgent ignores the legacy round cap, compacts canonical history, and en
             resolveCodexNativeInstructions('mock-natural-termination-task-agent')
         );
         assert.doesNotMatch(llmServer.calls[0].system, /work-tool rounds|round total budget|finalization/i);
-        assert.match(llmServer.calls[0].system, /^You are Codex/);
+        assert.match(llmServer.calls[0].system, /^You and the user share one workspace/);
         assert.doesNotMatch(llmServer.calls[0].system, /web_run archive operation|exact-answer|evidence contract/i);
         assert.notEqual(llmServer.calls.at(-1).payload.tool_choice, 'none');
         assert.ok((llmServer.calls.at(-1).payload.tools || []).length > 0);
@@ -3238,7 +3239,7 @@ test('Agentic Executor keeps deprecated task layers out of the model prompt', as
         assert.equal(llmUserPayload.recent_turn_items, undefined);
         assert.equal(llmUserPayload.runtime_diagnostics, undefined);
         assert.doesNotMatch(llmServer.calls[0].system, /task_brief|TaskSpec|Evidence Ledger|Task Graph/);
-        assert.match(llmServer.calls[0].system, /^You are Codex/);
+        assert.match(llmServer.calls[0].system, /^You and the user share one workspace/);
         assert.doesNotMatch(llmServer.calls[0].system, /Responses-Compatible Tool Runtime|ResponseItem objects/);
         assert.doesNotMatch(llmServer.calls[0].system, /runtime_diagnostics/);
     } finally {

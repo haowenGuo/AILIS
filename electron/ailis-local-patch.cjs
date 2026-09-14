@@ -8,7 +8,7 @@ const { randomUUID } = require('node:crypto');
 // is atomic; a commit failure restores completed replacements when unchanged.
 // This is not an OS transaction or protection against a hostile concurrent
 // process: conflicting changes are preserved and explicitly reported.
-async function applyLocalPatch({ operations, resolveTarget, addText, updateText, io = fsp }) {
+async function applyLocalPatch({ operations, resolveTarget, addText, updateText, io = fsp, onCommitted }) {
     const files = new Map();
     const changedFiles = [];
     async function readFile(target) {
@@ -77,7 +77,15 @@ async function applyLocalPatch({ operations, resolveTarget, addText, updateText,
         error.details = { restored, rollbackFailed };
         throw error;
     }
+    // Publish evidence only after the complete patch commits. An observer
+    // failure cannot turn a successful disk write into an apparent rollback.
+    const observationErrors = [];
+    for (const file of files.values()) {
+        try { await onCommitted?.({ target: file.target, before: file.before, after: file.after }); }
+        catch (error) { observationErrors.push({ path: file.target, error: error.message }); }
+    }
     return { content: [{ type: 'text', text: `apply_patch completed: ${changedFiles.length} file(s)` }],
-        details: { status: 'completed', action: 'apply_patch', changedFiles } };
+        details: { status: 'completed', action: 'apply_patch', changedFiles,
+            ...(observationErrors.length ? { observationErrors } : {}) } };
 }
 module.exports = { applyLocalPatch };

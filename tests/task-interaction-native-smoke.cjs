@@ -1,0 +1,95 @@
+// Actual sandboxed preload + bundled chat window + durable host; synthetic model only.
+const { app, BrowserWindow, ipcMain } = require('electron');
+const { EventEmitter } = require('node:events');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const http = require('node:http');
+const assert = require('node:assert/strict');
+const { AILISTaskInteraction } = require('../electron/ailis-task-interaction.cjs');
+const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'ailis-task-native-'));
+app.setPath('userData', path.join(temp, 'profile')); app.disableHardwareAcceleration();
+let win, server, host;
+const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
+app.whenReady().then(async () => {
+    const gateway = new EventEmitter(); gateway.workspaceRoot = temp; gateway.activeUnifiedTurns = new Map();
+    let finish, request;
+    gateway.runAgent = async input => {
+        if (input.expectedRunId) return { ok: true, steerAccepted: true };
+        request = input;
+        gateway.emit('event', { type: 'agent.run.started', payload: { runId: input.runId, sessionId: input.sessionId } });
+        return new Promise(resolve => { finish = resolve; });
+    };
+    gateway.interruptAgentRun = async () => ({ ok: true });
+    host = new AILISTaskInteraction({ rootDir: path.join(temp, 'records'), gateway });
+    host.on('event', event => win?.webContents.send('ailis:task-event', event));
+    ipcMain.on('ailis:get-preferences-sync', event => { event.returnValue = { uiLanguage: 'zh-CN', recognitionMode: 'manual', speechMode: 'off', taskInteractionPreview: false, taskInteractionEnabled: true }; });
+    ipcMain.handle('ailis:get-current-window-state', () => ({ isMaximized: false }));
+    ipcMain.handle('ailis:task-snapshot', (_e, data) => host.snapshot(data.sessionId));
+    ipcMain.handle('ailis:task-current-session', (_e, data) => host.currentSession(data));
+    ipcMain.handle('ailis:task-session-list', () => host.sessionList());
+    ipcMain.handle('ailis:task-switch-session', (_e, data) => host.switchSession(data));
+    ipcMain.handle('ailis:task-submit', (_e, data) => host.submit(data));
+    ipcMain.handle('ailis:task-receipt', (_e, data) => host.receipt(data));
+    ipcMain.handle('ailis:task-stop', (_e, data) => host.stop(data));
+    ipcMain.handle('ailis:task-resource', (_e, data) => host.readResource(data));
+    const root = path.resolve(__dirname, '../dist');
+    server = http.createServer((req, res) => {
+        const target = path.resolve(root, '.' + new URL(req.url, 'http://localhost').pathname);
+        if (!target.startsWith(root + path.sep) || !fs.existsSync(target) || !fs.statSync(target).isFile()) return res.writeHead(404).end();
+        const ext = path.extname(target); res.setHeader('Content-Type', ({ '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.png': 'image/png' })[ext] || 'application/octet-stream');
+        fs.createReadStream(target).pipe(res);
+    });
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+    const base = `http://127.0.0.1:${server.address().port}`;
+    win = new BrowserWindow({ show: false, width: 1000, height: 850, webPreferences: {
+        preload: path.resolve(__dirname, '../electron/preload.cjs'), contextIsolation: true, sandbox: true, nodeIntegration: false, backgroundThrottling: false, offscreen: true
+    } });
+    let external = 0;
+    win.webContents.session.webRequest.onBeforeRequest((details, callback) => {
+        const blocked = !details.url.startsWith(base) && !details.url.startsWith('data:'); if (blocked) external++;
+        callback({ cancel: blocked });
+    });
+    const evaluate = fn => win.webContents.executeJavaScript(`(${fn.toString()})()`);
+    const until = async fn => { for (let i = 0; i < 100; i++) { if (await evaluate(fn)) return; await wait(50); } throw new Error('UI wait timed out'); };
+    await win.loadURL(`${base}/chat.html`);
+    await until(() => Boolean(window.ailisDesktop?.tasks && document.querySelector('.task-status-strip')));
+    await evaluate(() => { const input = document.getElementById('message-input'); input.value = '只读检查'; input.dispatchEvent(new Event('input')); document.getElementById('send-btn').click(); });
+    await until(() => document.querySelector('.task-user'));
+    const sessionId = request.sessionId;
+    gateway.emit('event', { type: 'agent.progress.note', payload: { runId: request.runId, sessionId, text: '已收到检查请求，正在核对当前目录。' } });
+    await until(() => document.querySelector('.task-progress')?.textContent === '已收到检查请求，正在核对当前目录。');
+    assert.equal(await evaluate(() => document.querySelector('.task-progress').closest('details') === null), true);
+    await evaluate(() => { const input = document.getElementById('message-input'); input.value = '再加一条约束'; input.dispatchEvent(new Event('input')); document.getElementById('send-btn').click(); });
+    await until(() => document.querySelector('.task-run')?.textContent.includes('待处理'));
+    assert.equal(host.snapshot(sessionId).runs[0].items.filter(item => item.kind === 'user').length, 2);
+    assert.deepEqual(await evaluate(() => [...document.querySelector('.task-run').children].filter(el => el.dataset.itemId).map(el => el.classList.contains('task-user') ? 'user' : 'progress')), ['user', 'progress', 'user']);
+    // Renderer reload does not own/cancel the running turn or lose a queued addition.
+    await win.reload(); await until(() => document.querySelector('.task-run')?.textContent.includes('再加一条约束'));
+    await evaluate(() => document.getElementById('task-stop-button').click());
+    await until(() => document.querySelector('.task-activity[data-status="stopping"]')?.title === '等待后台确认');
+    assert.equal(host.snapshot(sessionId).runs[0].status, 'stopping');
+    finish({ status: 'interrupted', ok: false });
+    await until(() => document.querySelector('.task-activity[data-status="stopped"]')?.textContent === '已停止');
+    assert.equal(host.snapshot(sessionId).runs[0].status, 'stopped');
+    assert.equal(await evaluate(() => document.getElementById('task-stop-button').hidden), true);
+    await evaluate(() => document.getElementById('clear-chat-btn').click());
+    await until(() => document.querySelectorAll('.task-user').length === 0);
+    const selected = await host.currentSession(); assert.notEqual(selected.sessionId, sessionId);
+    assert.equal(host.snapshot(sessionId).runs[0].status, 'stopped');
+    await evaluate(() => document.getElementById('task-history-button').click());
+    await until(() => document.querySelector('.task-session-list'));
+    await evaluate(() => [...document.querySelectorAll('.task-session-list button')].find(button => button.textContent.includes('只读检查')).click());
+    await until(() => document.querySelector('.task-run')?.textContent.includes('再加一条约束'));
+    assert.equal((await host.currentSession()).sessionId, sessionId);
+    await until(() => document.querySelector('.task-activity[data-status="stopped"]')?.textContent === '已停止');
+    assert.equal(await evaluate(() => document.querySelector('.task-status-strip').hidden), true);
+    assert.equal(await evaluate(() => document.getElementById('chat-status').hidden), false);
+    assert.equal(await evaluate(() => document.getElementById('chat-subtitle').hidden), false);
+    assert.equal(await evaluate(() => document.getElementById('message-input').placeholder), '说点什么，让 AILIS 陪你聊聊');
+    assert.equal(external, 0);
+    await evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    fs.writeFileSync(path.join(temp, 'stopped.png'), (await win.webContents.capturePage()).toPNG());
+    console.log(JSON.stringify({ ok: true, sandboxedPreload: true, durableAppend: true, rendererReload: true, stopConfirmation: true, preservedSessionSwitch: true, externalRequests: external, artifacts: temp }));
+    host.dispose(); win.destroy(); server.close(); app.exit(0);
+}).catch(error => { console.error(error); host?.dispose(); win?.destroy(); server?.close(); app.exit(1); });

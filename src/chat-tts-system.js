@@ -9,6 +9,8 @@ import { AVATAR_SPEECH_EVENT_NAME } from './avatar-dialogue-bubble.js';
 import { deriveTtsSpeechText, normalizeTtsSpeechText } from './tts-speech-text.js';
 import { t } from './i18n.js';
 import { ProactiveCompanionManager } from './proactive-companion-manager.js';
+import { toAssistantPayload } from './ailis-chat-service.js';
+import { submitTaskInput } from './task-interaction-client.js';
 
 const CHAT_UI_EVENT_NAME = 'ailis-chat-ui-event';
 const CHAT_EXPRESSIVE_GESTURE_INTENTS = new Set([
@@ -97,7 +99,7 @@ export class ChatTTSSystem {
             }),
             onSpeak: (decision) => this.triggerAutoChat(decision)
         });
-        this.historyReady = this.restorePersistedConversation();
+        this.historyReady = globalThis.window?.ailisDesktop?.tasks ? this.bindHostTasks() : this.restorePersistedConversation();
         this.bindBackgroundAssistantMessages();
 
         this.inputEl.disabled = true;
@@ -106,6 +108,54 @@ export class ChatTTSSystem {
         this.bindEvents();
         this.installAudioUnlockHandlers();
         this.emitChatUiEvent({ type: 'state', isBusy: this.isBusy });
+    }
+
+    bindHostTasks() {
+        const api = window.ailisDesktop.tasks;
+        this.hostSeenMessages = new Set();
+        this.hostProactiveRuns = new Set();
+        const display = async (event, replay = false) => {
+            if (event.sessionId !== this.sessionId) return;
+            if (event.type === 'run.add' && event.run?.kind === 'proactive') this.hostProactiveRuns.add(event.run.id);
+            if (event.type === 'storage-error') { this.setBusy(true); this.proactiveCompanion.stop(); this.stopLingeringSpeech('host-storage-error'); return; }
+            if (event.type === 'run.add' && ['starting', 'running'].includes(event.run?.status)) { this.setBusy(true); this.stopLingeringSpeech('host-task-start'); }
+            if (event.type === 'run.patch' && event.patch?.status) {
+                this.setBusy(['starting', 'running', 'stopping', 'unknown'].includes(event.patch.status));
+                if (event.patch.status === 'unknown') { this.proactiveCompanion.stop(); this.stopLingeringSpeech('host-task-unknown'); }
+                if (event.patch.status === 'stopping') this.stopLingeringSpeech('host-task-stop');
+                if (['completed', 'stopped', 'failed'].includes(event.patch.status)) this.startAutoChatTimer('assistant_turn');
+            }
+            const item = event.item;
+            if (!['item', 'input'].includes(event.type) || !item?.text || !['user', 'assistant'].includes(item.kind) || this.hostSeenMessages.has(item.id)) return;
+            this.hostSeenMessages.add(item.id);
+            this.messageHistory.push({ role: item.kind, content: item.text, attachments: item.attachments || [], source: event.proactive || this.hostProactiveRuns.has(event.runId) ? 'proactive_companion' : '', createdAt: new Date().toISOString() });
+            if (item.kind === 'user') {
+                this.addUserMessage(item.text);
+                if (!replay) { this.proactiveCompanion.stop(); this.proactiveCompanion.noteUserTurn(); }
+            }
+            else if (item.status === 'final') {
+                const payload = toAssistantPayload(item.text, { speechText: item.speechText });
+                const element = this.createAIMessage();
+                this.updateMessageContent(element, payload.display_text, 'markdown');
+                if (!replay) this.startCommittedBubbleSpeech(payload, element, null);
+            }
+            // UI cache only: never write this projection to the model Session or legacy history.
+        };
+        const reload = async () => {
+            const current = api.currentSession ? await api.currentSession({ sessionId: this.sessionId }) : { sessionId: this.sessionId };
+            this.sessionId = current.sessionId; localStorage.setItem('session_id', this.sessionId);
+            this.stopLingeringSpeech('host-session-reload'); this.hostSeenMessages.clear(); this.hostProactiveRuns.clear(); this.messageHistory = []; this.messageListEl.replaceChildren();
+            const snapshot = await api.snapshot({ sessionId: this.sessionId });
+            for (const run of snapshot.runs) for (const item of run.items) await display({ type: 'item', sessionId: this.sessionId, item, proactive: run.kind === 'proactive' }, true);
+            this.setBusy(Boolean(snapshot.activeRunId || snapshot.storageError || snapshot.runs.some(run => run.status === 'unknown')));
+            this.historyRestored = true;
+        };
+        let updates = reload();
+        this.hostTaskUnsubscribe = api.onEvent(event => {
+            updates = updates.then(() => event.type === 'session.select' ? reload() : display(event)).catch(error => this.showSystemNotice?.(error.message, { level: 'error' }));
+        });
+        window.addEventListener('beforeunload', () => this.hostTaskUnsubscribe?.(), { once: true });
+        return updates;
     }
 
     getOrCreateSessionId() {
@@ -312,6 +362,7 @@ export class ChatTTSSystem {
     }
 
     async persistConversation() {
+        if (globalThis.window?.ailisDesktop?.tasks) return { ok: true, hostOwned: true };
         try {
             if (typeof window.ailisDesktop?.chatHistory?.save === 'function') {
                 return await window.ailisDesktop.chatHistory.save({
@@ -661,6 +712,12 @@ export class ChatTTSSystem {
     }
 
     clearConversation() {
+        if (globalThis.window?.ailisDesktop?.tasks) {
+            void window.ailisDesktop.tasks.switchSession({ expectedSessionId: this.sessionId, createNew: true }).then(result => {
+                if (!result.ok) this.showSystemNotice(result.error, { level: 'error' });
+            }).catch(error => this.showSystemNotice(error.message, { level: 'error' }));
+            return true;
+        }
         if (this.isBusy) {
             this.showSystemNotice(t('AILIS 正在执行当前请求，完成后再清空会话。'), {
                 level: 'info',
@@ -712,7 +769,7 @@ export class ChatTTSSystem {
     }
 
     bindBackgroundAssistantMessages() {
-        if (typeof this.chatService?.onBackgroundAssistantMessage === 'function') {
+        if (!globalThis.window?.ailisDesktop?.tasks && typeof this.chatService?.onBackgroundAssistantMessage === 'function') {
             this.backgroundMessageUnsubscribe = this.chatService.onBackgroundAssistantMessage((payload) => {
                 this.backgroundMessageChain = this.backgroundMessageChain
                     .then(() => this.commitBackgroundAssistantMessage(payload))
@@ -827,6 +884,7 @@ export class ChatTTSSystem {
 
     async triggerAutoChat(opportunity = null) {
         await this.historyReady;
+        if (opportunity?.hostOwned) return { ok: true }; // Host already recorded and displayed the one final reply.
         if (this.chatService?.supportsAutoChat === false) {
             return;
         }
@@ -891,6 +949,19 @@ export class ChatTTSSystem {
 
     async sendMessage(contentOverride = null, options = {}) {
         await this.historyReady;
+        if (globalThis.window?.ailisDesktop?.tasks) {
+            const api = window.ailisDesktop.tasks;
+            const text = String(typeof contentOverride === 'string' ? contentOverride : this.inputEl.value).trim();
+            const attachments = normalizeChatAttachments(options.attachments);
+            if (!text && !attachments.length) return;
+            try {
+                const snapshot = await api.snapshot({ sessionId: this.sessionId });
+                const result = await submitTaskInput({ api, sessionId: this.sessionId, expectedRunId: snapshot.activeRunId,
+                    text: text || getDefaultMessageForAttachments(attachments), attachments });
+                if (contentOverride === null && this.inputEl.value.trim() === text) this.inputEl.value = '';
+                return result;
+            } catch (error) { this.showSystemNotice?.({ level: 'error', message: error.message }); throw error; }
+        }
         if (this.isBusy) {
             return;
         }
@@ -986,6 +1057,11 @@ export class ChatTTSSystem {
     }
 
     async interruptCurrentTurn() {
+        if (globalThis.window?.ailisDesktop?.tasks) {
+            const api = window.ailisDesktop.tasks;
+            const snapshot = await api.snapshot({ sessionId: this.sessionId });
+            return api.stop({ sessionId: this.sessionId, expectedRunId: snapshot.activeRunId });
+        }
         if (!this.isBusy) {
             return {
                 ok: false,

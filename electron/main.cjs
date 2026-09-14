@@ -34,6 +34,7 @@ const {
 } = require('./openclaw-runtime.cjs');
 const { AILISGateway } = require('./ailis-gateway.cjs');
 const { AILISChatHistoryStore } = require('./ailis-chat-history-store.cjs');
+const { AILISTaskInteraction } = require('./ailis-task-interaction.cjs');
 const { createAILISDesktopPlatformAdapter } = require('./ailis-desktop-platform-adapter.cjs');
 const {
     getOpenClawToolSurface: getAgentToolSurface,
@@ -339,9 +340,18 @@ function getTrayIconPath() {
 }
 
 app.setName('AILIS');
+const taskInteractionPreview = process.env.AILIS_TASK_INTERACTION_PREVIEW === '1' && !app.isPackaged;
+const taskInteractionPreviewRoot = path.resolve(__dirname, '..', 'tmp', 'task-interaction-profile');
+if (taskInteractionPreview) {
+    // Development preview never loads the user's live desktop settings/history.
+    const profile = path.join(taskInteractionPreviewRoot, 'profile');
+    fs.mkdirSync(profile, { recursive: true });
+    app.setPath('userData', profile);
+    app.setPath('sessionData', profile);
+}
 // Optional headless world transport: use this source's unified Agent, settings and stores.
 const worldServiceOnly = process.env.AILIS_WORLD_SERVICE_ONLY === '1';
-if (worldServiceOnly && process.env.AILIS_SHARED_USER_DATA_DIR) {
+if (worldServiceOnly && !taskInteractionPreview && process.env.AILIS_SHARED_USER_DATA_DIR) {
     app.setPath('userData', path.resolve(process.env.AILIS_SHARED_USER_DATA_DIR));
 }
 app.setAppUserModelId('com.ailis.desktop');
@@ -851,6 +861,11 @@ function getRuntimeComponentsState() {
 }
 
 function getGatewayWorkspaceRoot() {
+    if (taskInteractionPreview) {
+        const workspace = path.join(taskInteractionPreviewRoot, 'workspace');
+        fs.mkdirSync(workspace, { recursive: true });
+        return workspace;
+    }
     if (app.isPackaged) {
         return path.join(app.getPath('userData'), 'workspace');
     }
@@ -876,6 +891,7 @@ function resolveAILISStateDir(value = '') {
 }
 
 function getPersistedAILISStateDir() {
+    if (taskInteractionPreview) return path.join(taskInteractionPreviewRoot, 'state');
     if (worldServiceOnly && process.env.AILIS_WORLD_SERVICE_STATE_DIR) {
         return path.resolve(process.env.AILIS_WORLD_SERVICE_STATE_DIR);
     }
@@ -3110,6 +3126,22 @@ function broadcastHumanGatewayEvent(payload) {
     }
 }
 
+let taskInteraction = null;
+function ensureTaskInteraction() {
+    if (!taskInteraction) {
+        taskInteraction = new AILISTaskInteraction({ rootDir: path.join(getPersistedAILISStateDir(), 'task-interaction'),
+            gateway: ensureAILISGateway(), getSettings: getResolvedLlmSettings,
+            getLegacyHistory: sessionId => ensureAILISChatHistoryStore().getSession(sessionId) });
+        taskInteraction.on('event', event => {
+            for (const window of getOpenWindows()) window.webContents.send('ailis:task-event', event);
+        });
+        taskInteraction.on('storage-error', event => {
+            for (const window of getOpenWindows()) window.webContents.send('ailis:task-event', { ...event, type: 'storage-error' });
+        });
+    }
+    return taskInteraction;
+}
+
 function ensureAILISGateway() {
     if (ailisGateway) {
         return ailisGateway;
@@ -3120,6 +3152,7 @@ function ensureAILISGateway() {
     );
     ailisGateway = new AILISGateway({
         app,
+        ...(taskInteractionPreview ? { port: 0 } : {}),
         ...(worldServiceOnly ? {
             toolAllowlist: [], mcpServers: [], disableBuiltinAilisResearchMcp: true,
             profileCurationEnabled: false
@@ -4765,7 +4798,7 @@ function createChatWindow() {
 
     void loadWindowContent(chatWindow, 'chat.html')
         .then(() => {
-            if (desktopState.chatWindow.visible) {
+            if (desktopState.chatWindow.visible || taskInteractionPreview) {
                 chatWindow.show();
             }
         })
@@ -5244,7 +5277,7 @@ async function uninstallAssetPack(payload = {}) {
 
 function registerIpc() {
     ipcMain.on('ailis:get-preferences-sync', (event) => {
-        event.returnValue = getRendererPreferences();
+        event.returnValue = { ...getRendererPreferences(), taskInteractionPreview, taskInteractionEnabled: true };
     });
 
     ipcMain.handle('ailis:get-preferences', () => getRendererPreferences());
@@ -5582,6 +5615,28 @@ function registerIpc() {
             ...(payload || {}),
             llmSettings: payload?.llmSettings || getResolvedLlmSettings()
         });
+    });
+    ipcMain.handle('ailis:task-current-session', (_event, payload = {}) => ensureTaskInteraction().currentSession(payload));
+    ipcMain.handle('ailis:task-session-list', () => ensureTaskInteraction().sessionList());
+    ipcMain.handle('ailis:task-switch-session', (_event, payload = {}) => ensureTaskInteraction().switchSession(payload));
+    ipcMain.handle('ailis:task-proactive', async (_event, payload = {}) => {
+        await ensureAILISGatewayStarted('task_interaction_proactive');
+        return ensureTaskInteraction().proactive(payload);
+    });
+    ipcMain.handle('ailis:task-snapshot', (_event, payload = {}) => ensureTaskInteraction().snapshot(payload.sessionId));
+    ipcMain.handle('ailis:task-receipt', (_event, payload = {}) => ensureTaskInteraction().receipt(payload));
+    ipcMain.handle('ailis:task-submit', async (_event, payload = {}) => {
+        await ensureAILISGatewayStarted('task_interaction');
+        return ensureTaskInteraction().submit(payload);
+    });
+    ipcMain.handle('ailis:task-stop', (_event, payload = {}) => ensureTaskInteraction().stop(payload));
+    ipcMain.handle('ailis:task-confirm-recovery', (_event, payload = {}) => ensureTaskInteraction().confirmRecovery(payload));
+    ipcMain.handle('ailis:task-resource', (_event, payload = {}) => ensureTaskInteraction().readResource(payload));
+    ipcMain.handle('ailis:task-tool-output', (_event, payload = {}) => ensureTaskInteraction().readToolOutput(payload));
+    ipcMain.handle('ailis:task-reveal-file', (_event, payload = {}) => {
+        const result = ensureTaskInteraction().locateFile(payload);
+        shell.showItemInFolder(result.path);
+        return { ok: true, changedSince: result.changedSince };
     });
     ipcMain.handle('ailis:gateway-agent-interrupt', async (_event, payload = {}) =>
         ensureAILISGateway().interruptAgentRun(payload || {})

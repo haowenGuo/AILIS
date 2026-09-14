@@ -2415,7 +2415,7 @@ class ComputerRuntime {
         });
     }
 
-    createSessionRecord({ command, workdir, child, timeoutMs, outputCapture = null }) {
+    createSessionRecord({ command, workdir, child, timeoutMs, outputCapture = null, runId = '' }) {
         const id = randomUUID();
         const record = {
             id,
@@ -2430,6 +2430,7 @@ class ComputerRuntime {
             stdout: '',
             stderr: '',
             child,
+            runId,
             timeout: null,
             outputCapture,
             outputStore: summarizeExecOutputCapture(outputCapture)
@@ -2655,6 +2656,7 @@ class ComputerRuntime {
         const terminal = ptyLoad.pty.spawn(ptySpec.executable, ptySpec.args, ptySpec.options);
         const record = {
             id: randomUUID(),
+            runId: context.runId || '',
             command,
             executable: ptySpec.executable,
             args: ptySpec.args,
@@ -2892,6 +2894,9 @@ class ComputerRuntime {
                 details
             };
         }
+        this.runChildren ||= new Map();
+        this.runChildren.set(child, { child, runId: context.runId || '' });
+        child.once('close', () => this.runChildren.delete(child));
         return await new Promise((resolve) => {
             let settled = false;
             let timedOut = false;
@@ -3074,7 +3079,7 @@ class ComputerRuntime {
                 details
             };
         }
-        const record = this.createSessionRecord({ command, workdir, child, timeoutMs, outputCapture });
+        const record = this.createSessionRecord({ command, workdir, child, timeoutMs, outputCapture, runId: context.runId || '' });
         const details = await this.waitForProcessSnapshot(record, yieldTimeMs);
         details.max_output_tokens = maxOutputTokens;
         details.output = truncateByApproxTokens(collectSessionText(record), maxOutputTokens);
@@ -3155,7 +3160,7 @@ class ComputerRuntime {
             }, outputStore);
             return createErrorResult('error', error?.message || String(error), details);
         }
-        const record = this.createSessionRecord({ command, workdir, child, timeoutMs, outputCapture });
+        const record = this.createSessionRecord({ command, workdir, child, timeoutMs, outputCapture, runId: context.runId || '' });
         return createTextResult(JSON.stringify(this.publicSession(record), null, 2), {
             status: 'completed',
             action: 'session_start',
@@ -3293,6 +3298,21 @@ class ComputerRuntime {
             outputId: record.outputStore?.outputId,
             outputStore: record.outputStore
         });
+    }
+
+    async stopOwnedRun(runId) {
+        if (!runId) return false;
+        const alive = record => record.child
+            ? Boolean(record.child.pid && record.child.exitCode === null && record.child.signalCode === null)
+            : record.status === 'running';
+        const records = [...this.sessions.values(), ...this.ptySessions.values(), ...(this.runChildren?.values() || [])].filter(record => record.runId === runId && alive(record));
+        for (const record of records) {
+            if (record.child) await this.platformAdapter.killProcessTree(record.child, 'SIGTERM');
+            else record.terminal?.kill();
+        }
+        const until = Date.now() + 15000;
+        while (records.some(alive) && Date.now() < until) await new Promise(resolve => setTimeout(resolve, 50));
+        return records.every(record => !alive(record));
     }
 
     async shutdown() {

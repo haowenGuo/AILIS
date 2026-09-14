@@ -1960,6 +1960,13 @@ class AILISGateway extends EventEmitter {
     }
 
     emitGatewayEvent(type, payload = {}) {
+        if (type === 'agent.run.started') {
+            const owner = this.activeUnifiedTurns?.get(payload.sessionId);
+            if (owner?.runId === payload.runId) {
+                for (const pending of owner.pendingInteractionInputs || []) this.ensureAgentRunner().enqueueRunInput(pending);
+                owner.pendingInteractionInputs = [];
+            }
+        }
         const eventRunId = normalizeString(
             payload.runId || payload.childRunId || payload.payload?.runId
         );
@@ -2681,6 +2688,7 @@ class AILISGateway extends EventEmitter {
 
         this.emitGatewayEvent('tool.call.started', {
             callId,
+            runId: transcriptRunId, sessionId: transcriptSessionId,
             tool: toolId
         });
 
@@ -2786,7 +2794,9 @@ class AILISGateway extends EventEmitter {
             }
             const result = await withTimeout(
                 Number(request.timeoutMs || context.timeoutMs || TOOL_CALL_TIMEOUT_MS),
-                () => this.callAgentRuntimeTool({ callId, toolId, args, context, workspaceDir })
+                () => this.taskInteraction
+                    ? this.taskInteraction.trackTool(context, () => this.callAgentRuntimeTool({ callId, toolId, args, context, workspaceDir }))
+                    : this.callAgentRuntimeTool({ callId, toolId, args, context, workspaceDir })
             );
             const guardedResult = this.runtime.guardToolResult(result, { toolId, callId });
             attachObservationContract(guardedResult, { toolId });
@@ -2891,7 +2901,7 @@ class AILISGateway extends EventEmitter {
                 status,
                 durationMs: response.durationMs
             });
-            this.emitGatewayEvent('tool.call.finished', response);
+            this.emitGatewayEvent('tool.call.finished', { ...response, runId: transcriptRunId, sessionId: transcriptSessionId });
             return response;
         } catch (error) {
             const status = classifyError(error);
@@ -2981,7 +2991,7 @@ class AILISGateway extends EventEmitter {
                 error: response.error,
                 durationMs: response.durationMs
             });
-            this.emitGatewayEvent('tool.call.finished', response);
+            this.emitGatewayEvent('tool.call.finished', { ...response, runId: transcriptRunId, sessionId: transcriptSessionId });
             return response;
         }
     }
@@ -3152,6 +3162,23 @@ class AILISGateway extends EventEmitter {
     async runUnifiedAgentTurn({ input, context, sessionId, runId, llmSettings, finalize = async (result) => result }) {
         const runner = this.ensureAgentRunner();
         const active = this.activeUnifiedTurns.get(sessionId);
+        if (input.interactionStart && active) return { ok: false, status: 'session_busy', error: '此会话已由其他入口占用，未把消息转投过去' };
+        // UI additions target one exact turn. Never wait and silently create a
+        // different turn when this one closes while the input gate is running.
+        if (input.expectedRunId) {
+            if (!active || active.runId !== input.expectedRunId || active.finalizing || active.stopping) {
+                return { ok: false, status: 'run_conflict', error: '目标任务已经结束或正在停止' };
+            }
+            const pending = { runId: active.runId, sessionId,
+                message: input.message, clientMessageId: input.clientMessageId };
+            let accepted = false;
+            if (runner.activeRuns.has(active.runId)) accepted = runner.enqueueRunInput(pending);
+            else if ((active.pendingInteractionInputs || []).length < 32) {
+                (active.pendingInteractionInputs ||= []).push(pending); accepted = true;
+            }
+            return { ok: accepted, steerAccepted: accepted, deferAssistantCommit: true,
+                status: accepted ? 'running' : 'run_conflict', runId: active.runId, sessionId };
+        }
         if (active) {
             // Attachments and proactive packets must not be silently lost in the
             // text-only steering queue. Serialize those turns after the writer.
@@ -3284,6 +3311,7 @@ class AILISGateway extends EventEmitter {
                 emberHarness: summarizeEmberHarnessRecord(inputGate)
             };
         }
+        if (input.abortSignal?.aborted) return { ok: false, status: 'interrupted', runId, sessionId };
         const agentRole = normalizeString(input.agentRole || context.agentRole).toLowerCase();
         const explicitChildRole = ['task', 'task_agent', 'worker', 'subagent', 'child_agent'].includes(agentRole);
         const unifiedOwnsTurn = !explicitChildRole && (agentRole === 'unified_agent' || context.unifiedAgent === true ||
@@ -3421,6 +3449,8 @@ class AILISGateway extends EventEmitter {
     async interruptAgentRun(request = {}) {
         const input = request && typeof request === 'object' ? request : {};
         const context = input.context && typeof input.context === 'object' ? input.context : {};
+        const owner = this.activeUnifiedTurns.get(input.sessionId || context.sessionId || '');
+        if (owner && input.runId && owner.runId === input.runId) owner.stopping = true;
         return await this.ensureAgentRunner().requestInterruptRun({
             runId: input.runId || context.runId || '',
             sessionId: input.sessionId || input.sessionKey || context.sessionId || context.sessionKey || '',
@@ -5111,7 +5141,8 @@ class AILISGateway extends EventEmitter {
                 return target;
             },
             addText: (body) => this.patchBodyToText(body),
-            updateText: (source, body) => this.applyUpdatePatchText(source, body)
+            updateText: (source, body) => this.applyUpdatePatchText(source, body),
+            onCommitted: (file) => this.taskInteraction?.fileChange(context, file)
         });
     }
 
@@ -5161,8 +5192,11 @@ class AILISGateway extends EventEmitter {
         if (toolId === 'write') {
             const target = this.resolveToolPath(args.path, workspaceDir, 'path', context);
             const content = typeof args.content === 'string' ? args.content : '';
+            const before = this.taskInteraction?.readBeforeWrite(context, target);
             await fsp.mkdir(path.dirname(target), { recursive: true });
             await fsp.writeFile(target, content, args.encoding || 'utf8');
+            if (before) this.taskInteraction.fileChange(context, { target, before: before.data,
+                after: Buffer.from(content, args.encoding || 'utf8'), uncertain: before.uncertain });
             return {
                 content: [{ type: 'text', text: `write completed: ${target}` }],
                 details: {
