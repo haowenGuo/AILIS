@@ -90,7 +90,7 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
             run.items.push({ id: 'progress-1', kind: 'progress', text: '已找到文档入口，正在检查引用。', status: 'observed' });
             run.items.push({ id: 'call-1', kind: 'tool', tool: 'apply_patch', status: 'running' }); window.mock.emit();
         });
-        await page.waitForSelector('.task-process');
+        await page.waitForSelector('.task-progress');
         assert.equal(await page.locator('.task-progress').isVisible(), true, 'public progress is readable without expanding tool logs');
         assert.equal(await page.locator('.task-process .task-progress').count(), 0);
         assert.equal(await page.locator('.task-progress').textContent(), '已找到文档入口，正在检查引用。');
@@ -103,8 +103,8 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
             ] }); window.mock.emit();
         });
         await page.waitForSelector('.task-plan');
-        assert.equal(await page.locator('.task-process').count(), 1, 'all tool records share one disclosure instead of interrupting commentary');
-        assert.equal(await page.locator('.task-step').first().isVisible(), false, 'raw tool rows are collapsed by default');
+        assert.equal(await page.locator('.task-process, .task-step').count(), 0, 'tool records are absent, not merely collapsed');
+        assert.equal(await page.getByRole('button', { name: /查看工具结果|完整输出/ }).count(), 0);
         assert.equal(await page.locator('.task-progress').count(), 2);
         assert.equal(await page.locator('.task-process .task-progress').count(), 0);
         assert.equal(await page.locator('.task-plan summary').textContent(), '计划 1/2 · 验证结果');
@@ -126,7 +126,7 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
         assert.equal(await page.evaluate(() => window.mock.submitted[1].expectedRunId), 'run-1');
         assert.equal(await page.evaluate(() => window.mock.snapshot.runs.length), 1, 'human correction stays in the existing run');
         assert.deepEqual(await page.locator('.task-run > [data-item-id]').evaluateAll(elements => elements.map(element => element.dataset.itemId)),
-            [await page.evaluate(() => window.mock.submitted[0].clientMessageId), 'progress-1', 'progress-early', await page.evaluate(() => window.mock.submitted[1].clientMessageId), 'plan-1', 'call-1'],
+            [await page.evaluate(() => window.mock.submitted[0].clientMessageId), 'progress-1', 'progress-early', await page.evaluate(() => window.mock.submitted[1].clientMessageId), 'plan-1'],
             'public conversation preserves message order while plan and tool details stay separate');
         assert.equal(await page.locator('#message-input').inputValue(), '', 'acknowledged correction clears only its sent draft');
         await page.screenshot({ path: path.join(out, 'pending.png') });
@@ -138,16 +138,10 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
         await page.waitForFunction(() => Number(document.querySelector('#message-list').dataset.taskSeq) === window.mock.snapshot.seq);
         assert.equal(await page.evaluate(() => getSelection().toString()), '检查一下源码', 'stream refresh preserves selected text');
         await page.evaluate(() => getSelection().removeAllRanges());
-        await page.waitForFunction(() => document.querySelector('.task-process > summary').textContent.includes('后台仍在执行'));
-        await page.locator('.task-process > summary').click();
-        await page.getByRole('button', { name: '任务详情', exact: true }).click();
-        assert.match(await page.locator('.task-metadata').textContent(), /已带入模型请求/, 'full receipts remain inspectable');
+        await page.waitForFunction(() => document.querySelector('.task-activity').textContent.includes('后台仍在执行'));
         await page.evaluate(() => { window.mock.snapshot.runs[0].activity = '正在收尾'; window.mock.emit(); });
-        await page.waitForFunction(() => document.querySelector('.task-process > summary').textContent.includes('正在收尾'));
-        assert.equal(await page.locator('.task-viewer').isVisible(), true, 'inspector stays open across refresh');
-        assert.equal(await page.locator('.task-process').evaluate(element => element.open), true, 'process disclosure stays open across refresh');
-        await page.getByRole('button', { name: '关闭', exact: true }).click();
-        await page.locator('.task-process > summary').click();
+        await page.waitForFunction(() => document.querySelector('.task-activity').textContent.includes('正在收尾'));
+        assert.equal(await page.locator('.task-process, .task-step').count(), 0, 'updates do not restore tool rows');
         await page.evaluate(() => {
             const run = window.mock.snapshot.runs[0];
             run.items.push({ id: 'progress-2', kind: 'progress', text: '接下来只调整文档引用，执行逻辑保持不变。', status: 'observed' });
@@ -158,7 +152,7 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
         await page.waitForSelector('.task-progress[data-item-id="progress-2"]');
         assert.equal(await page.locator('.task-progress').count(), 3, 'earlier public progress remains visible');
         assert.deepEqual(await page.locator('.task-run > [data-item-id]').evaluateAll(elements => elements.map(element => element.dataset.itemId)),
-            [await page.evaluate(() => window.mock.submitted[0].clientMessageId), 'progress-1', 'progress-early', await page.evaluate(() => window.mock.submitted[1].clientMessageId), 'progress-2', 'plan-1', 'call-1']);
+            [await page.evaluate(() => window.mock.submitted[0].clientMessageId), 'progress-1', 'progress-early', await page.evaluate(() => window.mock.submitted[1].clientMessageId), 'progress-2', 'plan-1']);
         assert.doesNotMatch(await page.locator('.task-run').textContent(), /PRIVATE_REASONING_SENTINEL/);
         await page.screenshot({ path: path.join(out, 'human-correction.png') });
         await page.evaluate(() => {
@@ -241,11 +235,11 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
             ] }] };
             const api = { ...window.ailisDesktop.tasks, snapshot: async () => structuredClone(state), onEvent: () => () => {} };
             const view = new TaskInteractionView({ api, list, dock: document.createElement('div'), onState() {}, notice() {} });
-            await view.refresh(); list.querySelector('.task-process').open = true;
+            await view.refresh();
             state.seq++; state.runs[0].items[3].status = 'included'; await view.refresh(); view.dispose();
         });
-        assert.deepEqual(await page.locator('#timeline-fixture .task-run > [data-item-id]').evaluateAll(elements => elements.map(element => element.dataset.itemId)), ['u1', 'p1', 'u2', 't1']);
-        assert.deepEqual(await page.locator('#timeline-fixture .task-process').evaluateAll(elements => elements.map(element => element.open)), [true], 'one tool disclosure retains its expansion across progress updates');
+        assert.deepEqual(await page.locator('#timeline-fixture .task-run > [data-item-id]').evaluateAll(elements => elements.map(element => element.dataset.itemId)), ['u1', 'p1', 'u2']);
+        assert.equal(await page.locator('#timeline-fixture .task-process, #timeline-fixture .task-step').count(), 0, 'restored records do not render tool rows');
         assert.equal(await page.locator('#timeline-fixture .task-receipt').count(), 0, 'pending hint disappears after correction is included');
         console.log(`Task interaction browser smoke: ${checks} assertions passed; ${out}`);
     } finally { await browser.close(); }

@@ -91,7 +91,6 @@ export class TaskInteractionView {
             entry = { element: node('section', 'task-run') };
             entry.element.dataset.runId = run.id; this.list.append(entry.element); this.rows.set(run.id, entry);
         }
-        const processStates = new Map([...entry.element.querySelectorAll('.task-process')].map(element => [element.dataset.itemId, element.open]));
         const fragment = document.createDocumentFragment();
         if (run.kind === 'history') {
             for (const item of run.items) {
@@ -100,30 +99,10 @@ export class TaskInteractionView {
             }
             entry.element.replaceChildren(fragment); entry.fingerprint = fingerprint; return;
         }
-        const processes = [];
-        let pendingTools = [];
-        const flushTools = () => {
-            if (!pendingTools.length) return;
-            const group = node('details', 'task-process'); group.dataset.itemId = pendingTools[0].id;
-            group.open = processStates.get(group.dataset.itemId) ?? false;
-            const running = pendingTools.findLast(item => item.status === 'running');
-            const failed = pendingTools.findLast(item => item.status === 'failed');
-            const summary = running ? '正在执行' : failed ? '执行记录 · 有未完成的操作' : '查看执行过程';
-            group.append(node('summary', '', summary));
-            for (const item of pendingTools) {
-                const row = node('div', 'task-step'); row.dataset.itemId = item.id;
-                row.append(node('span', '', `${item.tool} · ${labels[item.status] || item.status}${Number.isFinite(item.durationMs) ? ` · ${(item.durationMs / 1000).toFixed(1)} 秒` : ''}`));
-                if (item.outputRef) row.append(button('查看工具结果', () => this.openResource(run, item.outputRef, item.tool)));
-                if (item.fullOutputId) row.append(button('完整输出', () => this.openToolOutput(run, item)));
-                if (item.error) row.append(node('pre', 'task-error', typeof item.error === 'string' ? item.error : JSON.stringify(item.error)));
-                group.append(row);
-            }
-            fragment.append(group); processes.push(group); pendingTools = [];
-        };
-        // Public progress and human corrections stay where they happened. Only tool
-        // details collapse; neither internal reasoning nor invented progress is shown.
+        // Keep public progress and corrections in order. Raw tool records remain
+        // in host logs, not in the conversation (including restored history).
         for (const item of run.items) {
-            if (item.kind === 'tool') { pendingTools.push(item); continue; }
+            if (item.kind === 'tool') continue;
             if (item.kind === 'progress' && item.text) {
                 const progress = node('div', 'message-item message-ai task-progress');
                 progress.dataset.itemId = item.id; progress.dataset.messageRole = 'assistant';
@@ -159,8 +138,6 @@ export class TaskInteractionView {
             }
             plan.append(steps); fragment.append(plan);
         }
-        flushTools();
-        const process = processes.at(-1);
         const tools = run.items.filter(item => item.kind === 'tool');
         const activeTool = tools.findLast(item => item.status === 'running');
         const active = ['starting', 'running'].includes(run.status);
@@ -168,12 +145,7 @@ export class TaskInteractionView {
         const activity = activeTool ? '正在执行' :
             run.activity === '等待模型响应' ? 'AILIS正在思考' : run.activity || '思考中…';
         const summaryText = active ? activity : run.status === 'completed' ? (elapsed ? `已工作 ${elapsed}` : '查看执行过程') : labels[run.status] || run.status;
-        if (process) {
-            process.dataset.status = run.status;
-            process.firstChild.textContent = summaryText;
-            if (run.status === 'stopping') process.firstChild.title = '等待后台确认';
-            if (run.status === 'stopped') process.firstChild.title = '已产生的文件修改保留；未处理的追加消息不会自动执行';
-        } else if (run.status !== 'completed') {
+        if (run.status !== 'completed') {
             const status = node('p', 'task-activity', summaryText); status.dataset.status = run.status;
             if (run.status === 'stopping') status.title = '等待后台确认';
             if (run.status === 'stopped') status.title = '已产生的文件修改保留；未处理的追加消息不会自动执行';
@@ -216,8 +188,7 @@ export class TaskInteractionView {
             this.showViewer('任务详情', details);
         }));
         // No floating ellipsis under an unfinished, otherwise empty answer.
-        if (active) { if (process) process.append(actions); }
-        else fragment.append(actions);
+        if (!active) fragment.append(actions);
         entry.element.replaceChildren(fragment); entry.fingerprint = fingerprint;
     }
     async addImage(parent, run, ref, label) {

@@ -4,6 +4,7 @@ const path = require('node:path');
 const fs = require('node:fs');
 const { fork } = require('node:child_process');
 const { randomUUID } = require('node:crypto');
+const { validateToolContract } = require('./ailis-tool-contracts.cjs');
 
 const {
     DEFAULT_EXEC_YIELD_TIME_MS,
@@ -428,7 +429,14 @@ class AILISCodeModeRuntime {
         return this.formatResponse(cell, { maxTokens: maxOutputTokens, wallTimeMs: Date.now() - startedAt });
     }
 
-    async wait({ cell_id: cellId = '', yield_time_ms: yieldTimeMs = DEFAULT_WAIT_YIELD_TIME_MS, max_tokens: maxTokens = DEFAULT_MAX_OUTPUT_TOKENS_PER_EXEC_CALL, terminate = false } = {}) {
+    async wait(args = {}) {
+        const validation = validateToolContract('exec_wait', args);
+        if (!validation.ok) throw new TypeError(`Invalid exec_wait arguments: ${validation.errors.join('; ')}`);
+        // Optional nulls from providers mean "use the default", not zero or stop.
+        const cellId = args.cell_id;
+        const yieldTimeMs = args.yield_time_ms ?? DEFAULT_WAIT_YIELD_TIME_MS;
+        const maxTokens = args.max_tokens ?? DEFAULT_MAX_OUTPUT_TOKENS_PER_EXEC_CALL;
+        const terminate = args.terminate ?? false;
         const startedAt = Date.now();
         const cell = this.cells.get(normalizeString(cellId));
         if (!cell) {
@@ -444,7 +452,7 @@ class AILISCodeModeRuntime {
             this.sendToWorker(cell, { type: 'terminate' }, { terminating: true });
             setTimeout(() => cell.child.kill(), 250).unref?.();
         } else if (!cell.completed && !cell.terminated) {
-            await this.waitForSignal(cell, Math.max(0, Number(yieldTimeMs) || DEFAULT_WAIT_YIELD_TIME_MS));
+            await this.waitForSignal(cell, yieldTimeMs);
         }
         return this.formatResponse(cell, { maxTokens, wallTimeMs: Date.now() - startedAt });
     }
