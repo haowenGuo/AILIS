@@ -5561,6 +5561,19 @@ function registerIpc() {
         cancelVisionRegionSelection(event);
     });
     ipcMain.handle('ailis:llm-chat', async (_event, payload = {}) => callDesktopLlm(payload));
+    ipcMain.handle('ailis:tts-prepare-spoken-reply', async (_event, payload = {}) => {
+        try {
+            const { prepareSpokenReply } = require('./ailis-spoken-reply.cjs');
+            const persona = ensureAILISGateway().memoryRuntime?.state?.blocks?.persona?.value || '';
+            return await prepareSpokenReply({
+                text: payload.text,
+                persona,
+                callModel: (request) => callDesktopLlmProvider(getResolvedLlmSettings(), request)
+            });
+        } catch (error) {
+            return { ok: false, error: error?.message || String(error) };
+        }
+    });
     ipcMain.handle('ailis:tts-synthesize', async (_event, payload = {}) => callDesktopTts(payload));
     ipcMain.handle('ailis:asr-transcribe', async (_event, audioBytes) => {
         if (!desktopASRManager) {

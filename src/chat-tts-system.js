@@ -488,6 +488,8 @@ export class ChatTTSSystem {
     }
 
     createChunkedSpeechSession(aiMessageDiv) {
+        // Spoken rewriting needs the complete answer; never read raw deltas first.
+        if (window.ailisDesktop?.tts?.prepareSpokenReply) return null;
         if (!this.chunkedTtsEnabled) {
             return null;
         }
@@ -559,17 +561,37 @@ export class ChatTTSSystem {
 
     startCommittedBubbleSpeech(payload, aiMessageDiv, session = null) {
         const displayText = payload.display_text || payload.speech_text || '...';
-        const bubbleSpeechText = deriveTtsSpeechText({}, displayText);
-        const speechPayload = {
+        let bubbleSpeechText = deriveTtsSpeechText({}, displayText);
+        let speechPayload = {
             ...payload,
             speech_text: bubbleSpeechText,
             speechText: bubbleSpeechText
         };
-        const alignment = payload.normalized_alignment || payload.alignment || null;
+        let alignment = payload.normalized_alignment || payload.alignment || null;
         const playbackGeneration = Number(this.speechPlaybackGeneration) || 0;
         const isCurrentPlayback = () => playbackGeneration === (Number(this.speechPlaybackGeneration) || 0);
 
         const playbackTask = (async () => {
+            const prepare = window.ailisDesktop?.tts?.prepareSpokenReply;
+            if (prepare && !this.speechProvider?.isSpeechDisabled) {
+                const spoken = await prepare({ text: displayText });
+                if (!isCurrentPlayback()) return;
+                if (!spoken?.ok) {
+                    this.showSystemNotice(spoken?.error || '口播整理暂时不可用', {
+                        level: 'warning', source: 'speech', code: 'spoken_reply_failed'
+                    });
+                    return;
+                }
+                bubbleSpeechText = spoken.text;
+                speechPayload = {
+                    ...speechPayload,
+                    speech_text: spoken.text, speechText: spoken.text,
+                    bubble_text: spoken.text, bubbleText: spoken.text,
+                    audio_base64: null, alignment: null, normalized_alignment: null,
+                    surface: payload.surface ? { ...payload.surface, speechText: spoken.text, bubbleText: spoken.text } : null
+                };
+                alignment = null;
+            }
             const usedChunkedSpeech = await this.finishChunkedSpeechSession(
                 session,
                 bubbleSpeechText
@@ -583,7 +605,7 @@ export class ChatTTSSystem {
             }
             await this.playPreferredSpeech({
                 payload: speechPayload,
-                displayText,
+                displayText: bubbleSpeechText,
                 alignment,
                 aiMessageDiv,
                 preserveMessageContent: true
@@ -1078,6 +1100,7 @@ export class ChatTTSSystem {
 
         this.interruptInFlight = true;
         this.interruptRequested = true;
+        this.stopLingeringSpeech('chat_user_interrupt');
         const interruptedTurn = this.activeTurn;
         this.markTurnCancelled(interruptedTurn);
         if (this.activeTurn?.id === interruptedTurn?.id) {

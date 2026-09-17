@@ -121,6 +121,7 @@ contextBridge.exposeInMainWorld('ailisDesktop', {
         }
     },
     tts: {
+        prepareSpokenReply: (payload) => ipcRenderer.invoke('ailis:tts-prepare-spoken-reply', payload || {}),
         synthesize: (payload) => ipcRenderer.invoke('ailis:tts-synthesize', payload || {})
     },
     voiceRuntime: {
