@@ -12,6 +12,7 @@
     "demo": {"entries": [], "pages": {"test": "Test/index.html"}, "tests": ["tests/browser-speech-recognition.test.mjs"]}
   },
   "edges": [
+    {"from": "electron/wake-word-host.cjs", "to": ["electron/wake-word-worker.cjs"], "reason": "Opt-in keyword spotter worker loaded by worker_threads"},
     {"from": "electron/main.cjs", "to": ["electron/preload.cjs", "installer/ailis-runtime-components.json"], "reason": "Electron preload boundary and runtime component installer manifest"},
     {"from": "electron/quick-controls-window.cjs", "to": ["electron/quick-controls-preload.cjs"], "reason": "Sandboxed quick controls preload loaded by BrowserWindow"},
     {"from": "electron/ailis-code-mode-runtime.cjs", "to": ["electron/ailis-code-mode-worker.cjs"], "reason": "forked code-mode process; not a require/import"},

@@ -110,6 +110,9 @@ window.addEventListener('DOMContentLoaded', () => {
     let levelPollingId = 0;
     let continuousRestartId = 0;
     let continuousPausedUntil = 0;
+    let voiceStarting = false;
+    let voiceGeneration = 0;
+    let avatarSpeaking = false;
     let activeContinuousRecording = false;
     const speechRecognition = createDesktopSpeechRecognitionService();
     applyI18n(document, { skipSelectors: ['#message-list', '#file-preview'] });
@@ -827,6 +830,8 @@ window.addEventListener('DOMContentLoaded', () => {
             getRecognitionMode() === 'continuous' &&
             !isBusy &&
             !isRecording &&
+            !voiceStarting && !avatarSpeaking &&
+            !inputEl.value.trim() &&
             !isTranscribing &&
             !isCapturingVision &&
             Date.now() >= continuousPausedUntil;
@@ -852,7 +857,7 @@ window.addEventListener('DOMContentLoaded', () => {
             return;
         }
 
-        if ((isBusy || isCapturingVision) && activeContinuousRecording && recorderController) {
+        if ((isBusy || isCapturingVision || avatarSpeaking) && activeContinuousRecording && recorderController) {
             void stopVoiceInput({ cancel: true });
             return;
         }
@@ -911,7 +916,7 @@ window.addEventListener('DOMContentLoaded', () => {
     }
 
     async function startVoiceInput({ continuous = false } = {}) {
-        if (!speechRecognition.supportsRecognition || isBusy || isRecording || isTranscribing) {
+        if (!speechRecognition.supportsRecognition || isBusy || isRecording || isTranscribing || voiceStarting) {
             return;
         }
         if (continuous && getRecognitionMode() !== 'continuous') {
@@ -926,11 +931,17 @@ window.addEventListener('DOMContentLoaded', () => {
         speechStatusText = t('正在请求麦克风权限...');
         updateComposerState();
 
+        voiceStarting = true;
+        const generation = ++voiceGeneration;
         try {
             recorderController = await speechRecognition.createRecorder({
                 preferredDeviceId: currentPreferredMicDeviceId,
-                timesliceMs: asrPreset.recorderTimesliceMs
+                timesliceMs: asrPreset.recorderTimesliceMs,
+                wake: continuous
             });
+            if (generation !== voiceGeneration || (continuous && (getRecognitionMode() !== 'continuous' || isBusy || avatarSpeaking))) {
+                await recorderController.cancel(); recorderController = null; return;
+            }
             isRecording = true;
             speechStatusText = continuous
                 ? t('自动 ASR 监听中...')
@@ -973,6 +984,15 @@ window.addEventListener('DOMContentLoaded', () => {
 
                 const voiceActivity = recorderController.getVoiceActivity?.();
                 const currentLevel = voiceActivity?.level ?? recorderController.getLevel?.() ?? 0;
+                if (continuous) {
+                    const wake = recorderController.getWakeState();
+                    if (wake.failure) { setTransientStatus(wake.failure.message); finishAutoVad({ cancel: true }); return; }
+                    if (!wake.keyword) { speechStatusText = t('自动 ASR：等待唤醒'); updateComposerState(); return; }
+                    if (!speechStarted) {
+                        speechStarted = true; speechStartAt = Date.now(); lastVoiceAt = speechStartAt;
+                        recordingTimeoutId = window.setTimeout(() => void stopVoiceInput(), asrPreset.maxRecordMs);
+                    }
+                }
                 if (autoVadMode) {
                     const now = Date.now();
                     const voiceLike = voiceActivity
@@ -1052,7 +1072,7 @@ window.addEventListener('DOMContentLoaded', () => {
                 updateComposerState();
             }, asrPreset.levelPollingMs);
 
-            recordingTimeoutId = window.setTimeout(() => {
+            if (!continuous) recordingTimeoutId = window.setTimeout(() => {
                 void stopVoiceInput({ cancel: autoVadMode && !speechStarted });
             }, asrPreset.maxRecordMs);
         } catch (error) {
@@ -1061,10 +1081,12 @@ window.addEventListener('DOMContentLoaded', () => {
             activeContinuousRecording = false;
             activeAsrPreset = null;
             syncContinuousAsr(3000);
-        }
+        } finally { voiceStarting = false; }
     }
 
     async function stopVoiceInput({ cancel = false } = {}) {
+        voiceGeneration++;
+        const generation = voiceGeneration;
         if (!recorderController) {
             return;
         }
@@ -1102,6 +1124,7 @@ window.addEventListener('DOMContentLoaded', () => {
             const result = await speechRecognition.transcribeAudioBlob(audioBlob, {
                 preset: asrPreset.asrPreset
             });
+            if (generation !== voiceGeneration || (wasContinuousRecording && (getRecognitionMode() !== 'continuous' || avatarSpeaking || inputEl.value.trim()))) return;
             const transcript = String(result?.text || '').trim();
             console.info('[ASR] transcription finished', {
                 preset: result?.preset || asrPreset.asrPreset,
@@ -1311,6 +1334,11 @@ window.addEventListener('DOMContentLoaded', () => {
     });
 
     window.ailisDesktop?.onChatEvent?.((payload = {}) => {
+        if (payload.type === 'avatar-speech') {
+            avatarSpeaking = payload.speaking === true;
+            syncContinuousAsr(500);
+            return;
+        }
         if (taskApi) return; // Host task journal, not pet DOM, owns the desktop transcript.
         if (payload.type === 'system-notice') {
             showSystemNotice(payload.notice || {});
@@ -1351,16 +1379,17 @@ window.addEventListener('DOMContentLoaded', () => {
         }
     });
 
-    window.ailisDesktop?.onPreferencesUpdated?.(({ preferences = {} } = {}) => {
+    window.ailisDesktop?.onPreferencesUpdated?.(async ({ preferences = {} } = {}) => {
         const previousMode = getRecognitionMode();
+        voiceGeneration++;
         if ('uiLanguage' in preferences) {
             setUiLanguage(preferences.uiLanguage || 'zh-CN');
             applyI18n(document, { skipSelectors: ['#message-list', '#file-preview'] });
         }
         currentRecognitionMode = preferences.recognitionMode || 'auto-vad';
         currentPreferredMicDeviceId = preferences.preferredMicDeviceId || '';
-        if (previousMode === 'continuous' && getRecognitionMode() !== 'continuous' && recorderController) {
-            void stopVoiceInput({ cancel: true });
+        if (previousMode === 'continuous' && recorderController) {
+            await stopVoiceInput({ cancel: true });
         }
         updateComposerState();
         syncContinuousAsr(0);
@@ -1372,6 +1401,7 @@ window.addEventListener('DOMContentLoaded', () => {
     });
 
     window.addEventListener('beforeunload', () => {
+        voiceGeneration++;
         taskView?.dispose();
         disposeChatSearch();
         window.cancelAnimationFrame(scrollFrame);

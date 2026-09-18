@@ -14,6 +14,8 @@ extraMetadata:
   main: electron/main.cjs
   ailisBundledAsr: true
 extraResources:
+  - from: build-cache/ailis-wake-model
+    to: ailis-wake-model
   - from: build-cache/ailis-asr-runtime
     to: ailis-asr-runtime
     filter:
@@ -23,6 +25,7 @@ extraResources:
       - "!**/*.incomplete"
 asar: true
 asarUnpack:
+  - node_modules/sherpa-onnx*/**/*
   - node_modules/node-pty/**/*
   - dist/**/*
   - electron/**/*.cjs
