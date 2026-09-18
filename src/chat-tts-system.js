@@ -456,6 +456,7 @@ export class ChatTTSSystem {
     }
 
     emitAvatarSpeechEvent(payload) {
+        window.ailisDesktop?.emitChatEvent?.({ type: 'avatar-speech', speaking: payload.phase === 'start' || payload.phase === 'update' });
         window.dispatchEvent(new CustomEvent(AVATAR_SPEECH_EVENT_NAME, { detail: payload }));
     }
 

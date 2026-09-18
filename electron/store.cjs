@@ -1026,6 +1026,7 @@ function getDefaultState() {
             speechMode: 'hosted',
             hostedTtsBaseUrl: DEFAULT_HOSTED_TTS_BASE_URL,
             recognitionMode: 'fast-vad',
+            wakeWords: require('./wake-word-catalog.cjs').normalizeWakeWords(),
             conversationMode: DEFAULT_CONVERSATION_MODE,
             uiLanguage: DEFAULT_UI_LANGUAGE,
             preferredMicDeviceId: '',
@@ -1194,6 +1195,7 @@ function normalizeState(inputState) {
     normalizedState.preferences.speechMode = normalizeSpeechMode(normalizedState.preferences.speechMode);
     normalizedState.preferences.hostedTtsBaseUrl = normalizeHostedTtsBaseUrl(normalizedState.preferences.hostedTtsBaseUrl) || DEFAULT_HOSTED_TTS_BASE_URL;
     normalizedState.preferences.recognitionMode = normalizeRecognitionMode(normalizedState.preferences.recognitionMode);
+    normalizedState.preferences.wakeWords = require('./wake-word-catalog.cjs').normalizeWakeWords(normalizedState.preferences.wakeWords);
     normalizedState.preferences.conversationMode = normalizeConversationMode(
         normalizedState.preferences.conversationMode
     );

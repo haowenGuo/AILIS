@@ -160,6 +160,11 @@ contextBridge.exposeInMainWorld('ailisDesktop', {
         cancel: () => ipcRenderer.invoke('ailis:ollama-runtime-cancel')
     },
     transcribeAudio: (audioBytes) => ipcRenderer.invoke('ailis:asr-transcribe', audioBytes),
+    wake: {
+        start: () => ipcRenderer.invoke('ailis:wake-start'),
+        frame: payload => ipcRenderer.invoke('ailis:wake-frame', payload),
+        stop: () => ipcRenderer.invoke('ailis:wake-stop')
+    },
     beginDragPetWindow: () => {
         ipcRenderer.send('ailis:begin-drag-pet-window', {});
     },

@@ -1,0 +1,13 @@
+[
+  { "word": "艾莉丝", "tokens": "ài l ì s ī", "default": true },
+  { "word": "小艾同学", "tokens": "x iǎo ài t óng x ué", "default": true },
+  { "word": "你好助手", "tokens": "n ǐ h ǎo zh ù sh ǒu", "default": true },
+  { "word": "帮我", "tokens": "b āng w ǒ", "default": true },
+  { "word": "小助手", "tokens": "x iǎo zh ù sh ǒu", "default": false },
+  { "word": "电脑助手", "tokens": "d iàn n ǎo zh ù sh ǒu", "default": false },
+  { "word": "小艾小艾", "tokens": "x iǎo ài x iǎo ài", "default": false },
+  { "word": "莉丝莉丝", "tokens": "l ì s ī l ì s ī", "default": false },
+  { "word": "老婆", "tokens": "l ǎo p ó", "default": false },
+  { "word": "宝贝", "tokens": "b ǎo b èi", "default": false },
+  { "word": "亲爱的", "tokens": "q īn ài d e", "default": false }
+]

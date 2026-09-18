@@ -3336,6 +3336,7 @@ function getRendererPreferences() {
         speechMode: normalizeSpeechMode(desktopState?.preferences?.speechMode),
         hostedTtsBaseUrl: desktopState.preferences.hostedTtsBaseUrl,
         recognitionMode: normalizeRecognitionMode(desktopState?.preferences?.recognitionMode),
+        wakeWords: require('./wake-word-catalog.cjs').normalizeWakeWords(desktopState?.preferences?.wakeWords),
         conversationMode: normalizeConversationMode(
             desktopState?.preferences?.conversationMode || DEFAULT_CONVERSATION_MODE
         ),
@@ -3822,6 +3823,7 @@ function applyPreferencesPatch(partialPreferences = {}) {
         speechMode: rendererPreferences.speechMode,
         hostedTtsBaseUrl: rendererPreferences.hostedTtsBaseUrl,
         recognitionMode: rendererPreferences.recognitionMode,
+        wakeWords: rendererPreferences.wakeWords,
         conversationMode: rendererPreferences.conversationMode,
         uiLanguage: rendererPreferences.uiLanguage,
         preferredMicDeviceId: rendererPreferences.preferredMicDeviceId,
@@ -3905,6 +3907,11 @@ function applyPreferencesPatch(partialPreferences = {}) {
     }
     if ('recognitionMode' in partialPreferences) {
         nextPreferences.recognitionMode = normalizeRecognitionMode(partialPreferences.recognitionMode);
+    }
+    if ('wakeWords' in partialPreferences) {
+        const words = require('./wake-word-catalog.cjs').normalizeWakeWords(partialPreferences.wakeWords);
+        if (!words.length) throw new Error('请至少选择一个唤醒词');
+        nextPreferences.wakeWords = words;
     }
     if ('conversationMode' in partialPreferences) {
         nextPreferences.conversationMode = normalizeConversationMode(partialPreferences.conversationMode);
@@ -5575,6 +5582,13 @@ function registerIpc() {
         }
     });
     ipcMain.handle('ailis:tts-synthesize', async (_event, payload = {}) => callDesktopTts(payload));
+    const stopWakeListeners = require('./wake-word-host.cjs').registerWakeWord({
+        ipcMain,
+        getMode: () => normalizeRecognitionMode(desktopState?.preferences?.recognitionMode),
+        getWords: () => desktopState?.preferences?.wakeWords,
+        root: app.isPackaged ? path.join(process.resourcesPath, 'ailis-wake-model') : path.join(__dirname, '..', 'build-cache', 'ailis-wake-model')
+    });
+    app.once('before-quit', stopWakeListeners);
     ipcMain.handle('ailis:asr-transcribe', async (_event, audioBytes) => {
         if (!desktopASRManager) {
             throw new Error('本地语音识别管理器尚未初始化');
