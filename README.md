@@ -8,7 +8,7 @@
     <img alt="License" src="https://img.shields.io/badge/license-MIT-059669?style=flat-square">
   </p>
   <p>
-    <a href="https://101.133.239.56/Test/"><strong>Try AILIS</strong></a> ·
+    <a href="https://150.109.13.189/Test/"><strong>Try AILIS</strong></a> ·
     <a href="https://github.com/haowenGuo/AILIS/releases"><strong>Download</strong></a> ·
     <a href="docs/guide/desktop.md">Quick Start</a> ·
     <a href="docs/README.md">Documentation</a>
@@ -116,7 +116,7 @@ AILIS Server is now the Agent Runner's fail-safe default, not only a control-pan
 
 ### Use AILIS
 
-Download the desktop build from [Releases](https://github.com/haowenGuo/AILIS/releases), or meet AILIS first through the [web experience](https://101.133.239.56/Test/).
+Download the desktop build from [Releases](https://github.com/haowenGuo/AILIS/releases), or meet AILIS first through the [web experience](https://150.109.13.189/Test/).
 
 ### Develop Locally
 
