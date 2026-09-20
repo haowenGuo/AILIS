@@ -168,6 +168,17 @@ try {
 
     Assert-AppStaysRunning -Executable $installedExe -Label "installed" -WaitSeconds 35
 
+    # A fresh profile must complete a real hosted model turn, not merely save defaults.
+    $agentTurnOutput = (& node (Join-Path $PSScriptRoot 'validate-clean-agent-turn.mjs') `
+        "--artifact=$installedExe" "--expected-version=$ExpectedVersion" 2>&1 | Out-String).Trim()
+    $agentTurnExitCode = $LASTEXITCODE
+    $agentTurn = $null
+    try { $agentTurn = $agentTurnOutput | ConvertFrom-Json } catch { }
+    Add-Check -Name 'installed-clean-agent-turn' `
+        -Ok ($agentTurnExitCode -eq 0 -and $agentTurn.ok -eq $true -and $agentTurn.agentTurn.nonceMatched -eq $true) `
+        -Detail $agentTurnOutput
+    $report.cleanAgentTurn = $agentTurn
+
     $stateCandidates = @(
         (Join-Path $env:APPDATA "ailis\desktop-state.json"),
         (Join-Path $env:APPDATA "AILIS\desktop-state.json")

@@ -47,10 +47,11 @@ def main():
     for target in TARGETS:
         matches = [j for j in jobs if j['name'] == f'Native package and offline acceptance - {target}']
         assert len(matches) == 1 and matches[0]['conclusion'] == 'success', target
-    # This publisher creates a new version only. Existing tags/drafts remain untouched.
-    assert not any(r['tag_name'] == tag for r in api('releases?per_page=100'))
-    refs = api('git/matching-refs/tags/' + tag)
-    assert not any(r['ref'] == f'refs/tags/{tag}' for r in refs)
+    # The authenticated maintainer creates this exact draft/tag. Actions can upload
+    # attachments here, but cannot create or publish releases in this repository.
+    draft = api(f'releases/tags/{tag}')
+    assert draft['draft'] and draft['target_commitish'] == commit
+    assert api('git/ref/tags/' + tag)['object']['sha'] == commit
     stage = Path('publication-stage')
     stage.mkdir()
     summaries = []
@@ -71,6 +72,7 @@ def main():
         if target == 'win32-x64':
             installed = read(evidence / 'nsis/clean-install-report.json')
             assert installed['success'] and all(c['ok'] for c in installed['checks'])
+            assert installed['cleanAgentTurn']['ok'] and installed['cleanAgentTurn']['agentTurn']['nonceMatched']
             assert read(evidence / 'nsis/installed-source-identity.json')['sourceCommit'] == commit
         for item in manifest['artifacts']:
             name = item['file']
@@ -103,16 +105,17 @@ def main():
     expected = {p.name: {'size': p.stat().st_size, 'digest': 'sha256:' + digest(p)} for p in stage.iterdir()}
     assert sum(name.endswith(('.exe', '.dmg', '.zip', '.deb', '.tar.gz', '.AppImage'))
                and 'acceptance' not in name for name in expected) == 9
-    gh('release', 'create', tag, '--repo', REPO, '--target', commit, '--draft', '--title', f'AILIS {tag}',
-       '--notes-file', f'docs/releases/{tag}.md')
+    existing = {a['name']: {'size': a['size'], 'digest': a.get('digest')} for a in draft['assets']}
+    assert all(name in expected and value == expected[name] for name, value in existing.items())
     for file in sorted(stage.iterdir()):
+        if file.name in existing:
+            continue
         subprocess.run(['gh', 'release', 'upload', tag, str(file), '--repo', REPO], check=True)
     remote = api(f'releases/tags/{tag}')
     actual = {a['name']: {'size': a['size'], 'digest': a.get('digest')} for a in remote['assets']}
     assert actual == expected and remote['draft'], 'Asset identity mismatch; keep release draft'
-    # Final visibility changes only after every uploaded byte was verified by GitHub.
-    gh('release', 'edit', tag, '--repo', REPO, '--draft=false', '--latest')
-    print(json.dumps({'published': tag, 'commit': commit, 'assets': len(expected)}), flush=True)
+    # The maintainer publishes only after this run succeeds with all digests verified.
+    print(json.dumps({'readyToPublish': tag, 'commit': commit, 'assets': len(expected)}), flush=True)
 
 
 if __name__ == '__main__':
