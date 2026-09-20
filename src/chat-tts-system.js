@@ -473,6 +473,7 @@ export class ChatTTSSystem {
         if (!text) {
             return;
         }
+        window.ailisDesktop?.tts?.diagnostic?.({ stage: 'bubble_started', traceId: payload.speechTraceId, text });
 
         this.emitAvatarSpeechEvent({
             phase: 'start',
@@ -562,9 +563,13 @@ export class ChatTTSSystem {
 
     startCommittedBubbleSpeech(payload, aiMessageDiv, session = null) {
         const displayText = payload.display_text || payload.speech_text || '...';
+        const traceId = globalThis.crypto?.randomUUID?.() || `speech-${Date.now()}`;
+        const trace = (stage, data = {}) => window.ailisDesktop?.tts?.diagnostic?.({ stage, traceId, ...data });
+        trace('delivery_entered', { text: displayText, bridgeAvailable: Boolean(window.ailisDesktop?.tts?.prepareSpokenReply), speechDisabled: Boolean(this.speechProvider?.isSpeechDisabled) });
         let bubbleSpeechText = deriveTtsSpeechText({}, displayText);
         let speechPayload = {
             ...payload,
+            speechTraceId: traceId,
             speech_text: bubbleSpeechText,
             speechText: bubbleSpeechText
         };
@@ -575,15 +580,18 @@ export class ChatTTSSystem {
         const playbackTask = (async () => {
             const prepare = window.ailisDesktop?.tts?.prepareSpokenReply;
             if (prepare && !this.speechProvider?.isSpeechDisabled) {
-                const spoken = await prepare({ text: displayText });
-                if (!isCurrentPlayback()) return;
+                trace('rewrite_requested');
+                const spoken = await prepare({ text: displayText, traceId });
+                if (!isCurrentPlayback()) { trace('discarded', { reason: 'playback_generation_changed' }); return; }
                 if (!spoken?.ok) {
+                    trace('rewrite_failed');
                     this.showSystemNotice(spoken?.error || '口播整理暂时不可用', {
                         level: 'warning', source: 'speech', code: 'spoken_reply_failed'
                     });
                     return;
                 }
                 bubbleSpeechText = spoken.text;
+                trace('rewrite_received', { text: spoken.text, rewritten: spoken.rewritten });
                 speechPayload = {
                     ...speechPayload,
                     speech_text: spoken.text, speechText: spoken.text,
@@ -592,6 +600,8 @@ export class ChatTTSSystem {
                     surface: payload.surface ? { ...payload.surface, speechText: spoken.text, bubbleText: spoken.text } : null
                 };
                 alignment = null;
+            } else {
+                trace('bypassed', { reason: prepare ? 'speech_disabled' : 'bridge_missing' });
             }
             const usedChunkedSpeech = await this.finishChunkedSpeechSession(
                 session,
@@ -614,6 +624,7 @@ export class ChatTTSSystem {
         })();
 
         void playbackTask.catch((error) => {
+            trace('playback_failed', { reason: 'playback_exception' });
             if (isCurrentPlayback()) {
                 console.warn('已提交气泡的后台语音播放失败：', error);
             }
@@ -1230,6 +1241,7 @@ export class ChatTTSSystem {
 
     async playPreferredSpeech({ payload, displayText, alignment, aiMessageDiv, preserveMessageContent = false }) {
         const speechText = deriveTtsSpeechText(payload, displayText);
+        window.ailisDesktop?.tts?.diagnostic?.({ stage: 'tts_dispatch', traceId: payload.speechTraceId, text: speechText, speechDisabled: Boolean(this.speechProvider?.isSpeechDisabled) });
         const speechPayload = {
             ...payload,
             speech_text: speechText
@@ -1259,6 +1271,8 @@ export class ChatTTSSystem {
             scrollToBottom: scrollSpeechDisplay,
             onAvatarPlaybackStart: () => this.startAvatarPlayback(speechPayload, displayText, aiMessageDiv)
         });
+
+        window.ailisDesktop?.tts?.diagnostic?.({ stage: speechResult?.played ? 'tts_played' : 'tts_not_played', traceId: payload.speechTraceId });
 
         if (speechResult?.played) {
             this.endAvatarSpeech(aiMessageDiv);

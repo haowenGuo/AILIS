@@ -252,8 +252,12 @@ class AILISTaskInteraction extends EventEmitter {
                 const stopped = running.stopping || result?.status === 'interrupted';
                 const status = stopped ? (running.exitConfirmed === false ? 'unknown' : 'stopped') : result?.ok === true && result?.status === 'completed' ? 'completed' : 'failed';
                 const finalText = result?.displayText || result?.text || '';
-                if (!stopped && finalText) this.record(sessionId, { type: 'item', runId: id,
-                    item: { id: `${id}:final`, kind: 'assistant', text: finalText, status: 'final', speechText: result.speechText || finalText } });
+                if (!stopped && finalText) {
+                    this.record(sessionId, { type: 'item', runId: id,
+                        item: { id: `${id}:final`, kind: 'assistant', text: finalText, status: 'final', speechText: result.speechText || finalText } });
+                    // Explicit Markdown references only; never scan attachments/stdout or alter the reply.
+                    await require('./ailis-task-artifacts.cjs').registerFinalArtifacts(this, sessionId, id, finalText);
+                }
                 for (const item of this.load(sessionId).runs.find(run => run.id === id).items.filter(item => item.kind === 'user' && ['queued', 'accepted'].includes(item.status))) {
                     this.record(sessionId, { type: 'item', runId: id, item: { id: item.id, status: 'unprocessed' } });
                 }
@@ -457,16 +461,28 @@ class AILISTaskInteraction extends EventEmitter {
         }
         return safe;
     }
-    readResource({ sessionId, runId, resourceId }) {
+    readResource({ sessionId, runId, resourceId, format = 'preview' }) {
+        if (!['preview', 'base64'].includes(format)) throw new Error('不支持的资源读取格式');
         if (!/^[a-f0-9]{64}$/.test(resourceId || '')) throw new Error('无效资源标识');
         const run = this.load(sessionId).runs.find(run => run.id === runId);
-        const refs = run ? run.items.flatMap(item => [item.outputRef, item.beforeRef, item.afterRef, item.diffRef, item.imageRef, ...(item.attachments || []).map(a => a.imageRef)]).filter(Boolean) : [];
+        const refs = run ? [...run.items.map(item => item.artifactRef), ...run.items.flatMap(item => [item.outputRef, item.beforeRef, item.afterRef, item.diffRef, item.imageRef, ...(item.attachments || []).map(a => a.imageRef)])].filter(Boolean) : [];
         const ref = refs.find(ref => ref.id === resourceId);
         if (!ref) throw new Error('资源不属于此任务');
-        const data = fs.readFileSync(path.join(this.root, 'resources', resourceId));
+        const resourcePath = path.join(this.root, 'resources', resourceId);
+        const stat = fs.lstatSync(resourcePath);
+        if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 16 * 1024 * 1024) throw new Error('此资源过大或不可读取');
+        const data = fs.readFileSync(resourcePath);
         if (hash(data) !== resourceId) throw new Error('资源校验失败');
         if (data.length > 16 * 1024 * 1024) throw new Error('此资源过大，不能内联预览');
-        return { ...ref, ...(ref.mime.startsWith('image/') ? { dataUrl: `data:${ref.mime};base64,${data.toString('base64')}` } : { text: data.toString('utf8') }) };
+        if (format === 'base64') return { ...ref, base64: data.toString('base64') };
+        if (/^image\/(png|jpeg|webp|gif)$/.test(ref.mime)) return { ...ref, dataUrl: `data:${ref.mime};base64,${data.toString('base64')}` };
+        if (ref.mime.startsWith('text/') || ref.mime === 'application/json') {
+            // Existing tool/diff readers retain their full (already bounded) contract.
+            const previewLimit = run.items.some(item => item.artifactRef?.id === resourceId) ? 1024 * 1024 : 16 * 1024 * 1024;
+            const text = data.subarray(0, previewLimit).toString('utf8');
+            return { ...ref, text, truncated: data.length > previewLimit };
+        }
+        return { ...ref, previewUnavailable: true };
     }
     async readToolOutput({ sessionId, runId, itemId, offset = 0 }) {
         const item = this.load(sessionId).runs.find(run => run.id === runId)?.items.find(item => item.id === itemId && item.kind === 'tool');

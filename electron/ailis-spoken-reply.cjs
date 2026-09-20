@@ -7,12 +7,19 @@ function needsSpokenRewrite(text) {
     return Array.from(value).length > 150 || /[`*_#|~]|https?:\/\/|www\.|[A-Za-z]:[\\/]|(?:^|\s)\/[\w.-]+\/|\[[^\]]*\]\(|^\s*(?:[-+>]\s|\d+[.)、]\s?)/m.test(value);
 }
 
-async function prepareSpokenReply({ text, persona, callModel }) {
+async function prepareSpokenReply({ text, persona, callModel, trace = () => {} }) {
     const original = String(text || '').trim();
+    trace('decision', { inputChars: Array.from(original).length, personaChars: String(persona || '').length });
     if (!original || !needsSpokenRewrite(original)) {
+        trace('skipped', { reason: original ? 'short_plain_text' : 'empty' });
         return { ok: true, text: original, rewritten: false };
     }
-    if (!String(persona || '').trim()) throw new Error('口播重写缺少 AILIS 完整人设');
+    if (!String(persona || '').trim()) {
+        trace('failed', { reason: 'missing_persona' });
+        throw new Error('口播重写缺少 AILIS 完整人设');
+    }
+    const startedAt = Date.now();
+    trace('model_started', {});
     const result = await callModel({
         messages: [
             { role: 'system', content: `${persona}\n\n${REWRITE_INSTRUCTION}` },
@@ -24,8 +31,10 @@ async function prepareSpokenReply({ text, persona, callModel }) {
         timeoutMs: 45000
     });
     if (!result?.ok || !String(result.content || '').trim() || result.toolCalls?.length) {
+        trace('failed', { reason: !result?.ok ? 'provider_failure' : result.toolCalls?.length ? 'unexpected_tool_call' : 'empty_response', durationMs: Date.now() - startedAt });
         throw new Error(result?.error || '口播重写没有返回正文');
     }
+    trace('model_completed', { outputChars: result.content.trim().length, unchanged: result.content.trim() === original, durationMs: Date.now() - startedAt });
     return { ok: true, text: result.content.trim(), rewritten: true };
 }
 

@@ -121,6 +121,7 @@ contextBridge.exposeInMainWorld('ailisDesktop', {
         }
     },
     tts: {
+        diagnostic: (payload) => ipcRenderer.send('ailis:tts-diagnostic', payload || {}),
         prepareSpokenReply: (payload) => ipcRenderer.invoke('ailis:tts-prepare-spoken-reply', payload || {}),
         synthesize: (payload) => ipcRenderer.invoke('ailis:tts-synthesize', payload || {})
     },

@@ -950,9 +950,11 @@ function shouldPreserveEmptyToolCallReasoningContent(settings = {}, payload = {}
     return ['disabled', 'disable', 'off', 'false', 'none'].includes(thinkingType);
 }
 
+const { projectChatRole } = require('./ailis-provider-role-policy.cjs');
+
 function mapChatMessageForOpenAiCompatible(message = {}, settings = {}) {
     const mapped = {
-        role: message.role === 'developer' ? 'system' : message.role,
+        role: projectChatRole(message, settings),
         content: message.content,
         ...(message.toolCallId ? { tool_call_id: message.toolCallId } : {}),
         ...(message.name ? { name: message.name } : {}),

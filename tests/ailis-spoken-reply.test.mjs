@@ -4,6 +4,16 @@ import { createRequire } from 'node:module';
 import { readFileSync } from 'node:fs';
 const require = createRequire(import.meta.url);
 const { needsSpokenRewrite, prepareSpokenReply, REWRITE_INSTRUCTION } = require('../electron/ailis-spoken-reply.cjs');
+const { speechDiagnostic } = require('../electron/ailis-speech-diagnostics.cjs');
+
+test('diagnostics exclude source text, keys and provider errors', () => {
+    const row = speechDiagnostic({ stage: 'tts_dispatch', text: 'private sentence', apiKey: 'secret', error: 'private provider body' });
+    assert.equal(row.textChars, 16);
+    assert.equal(row.textHash.length, 64);
+    assert.equal(row.text, undefined);
+    assert.equal(row.apiKey, undefined);
+    assert.equal(row.error, undefined);
+});
 
 test('short natural replies bypass the model; long and formatted replies do not', async () => {
     for (const text of ['', '好呀，陪你聊一会儿。', '字'.repeat(150)]) {

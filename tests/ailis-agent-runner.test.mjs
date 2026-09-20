@@ -760,6 +760,15 @@ test('explicit task execution forces Persona handoff without changing ordinary c
     assert.match(prompt.instructions, /do not answer the task directly/i);
 });
 
+test('provider failures stop the agent loop even with disabled semantic fuses', () => {
+    for (const status of ['provider_error', 'provider_stream_error', 'empty_response', 'timeout', 'network_error', 'needs_config']) {
+        const record = buildInvalidDecisionProgressRecord({ status, error: 'upstream failed' }, 0);
+        assert.equal(detectInvalidDecisionNoProgress([record], {
+            disableNoProgressFuse: true, disableInvalidDecisionFuse: true
+        }), 'provider_request_failed');
+    }
+});
+
 test('TaskAgent schema recovery guidance and invalid-decision fuse reject identical retries', () => {
     const invalidDecision = {
         ok: false,

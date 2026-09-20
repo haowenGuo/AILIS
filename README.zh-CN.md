@@ -8,7 +8,7 @@
     <img alt="License" src="https://img.shields.io/badge/license-MIT-059669?style=flat-square">
   </p>
   <p>
-    <a href="https://101.133.239.56/Test/"><strong>在线体验</strong></a> ·
+    <a href="https://150.109.13.189/Test/"><strong>在线体验</strong></a> ·
     <a href="https://github.com/haowenGuo/AILIS/releases"><strong>下载桌面版</strong></a> ·
     <a href="docs/guide/desktop.md">快速开始</a> ·
     <a href="docs/README.md">文档</a>
@@ -116,7 +116,7 @@ Humanlike 检查点来自 30 天陪伴场景，不代表真实用户连续使用
 
 ### 直接使用
 
-从 [Releases](https://github.com/haowenGuo/AILIS/releases) 下载桌面版，或先打开 [Web 体验](https://101.133.239.56/Test/) 认识 AILIS。
+从 [Releases](https://github.com/haowenGuo/AILIS/releases) 下载桌面版，或先打开 [Web 体验](https://150.109.13.189/Test/) 认识 AILIS。
 
 ### 本地开发
 

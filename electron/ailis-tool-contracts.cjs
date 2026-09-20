@@ -996,11 +996,10 @@ const TOOL_CONTRACTS = Object.freeze({
                     minLength: 1,
                     description: 'Search query for deferred tools.'
                 }),
-                limit: numberSchema({
-                    minimum: 1,
-                    maximum: 50,
-                    description: 'Maximum number of tools to return.'
-                })
+                limit: {
+                    anyOf: [numberSchema({ minimum: 1, maximum: 50 }), { type: 'null', enum: [null] }],
+                    description: 'Maximum number of tools to return. Omit or use null to use the tool default.'
+                }
             },
             additionalProperties: false
         }),

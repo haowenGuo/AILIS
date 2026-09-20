@@ -68,6 +68,7 @@ const {
     buildAilisTurnContext,
     buildToolContext: buildTurnToolContext
 } = require('../ailis-turn-context.cjs');
+const { appendPermissionsUpdate } = require('../ailis-permissions-instructions.cjs');
 const {
     executeToolStep
 } = require('../ailis-tool-executor.cjs');
@@ -4119,6 +4120,7 @@ function buildInvalidDecisionProgressRecord(decision = {}, iteration = 0) {
     return {
         iteration,
         status: normalizeText(decision.status, 'invalid_agent_decision'),
+        providerFailure: decision.providerFailure === true,
         tool,
         args: stableDecisionValue(args),
         error,
@@ -4133,6 +4135,14 @@ function buildInvalidDecisionProgressRecord(decision = {}, iteration = 0) {
 }
 
 function detectInvalidDecisionNoProgress(history = [], requestContext = {}) {
+    // Transport/configuration failures are not model decisions to repair in the
+    // agent loop. Stop even when task step limits or semantic fuses are disabled.
+    const last = history.at(-1);
+    if (last && (last.providerFailure === true || ['provider_error', 'provider_stream_error', 'empty_response',
+        'invalid_json_response', 'stream_unavailable', 'needs_config',
+        'timeout', 'network_error', 'transient_network_error', 'cloud_session_unavailable', 'fetch_error'].includes(last.status))) {
+        return 'provider_request_failed';
+    }
     if (
         requestContext.disableNoProgressFuse === true ||
         requestContext.disableInvalidDecisionFuse === true
@@ -6866,6 +6876,7 @@ function buildLlmAgentDirectToolPrompt({
     modelImageAttachments = [],
     externalToolExposure = null,
     runtimeEnvironment = null,
+    permissionContext = null,
     promptProfile = null,
     tools = [],
     contextMode = 'persona',
@@ -6977,6 +6988,7 @@ function buildLlmAgentDirectToolPrompt({
             fileAttachments: getAttachedFilesPromptObject(fileAttachments),
             modelImageAttachments: activeModelImageAttachments,
             runtimeEnvironment,
+            permissionContext,
             capabilityCatalog,
             externalToolExposure: null,
             toolOutputChars,
@@ -6987,6 +6999,7 @@ function buildLlmAgentDirectToolPrompt({
     const runtimeEnvironmentProjection = persistentTaskAgentSession || persistentPersonaSession
         ? appendRuntimeEnvironmentUpdate(activeContextManager, runtimeEnvironment)
         : null;
+    let permissionsProjection = appendPermissionsUpdate(activeContextManager, permissionContext);
     if (unifiedMode) {
         // New snapshots are appended, never spliced into the cached prefix.
         const memoryItem = buildMemoryDeveloperMessage(memoryContext);
@@ -7054,6 +7067,13 @@ function buildLlmAgentDirectToolPrompt({
     let semanticCompaction = null;
     if (!deferSemanticCompaction && ['hard', 'stop'].includes(contextPackage.budgetReport.level)) {
         semanticCompaction = activeContextManager.semanticCompact(contextPackageOptions);
+        // Local fallback compaction may replace the permission message along with history.
+        // Native/portable provider compaction goes through this builder again as well.
+        const restoredPermissions = appendPermissionsUpdate(activeContextManager, permissionContext);
+        if (restoredPermissions.appended) {
+            permissionsProjection = restoredPermissions;
+            semanticCompaction.packageAfter = activeContextManager.forPromptPackage(contextPackageOptions);
+        }
         contextPackage = semanticCompaction.packageAfter;
     }
     const ephemeralDeveloperItem = !persistentTaskAgentSession && !unifiedMode
@@ -7081,6 +7101,7 @@ function buildLlmAgentDirectToolPrompt({
         taskSessionStateProjection: null,
         developerContextProjection: null,
         runtimeEnvironmentProjection,
+        permissionsProjection,
         messages: responseItemsToChatMessages({
             instructions: requestPayload.instructions,
             input: requestPayload.input,
@@ -7355,6 +7376,7 @@ async function callLlmAgentDirectToolDecision(settings, payload, {
         return {
             ok: false,
             status: failureDecision.status,
+            providerFailure: true,
             httpStatus: failureDecision.httpStatus,
             error: failureDecision.error
         };
@@ -9266,6 +9288,7 @@ class AILISAgentRunner {
                 request,
                 requestContext: {
                     ...requestContext,
+                    approved,
                     agentRole: agentRuntimeRole,
                     taskCompactPrompt,
                     taskAgentActiveGoal: activeGoal,
@@ -9301,6 +9324,14 @@ class AILISAgentRunner {
                 modelImageAttachments,
                 externalToolExposure,
                 runtimeEnvironment: runtimeEnvironmentNeedsRecording ? runtimeEnvironment : null,
+                permissionContext: {
+                    ...buildToolContext(
+                        approved ? { ...requestContext, approved: true } : requestContext,
+                        this.workspaceRoot,
+                        sessionId
+                    ),
+                    approved
+                },
                 promptProfile,
                 tools: directToolSpecs,
                 contextMode: agentContextMode,
@@ -9928,7 +9959,10 @@ class AILISAgentRunner {
                     requestContext
                 );
                 if (invalidNoProgressReason) {
-                    const displayText = `连续工具调用参数无效，已停止本轮以避免继续空转：${decision.error || invalidNoProgressReason}`;
+                    const providerFailed = invalidNoProgressReason === 'provider_request_failed';
+                    const displayText = providerFailed
+                        ? `模型接口调用失败，已停止本轮，未继续自动重试：${decision.error || decision.status}`
+                        : `连续工具调用参数无效，已停止本轮以避免继续空转：${decision.error || invalidNoProgressReason}`;
                     const taskRunHandoff = buildTaskRunHandoffPackage({
                         status: 'stalled',
                         reason: invalidNoProgressReason,
@@ -9962,7 +9996,7 @@ class AILISAgentRunner {
                         status: 'stalled',
                         mode: 'task',
                         planner: 'llm-agentic-executor',
-                        intent: 'invalid_tool_call_stalled',
+                        intent: providerFailed ? 'provider_request_failed' : 'invalid_tool_call_stalled',
                         executionRequired: false,
                         durationMs: Date.now() - startedAt,
                         message: currentTurnRequest,

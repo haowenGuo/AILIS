@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.api.account import require_model_api_member, require_tts_api_member
 from backend.api.schemas import (
     ChatRequest,
     ChatTextResponse,
@@ -38,7 +39,9 @@ def _estimate_duration_seconds(alignment) -> float | None:
 @router.post("/chat/tts", response_model=ChatTTSResponse)
 async def chat_tts_endpoint(
     request: ChatRequest,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    _model_user=Depends(require_model_api_member),
+    _tts_user=Depends(require_tts_api_member),
 ):
     """
     一次性完成：
@@ -87,7 +90,10 @@ async def chat_tts_endpoint(
 
 
 @router.post("/tts/synthesize", response_model=TTSSynthesizeResponse)
-async def tts_synthesize_endpoint(request: TTSSynthesizeRequest):
+async def tts_synthesize_endpoint(
+    request: TTSSynthesizeRequest,
+    _user=Depends(require_tts_api_member),
+):
     """
     仅负责把已有文本交给配置的服务端语音引擎合成音频。
 
@@ -123,7 +129,8 @@ async def tts_synthesize_endpoint(request: TTSSynthesizeRequest):
 @router.post("/chat/text", response_model=ChatTextResponse)
 async def chat_text_endpoint(
     request: ChatRequest,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    _user=Depends(require_model_api_member),
 ):
     """
     TTS 不可用时的降级接口：

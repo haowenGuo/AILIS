@@ -5569,17 +5569,24 @@ function registerIpc() {
     });
     ipcMain.handle('ailis:llm-chat', async (_event, payload = {}) => callDesktopLlm(payload));
     ipcMain.handle('ailis:tts-prepare-spoken-reply', async (_event, payload = {}) => {
+        const { appendSpeechDiagnostic } = require('./ailis-speech-diagnostics.cjs');
+        const trace = (stage, data = {}) => appendSpeechDiagnostic(getPersistedAILISStateDir(), { ...data, stage, traceId: payload.traceId });
         try {
             const { prepareSpokenReply } = require('./ailis-spoken-reply.cjs');
             const persona = ensureAILISGateway().memoryRuntime?.state?.blocks?.persona?.value || '';
             return await prepareSpokenReply({
                 text: payload.text,
                 persona,
+                trace,
                 callModel: (request) => callDesktopLlmProvider(getResolvedLlmSettings(), request)
             });
         } catch (error) {
+            trace('request_failed', { reason: 'rewrite_exception' });
             return { ok: false, error: error?.message || String(error) };
         }
+    });
+    ipcMain.on('ailis:tts-diagnostic', (_event, payload = {}) => {
+        require('./ailis-speech-diagnostics.cjs').appendSpeechDiagnostic(getPersistedAILISStateDir(), payload);
     });
     ipcMain.handle('ailis:tts-synthesize', async (_event, payload = {}) => callDesktopTts(payload));
     const stopWakeListeners = require('./wake-word-host.cjs').registerWakeWord({
@@ -5980,12 +5987,6 @@ app.whenReady().then(async () => {
         createControlWindow();
     }
     createTray();
-
-    setTimeout(() => {
-        desktopASRManager?.warmup?.().catch((error) => {
-            console.warn('[ASR] 后台预热失败：', error.message || error);
-        });
-    }, 4000);
 
     const initialSpeechMode = normalizeSpeechMode(desktopState?.preferences?.speechMode);
     warmupDesktopSpeechMode(initialSpeechMode, {

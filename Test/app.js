@@ -4,7 +4,7 @@ import {
     mergeSpeechTranscript
 } from '../src/browser-speech-recognition.js';
 
-const CLOUD_BACKEND_BASE_URL = 'https://101.133.239.56';
+const CLOUD_BACKEND_BASE_URL = 'https://150.109.13.189';
 const DEFAULT_BACKEND_BASE_URL = window.location.hostname.toLowerCase() === 'haowenguo.github.io'
     ? CLOUD_BACKEND_BASE_URL
     : ['http:', 'https:'].includes(window.location.protocol)

@@ -21,7 +21,27 @@ class Settings(BaseSettings):
     # 数据库配置 (默认SQLite，生产环境建议换 PostgreSQL)
     DATA_DIR: str = str(DATA_DIR)
     DATABASE_URL: str = DEFAULT_DATABASE_URL
+    DATABASE_AUTO_CREATE: bool = True
+    DATABASE_POOL_SIZE: int = 10
+    DATABASE_MAX_OVERFLOW: int = 20
+    DATABASE_POOL_TIMEOUT_SECONDS: int = 30
+    DATABASE_POOL_RECYCLE_SECONDS: int = 1800
     CHROMA_PERSIST_DIR: str = DEFAULT_CHROMA_PERSIST_DIR
+
+    # Distributed state. The memory default preserves the existing local mode.
+    REDIS_URL: str = ""
+    AILIS_RELAY_STATE_BACKEND: str = "memory"
+
+    # User files and generated artifacts. Local storage remains the default.
+    OBJECT_STORAGE_PROVIDER: str = "local"
+    # Empty means DATA_DIR/objects.  Production mounts DATA_DIR writable but
+    # keeps the source tree read-only, so source-relative writes are unsafe.
+    OBJECT_STORAGE_LOCAL_ROOT: str = ""
+    OBJECT_STORAGE_BUCKET: str = ""
+    OBJECT_STORAGE_ENDPOINT_URL: str = ""
+    OBJECT_STORAGE_REGION: str = ""
+    OBJECT_STORAGE_ACCESS_KEY: str = ""
+    OBJECT_STORAGE_SECRET_KEY: str = ""
 
     # ================= 教学子系统配置 =================
     EDU_APP_NAME: str = "仿真教学平台"
@@ -64,6 +84,79 @@ class Settings(BaseSettings):
     AILIS_LLM_RELAY_GLOBAL_REQUESTS_PER_MINUTE: int = 300
     AILIS_LLM_RELAY_GLOBAL_MAX_CONCURRENT: int = 12
     AILIS_LLM_RELAY_TRUST_PROXY_HEADERS: bool = False
+    AILIS_HOSTED_HTTP_MAX_CONNECTIONS: int = 100
+    AILIS_HOSTED_HTTP_MAX_KEEPALIVE_CONNECTIONS: int = 20
+    AILIS_HOSTED_HTTP_KEEPALIVE_EXPIRY_SECONDS: float = 30.0
+
+    # ================= 官网账号与会员 =================
+    APP_SESSION_COOKIE_NAME: str = "ailis_session"
+    APP_CSRF_COOKIE_NAME: str = "ailis_csrf"
+    APP_SESSION_COOKIE_TTL_DAYS: int = 30
+    APP_SESSION_TTL_DAYS: int = 30
+    APP_SESSION_COOKIE_SECURE: bool = True
+    APP_SESSION_COOKIE_SAMESITE: str = "lax"
+    APP_SESSION_COOKIE_DOMAIN: str = ""
+    APP_PASSWORD_PEPPER: str = ""
+    APP_LOGIN_MAX_FAILURES: int = 8
+    APP_LOGIN_WINDOW_MINUTES: int = 15
+    APP_LOGIN_LOCK_MINUTES: int = 15
+    APP_PASSWORD_RESET_TTL_MINUTES: int = 30
+    APP_EMAIL_VERIFICATION_TTL_HOURS: int = 24
+    APP_EMAIL_PUBLIC_BASE_URL: str = ""
+    APP_SMTP_HOST: str = ""
+    APP_SMTP_PORT: int = 465
+    APP_SMTP_USERNAME: str = ""
+    APP_SMTP_PASSWORD: str = ""
+    APP_SMTP_USE_SSL: bool = True
+    APP_SMTP_USE_TLS: bool = False
+    APP_EMAIL_FROM: str = ""
+    APP_REQUIRE_MEMBERSHIP_FOR_AI_APIS: bool = False
+    APP_REQUIRE_TOKEN_BALANCE_FOR_AI_APIS: bool = False
+    APP_ONE_TIME_MEMBERSHIP_DAYS: int = 30
+    APP_MONTHLY_MODEL_CALL_LIMIT: int = 0
+    APP_MONTHLY_TTS_CALL_LIMIT: int = 0
+    APP_MODEL_API_TOKEN_COST: int = 1
+    APP_TTS_API_TOKEN_COST: int = 1
+    APP_ADMIN_EMAILS: str = ""
+
+    # ================= 国内会员订阅骨架 =================
+    # 会员计划由服务端配置，前端只能选择 plan_id，不能自行提交金额。
+    APP_MEMBERSHIP_PLANS_JSON: str = "[]"
+    APP_TOKEN_PACKAGES_JSON: str = "[]"
+    APP_PAYMENT_CURRENCY: str = "CNY"
+    APP_PAYMENT_ORDER_TTL_MINUTES: int = 30
+    APP_PUBLIC_BASE_URL: str = ""
+    APP_WECHAT_PAY_ENABLED: bool = False
+    APP_ALIPAY_ENABLED: bool = False
+    APP_WECHAT_PAY_NOTIFY_PATH: str = "/api/payments/wechat/notify"
+    APP_ALIPAY_NOTIFY_PATH: str = "/api/payments/alipay/notify"
+    APP_WECHAT_PAY_APP_ID: str = ""
+    APP_WECHAT_PAY_MCH_ID: str = ""
+    APP_WECHAT_PAY_SERIAL_NO: str = ""
+    APP_WECHAT_PAY_PLATFORM_SERIAL_NO: str = ""
+    APP_WECHAT_PAY_PRIVATE_KEY_PATH: str = ""
+    APP_WECHAT_PAY_PRIVATE_KEY_PEM: str = ""
+    APP_WECHAT_PAY_PLATFORM_PUBLIC_KEY_PATH: str = ""
+    APP_WECHAT_PAY_PLATFORM_PUBLIC_KEY_PEM: str = ""
+    APP_WECHAT_PAY_API_V3_KEY: str = ""
+    APP_WECHAT_PAY_API_BASE: str = "https://api.mch.weixin.qq.com"
+    APP_ALIPAY_APP_ID: str = ""
+    APP_ALIPAY_PRIVATE_KEY_PATH: str = ""
+    APP_ALIPAY_PRIVATE_KEY_PEM: str = ""
+    APP_ALIPAY_PUBLIC_KEY_PATH: str = ""
+    APP_ALIPAY_PUBLIC_KEY_PEM: str = ""
+    APP_ALIPAY_GATEWAY: str = "https://openapi.alipay.com/gateway.do"
+
+    # ================= Stripe 支付 =================
+    STRIPE_SECRET_KEY: str = ""
+    STRIPE_PUBLISHABLE_KEY: str = ""
+    STRIPE_WEBHOOK_SECRET: str = ""
+    STRIPE_PAYMENT_PRICE_ID: str = ""
+    STRIPE_SUBSCRIPTION_PRICE_ID: str = ""
+    STRIPE_RETURN_URL: str = ""
+    STRIPE_CUSTOMER_PORTAL_RETURN_URL: str = ""
+    STRIPE_API_VERSION: str = "2025-06-30.basil"
+    STRIPE_AUTOMATIC_TAX_ENABLED: bool = False
 
     # ================= AI Safety 配置 =================
     # 默认复用主对话模型；如需单独切换内容安全审核模型，可单独覆盖下面三个字段
@@ -147,6 +240,14 @@ class Settings(BaseSettings):
             for origin in raw_value.split(",")
             if origin.strip()
         ]
+
+    def get_app_admin_emails(self) -> set[str]:
+        """解析逗号分隔的后台账号白名单，不暴露任何密码或 token。"""
+        return {
+            item.strip().lower()
+            for item in (self.APP_ADMIN_EMAILS or "").split(",")
+            if item.strip()
+        }
 
 
 @lru_cache()

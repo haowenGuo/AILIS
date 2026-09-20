@@ -21,7 +21,7 @@ LANGUAGE = os.environ.get("AILIS_ASR_LANGUAGE", "zh").strip()
 SENSEVOICE_LANGUAGE = os.environ.get("AILIS_SENSEVOICE_LANGUAGE", "auto").strip() or "auto"
 TASK = os.environ.get("AILIS_ASR_TASK", "transcribe").strip() or "transcribe"
 CHUNK_LENGTH_S = int(os.environ.get("AILIS_ASR_CHUNK_LENGTH_S", "30"))
-BATCH_SIZE = int(os.environ.get("AILIS_ASR_BATCH_SIZE", "8"))
+BATCH_SIZE = int(os.environ.get("AILIS_ASR_BATCH_SIZE", "1"))
 SILENCE_RMS_THRESHOLD = float(os.environ.get("AILIS_ASR_SILENCE_RMS_THRESHOLD", "0.0010"))
 SILENCE_PEAK_THRESHOLD = float(os.environ.get("AILIS_ASR_SILENCE_PEAK_THRESHOLD", "0.0060"))
 

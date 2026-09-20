@@ -1,6 +1,7 @@
 import { setMarkdownContent } from './markdown-renderer.js';
 import { toAssistantPayload } from './ailis-chat-service.js';
 import { submitTaskInput } from './task-interaction-client.js';
+import { TaskResourcePresenter, resourceSize } from './task-resource-presenter.js';
 
 export const taskSessionId = () => {
     let id = localStorage.getItem('session_id');
@@ -40,6 +41,9 @@ export class TaskInteractionView {
         dock.prepend(this.strip);
         this.viewer = node('dialog', 'task-viewer'); this.viewer.setAttribute('aria-label', '任务成果预览');
         document.body.append(this.viewer);
+        this.resources = new TaskResourcePresenter({ api, session: () => this.sessionId,
+            showViewer: (title, content) => this.showViewer(title, content), notice });
+        this.viewer.addEventListener('close', () => { if (!this.viewer.open) this.viewer.replaceChildren(); });
         this.unsubscribe = api.onEvent(event => {
             if (event.sessionId !== this.sessionId && event.type !== 'session.select') return;
             if (event.type === 'storage-error') notice(event.error);
@@ -59,6 +63,7 @@ export class TaskInteractionView {
             const data = await this.api.snapshot({ sessionId: current.sessionId });
             if (generation !== this.refreshGeneration) return;
             if (current.sessionId !== this.sessionId) {
+                this.viewer.close(); this.resources.clear();
                 this.sessionId = current.sessionId; localStorage.setItem('session_id', this.sessionId);
                 this.rows.clear(); this.list.replaceChildren(); this.snapshot = { seq: -1, runs: [] };
             }
@@ -155,7 +160,7 @@ export class TaskInteractionView {
         const draft = run.items.findLast(item => item.kind === 'draft' && item.status !== 'discarded' && item.text);
         if (final || draft) {
             const message = node('div', 'message-item message-ai task-answer'); message.dataset.messageRole = 'assistant';
-            setMarkdownContent(message, toAssistantPayload((final || draft).text).display_text);
+            setMarkdownContent(message, toAssistantPayload((final || draft).text).display_text, this.resources.markdownOptions(run));
             if (!final && ['stopped', 'failed', 'unknown'].includes(run.status)) message.append(node('small', 'task-receipt', '未完成的输出'));
             fragment.append(message);
         }
@@ -168,6 +173,15 @@ export class TaskInteractionView {
                 count.append(node('span', 'task-added', `+${item.added}`), node('span', 'task-removed', `−${item.removed}`)); title.append(count);
             }
             card.append(title, button('查看改动', () => this.openFile(run, item)));
+            if (item.artifactRef) card.append(...this.resources.actions(run, item));
+            fragment.append(card);
+        }
+        for (const item of run.items.filter(item => item.kind === 'artifact')) {
+            const card = node('div', 'task-file-card task-artifact-card'); card.dataset.itemId = item.id;
+            const title = node('div', 'task-file-title'); title.append(node('strong', '', item.name));
+            title.append(node('small', '', item.artifactRef ? `${item.artifactRef.mime} · ${resourceSize(item.artifactRef.bytes)}` : item.artifactError));
+            card.append(title);
+            if (item.artifactRef) card.append(...this.resources.actions(run, item));
             fragment.append(card);
         }
         for (const item of run.items.filter(item => item.kind === 'image')) this.addImage(fragment, run, item.imageRef, item.name || '工具返回的图片');
@@ -204,7 +218,12 @@ export class TaskInteractionView {
     }
     showViewer(title, content) {
         const close = button('关闭', () => this.viewer.close());
-        const header = node('header'); header.append(node('strong', '', title), close);
+        this.viewer.classList.remove('task-viewer-expanded');
+        const expand = button('放大', () => {
+            const expanded = this.viewer.classList.toggle('task-viewer-expanded');
+            expand.textContent = expanded ? '还原' : '放大';
+        });
+        const header = node('header'); header.append(node('strong', '', title), expand, close);
         this.viewer.replaceChildren(header, content);
         if (!this.viewer.open) this.viewer.showModal(); close.focus();
     }
@@ -278,5 +297,5 @@ export class TaskInteractionView {
         const result = await this.api.stop({ sessionId: this.sessionId, expectedRunId: this.snapshot.activeRunId });
         if (!result.ok) throw new Error(result.error); await this.refresh();
     }
-    dispose() { this.unsubscribe?.(); clearTimeout(this.refreshTimer); document.removeEventListener('selectionchange', this.selectionChanged); this.viewer.remove(); }
+    dispose() { this.unsubscribe?.(); clearTimeout(this.refreshTimer); this.resources.dispose(); document.removeEventListener('selectionchange', this.selectionChanged); this.viewer.remove(); }
 }

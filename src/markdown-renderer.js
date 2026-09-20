@@ -1,257 +1,140 @@
 import { appendTextWithAilisEmotes } from './ailis-emote-stickers.js';
-
-const SAFE_LINK_PROTOCOLS = new Set(['http:', 'https:', 'mailto:']);
+import { markdownParser, classifyMarkdownHref } from '../shared/markdown.mjs';
+import { createStaticHtmlPreview } from './html-preview.js';
 
 export function normalizeMarkdownSource(value, fallback = '') {
-    if (typeof value !== 'string') {
-        return fallback;
-    }
-    const normalized = value.replace(/\r\n?/g, '\n').trim();
-    return normalized || fallback;
+    return typeof value === 'string' ? value.replace(/\r\n?/g, '\n').trim() || fallback : fallback;
 }
 
 export function markdownToPlainText(value) {
-    const source = normalizeMarkdownSource(value);
-    if (!source) {
-        return '';
-    }
-
-    return source
-        .replace(/```[a-zA-Z0-9_+.-]*\n([\s\S]*?)```/g, '$1')
-        .replace(/`([^`]+)`/g, '$1')
-        .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
-        .replace(/[*_]{1,3}([^*_]+)[*_]{1,3}/g, '$1')
-        .replace(/^\s{0,3}#{1,6}\s+/gm, '')
-        .replace(/^\s{0,3}>\s?/gm, '')
-        .replace(/^\s{0,3}(?:[-*+]|\d+[.)])\s+/gm, '')
-        .replace(/\n{3,}/g, '\n\n')
-        .trim();
+    const text = tokens => tokens.map(token => token.children ? text(token.children)
+        : ['text', 'code_inline', 'fence', 'code_block', 'image'].includes(token.type) ? token.content
+            : token.block || ['softbreak', 'hardbreak'].includes(token.type) ? '\n' : '').join('');
+    return text(markdownParser.parse(normalizeMarkdownSource(value), {})).replace(/\n{3,}/g, '\n\n').trim();
 }
 
 export function setPlainTextContent(target, value) {
-    if (!target) {
-        return;
-    }
-    const text = typeof value === 'string' ? value : '';
-    target.__ailisMessageContent = text;
-    target.dataset.contentFormat = 'text';
-    target.classList.remove('message-markdown');
-    target.textContent = text;
+    if (!target) return;
+    target.__ailisMessageContent = typeof value === 'string' ? value : '';
+    target.dataset.contentFormat = 'text'; target.classList.remove('message-markdown');
+    target.textContent = target.__ailisMessageContent;
 }
 
-export function setMarkdownContent(target, value) {
-    if (!target) {
-        return;
-    }
-
+export function setMarkdownContent(target, value, options = {}) {
+    if (!target) return;
     const markdown = normalizeMarkdownSource(value);
-    const enableAilisEmotes = target.classList?.contains('message-ai') ||
-        target.dataset?.enableAilisEmotes === 'true';
     target.__ailisMessageContent = markdown;
-    target.dataset.contentFormat = 'markdown';
-    target.classList.add('message-markdown');
-    target.replaceChildren(renderMarkdown(markdown, { enableAilisEmotes }));
-}
-
-function renderMarkdown(markdown, options = {}) {
+    target.dataset.contentFormat = 'markdown'; target.classList.add('message-markdown');
     const fragment = document.createDocumentFragment();
-    if (!markdown) {
-        return fragment;
-    }
-
-    const lines = markdown.split('\n');
-    let index = 0;
-
-    while (index < lines.length) {
-        const line = lines[index];
-
-        if (isBlank(line)) {
-            index += 1;
-            continue;
-        }
-
-        const fence = line.match(/^\s*```([a-zA-Z0-9_+.-]*)?\s*$/);
-        if (fence) {
-            const language = fence[1] || '';
-            const codeLines = [];
-            index += 1;
-            while (index < lines.length && !/^\s*```\s*$/.test(lines[index])) {
-                codeLines.push(lines[index]);
-                index += 1;
-            }
-            if (index < lines.length) {
-                index += 1;
-            }
-            fragment.appendChild(createCodeBlock(codeLines.join('\n'), language));
-            continue;
-        }
-
-        const heading = line.match(/^\s{0,3}(#{1,4})\s+(.+?)\s*#*\s*$/);
-        if (heading) {
-            const level = Math.min(heading[1].length, 4);
-            const element = document.createElement(`h${level}`);
-            appendInlineMarkdown(element, heading[2], options);
-            fragment.appendChild(element);
-            index += 1;
-            continue;
-        }
-
-        if (/^\s{0,3}---+\s*$/.test(line)) {
-            fragment.appendChild(document.createElement('hr'));
-            index += 1;
-            continue;
-        }
-
-        if (/^\s{0,3}[-*+]\s+/.test(line)) {
-            const list = document.createElement('ul');
-            while (index < lines.length) {
-                const match = lines[index].match(/^\s{0,3}[-*+]\s+(.+)$/);
-                if (!match) {
-                    break;
-                }
-                const item = document.createElement('li');
-                appendInlineMarkdown(item, match[1], options);
-                list.appendChild(item);
-                index += 1;
-            }
-            fragment.appendChild(list);
-            continue;
-        }
-
-        if (/^\s{0,3}\d+[.)]\s+/.test(line)) {
-            const list = document.createElement('ol');
-            while (index < lines.length) {
-                const match = lines[index].match(/^\s{0,3}\d+[.)]\s+(.+)$/);
-                if (!match) {
-                    break;
-                }
-                const item = document.createElement('li');
-                appendInlineMarkdown(item, match[1], options);
-                list.appendChild(item);
-                index += 1;
-            }
-            fragment.appendChild(list);
-            continue;
-        }
-
-        if (/^\s{0,3}>\s?/.test(line)) {
-            const quote = document.createElement('blockquote');
-            const quoteLines = [];
-            while (index < lines.length) {
-                const match = lines[index].match(/^\s{0,3}>\s?(.*)$/);
-                if (!match) {
-                    break;
-                }
-                quoteLines.push(match[1]);
-                index += 1;
-            }
-            appendInlineMarkdown(quote, quoteLines.join('\n'), options);
-            fragment.appendChild(quote);
-            continue;
-        }
-
-        const paragraphLines = [line];
-        index += 1;
-        while (index < lines.length && !isBlank(lines[index]) && !isBlockStart(lines[index])) {
-            paragraphLines.push(lines[index]);
-            index += 1;
-        }
-        const paragraph = document.createElement('p');
-        appendInlineMarkdown(paragraph, paragraphLines.join('\n'), options);
-        fragment.appendChild(paragraph);
-    }
-
-    return fragment;
-}
-
-function createCodeBlock(codeText, language) {
-    const pre = document.createElement('pre');
-    const code = document.createElement('code');
-    if (language) {
-        code.dataset.language = language;
-    }
-    code.textContent = codeText;
-    pre.appendChild(code);
-    return pre;
-}
-
-function appendText(parent, text, options = {}) {
-    appendTextWithAilisEmotes(parent, text, {
-        enabled: Boolean(options.enableAilisEmotes)
+    appendTokens(fragment, markdownParser.parse(markdown, {}), {
+        enableAilisEmotes: target.classList.contains('message-ai') || target.dataset.enableAilisEmotes === 'true', ...options
     });
+    target.replaceChildren(fragment);
 }
 
-function appendInlineMarkdown(parent, source, options = {}) {
-    const tokenPattern = /(`[^`\n]+`|\[([^\]\n]+)\]\(([^)\s]+)\)|\*\*([^*\n]+)\*\*|\*([^*\n]+)\*|\n)/g;
-    let cursor = 0;
-    let match = tokenPattern.exec(source);
+const element = (tag, className, text) => {
+    const result = document.createElement(tag);
+    if (className) result.className = className;
+    if (text !== undefined) result.textContent = text;
+    return result;
+};
+const action = (label, callback) => {
+    const button = element('button', 'markdown-action', label); button.type = 'button';
+    button.addEventListener('click', callback); return button;
+};
+const safeTags = new Set(['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'ul', 'ol', 'li', 'blockquote', 'strong', 'em', 's', 'table', 'thead', 'tbody', 'tr', 'th', 'td']);
 
-    while (match) {
-        if (match.index > cursor) {
-            appendText(parent, source.slice(cursor, match.index), options);
-        }
-
-        const token = match[0];
-        if (token === '\n') {
-            parent.appendChild(document.createElement('br'));
-        } else if (token.startsWith('`')) {
-            const code = document.createElement('code');
-            code.textContent = token.slice(1, -1);
-            parent.appendChild(code);
-        } else if (match[2] && match[3]) {
-            const href = getSafeHref(match[3]);
-            if (href) {
-                const anchor = document.createElement('a');
-                anchor.href = href;
-                anchor.target = '_blank';
-                anchor.rel = 'noreferrer';
-                anchor.textContent = match[2];
-                parent.appendChild(anchor);
-            } else {
-                appendText(parent, match[2], options);
+function appendTokens(root, tokens, options) {
+    const stack = [root];
+    for (const token of tokens) {
+        const parent = stack.at(-1);
+        if (token.hidden) continue;
+        if (token.type === 'inline') { appendTokens(parent, token.children || [], options); continue; }
+        if (token.type === 'text') { appendTextWithAilisEmotes(parent, token.content, { enabled: Boolean(options.enableAilisEmotes) }); continue; }
+        if (token.type === 'fence' || token.type === 'code_block') {
+            const block = element('div', 'markdown-code-block'); const header = element('div', 'markdown-code-header');
+            const language = token.info.trim().split(/\s+/)[0];
+            header.append(element('span', '', language || '代码'), action('复制代码', async event => {
+                try { await navigator.clipboard.writeText(token.content); event.target.textContent = '已复制'; }
+                catch { event.target.textContent = '复制失败，请手动选择'; }
+            }));
+            const pre = element('pre'); const code = element('code', '', token.content);
+            if (language) code.dataset.language = language;
+            pre.append(code); block.append(header, pre);
+            if (['html', 'htm'].includes(language.toLowerCase()) && token.content.length <= 1024 * 1024) {
+                let preview;
+                const toggle = action('预览 HTML', () => {
+                    if (preview) { preview.remove(); preview = null; pre.hidden = false; toggle.textContent = '预览 HTML'; return; }
+                    preview = element('div', 'markdown-html-panel');
+                    preview.append(element('p', 'markdown-preview-note', '安全静态预览：不执行脚本，不加载外部资源。'), createStaticHtmlPreview(token.content));
+                    block.append(preview); pre.hidden = true; toggle.textContent = '查看源码';
+                });
+                header.append(toggle, action('下载 HTML', () => {
+                    const url = URL.createObjectURL(new Blob([token.content], { type: 'application/octet-stream' }));
+                    const link = element('a'); link.href = url; link.download = 'ailis-preview.html';
+                    document.body.append(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+                }));
             }
-        } else if (match[4]) {
-            const strong = document.createElement('strong');
-            appendText(strong, match[4], options);
-            parent.appendChild(strong);
-        } else if (match[5]) {
-            const emphasis = document.createElement('em');
-            appendText(emphasis, match[5], options);
-            parent.appendChild(emphasis);
+            parent.append(block); continue;
         }
-
-        cursor = match.index + token.length;
-        match = tokenPattern.exec(source);
-    }
-
-    if (cursor < source.length) {
-        appendText(parent, source.slice(cursor), options);
-    }
-}
-
-function getSafeHref(rawHref) {
-    try {
-        const url = new URL(rawHref, window.location.href);
-        if (!SAFE_LINK_PROTOCOLS.has(url.protocol)) {
-            return '';
+        if (token.type === 'code_inline') { parent.append(element('code', '', token.content)); continue; }
+        if (token.type === 'softbreak' || token.type === 'hardbreak') { parent.append(element('br')); continue; }
+        if (token.type === 'hr') { parent.append(element('hr')); continue; }
+        if (token.type === 'image') { parent.append(markdownImage(token, options)); continue; }
+        if (token.nesting === -1) { if (stack.length > 1) stack.pop(); continue; }
+        if (token.type === 'link_open') {
+            const href = token.attrGet('href'); const kind = classifyMarkdownHref(href); let link;
+            if (kind === 'remote' || kind === 'email') {
+                link = element('a'); link.href = href; link.target = '_blank'; link.rel = 'noopener noreferrer';
+                if (kind === 'remote' && options.previewWebsite) {
+                    const group = element('span', 'markdown-web-link');
+                    const preview = action('预览网页', () => options.previewWebsite(href));
+                    preview.setAttribute('aria-label', `预览网页：${new URL(href).hostname}`);
+                    group.append(link, preview); parent.append(group); stack.push(link); continue;
+                }
+            } else if (kind === 'local' && options.openResource) {
+                link = action('', () => options.openResource(href)); link.classList.add('markdown-resource-link');
+            } else {
+                link = element('span', 'markdown-unavailable'); link.title = '此入口没有可读取的本地资源，未打开任意文件路径';
+            }
+            if (token.attrGet('title')) link.title = token.attrGet('title');
+            parent.append(link); stack.push(link); continue;
         }
-        return url.href;
-    } catch {
-        return '';
+        if (token.nesting === 1 && safeTags.has(token.tag)) {
+            const child = element(token.tag);
+            if (token.tag === 'ol' && token.attrGet('start')) child.start = Number(token.attrGet('start'));
+            if (token.tag === 'td' || token.tag === 'th') {
+                const alignment = /^text-align:(left|center|right)$/.exec(token.attrGet('style') || '');
+                if (alignment) child.style.textAlign = alignment[1];
+            }
+            if (token.tag === 'table') {
+                const scroll = element('div', 'markdown-table-scroll'); scroll.tabIndex = 0; scroll.setAttribute('aria-label', '表格（可横向滚动）');
+                scroll.append(child); parent.append(scroll);
+            } else parent.append(child);
+            stack.push(child);
+        }
     }
 }
 
-function isBlank(line) {
-    return !line || !line.trim();
-}
-
-function isBlockStart(line) {
-    return (
-        /^\s*```/.test(line) ||
-        /^\s{0,3}#{1,4}\s+/.test(line) ||
-        /^\s{0,3}---+\s*$/.test(line) ||
-        /^\s{0,3}[-*+]\s+/.test(line) ||
-        /^\s{0,3}\d+[.)]\s+/.test(line) ||
-        /^\s{0,3}>\s?/.test(line)
-    );
+function markdownImage(token, options) {
+    const href = token.attrGet('src'); const kind = classifyMarkdownHref(href);
+    const label = token.content || '图片'; const container = element('span', 'markdown-image');
+    const show = src => {
+        const image = element('img'); image.alt = label; image.loading = 'lazy'; image.decoding = 'async'; image.referrerPolicy = 'no-referrer';
+        image.addEventListener('error', () => { container.textContent = `${label}（图片无法加载）`; }, { once: true }); image.src = src;
+        const enlarge = action('', () => options.previewImage ? options.previewImage(src, label) : image.classList.toggle('markdown-image-expanded'));
+        enlarge.setAttribute('aria-label', `放大图片：${label}`); enlarge.classList.add('markdown-image-open');
+        enlarge.append(image); container.replaceChildren(enlarge);
+    };
+    if (kind === 'remote') {
+        // Explicit fetch: a restored conversation must not become a tracking beacon.
+        container.append(action(`加载外部图片：${label}`, () => show(href)));
+    } else if (kind === 'local' && options.readImage) {
+        container.textContent = `正在读取图片：${label}`;
+        Promise.resolve().then(() => options.readImage(href)).then(src => {
+            if (!/^data:image\/(?:png|jpeg|webp|gif);base64,[A-Za-z0-9+/=]+$/.test(src || '')) throw new Error('没有可用的图片快照');
+            show(src);
+        }).catch(error => { container.textContent = `${label}（${error.message}）`; });
+    } else container.textContent = `${label}（图片资源不可用）`;
+    return container;
 }

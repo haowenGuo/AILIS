@@ -1,6 +1,6 @@
 {
   "name": "ailis",
-  "version": "1.4.6",
+  "version": "1.4.7",
   "description": "AILIS desktop embodied-agent companion with VRM avatar, realtime voice, memory, and native AILIS agent runtime.",
   "type": "module",
   "main": "electron/main.cjs",
@@ -204,6 +204,7 @@
     "jsesc": "3.1.0",
     "leac": "0.6.0",
     "mailparser": "^3.9.8",
+    "markdown-it": "15.0.2",
     "minimist": "1.2.8",
     "mkdirp-classic": "0.5.3",
     "ms": "2.1.3",

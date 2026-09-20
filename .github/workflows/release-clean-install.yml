@@ -116,6 +116,11 @@ jobs:
           tests/ailis-task-process-stop.test.mjs
           tests/ailis-patch-observation.test.mjs
           tests/codex-native-instructions.test.mjs
+          tests/wake-word.test.mjs
+          tests/desktop-hosted-tts.test.mjs
+          tests/ailis-permissions-instructions.test.mjs
+          tests/ailis-curation-reader.test.mjs
+          tests/ailis-task-artifacts.test.mjs
       - name: Fresh-profile system-only-PATH source execution
         id: cold
         run: node scripts/test-clean-runtime.mjs --output release/evidence/${{ matrix.target }}/source-cold-runtime.json
@@ -124,6 +129,8 @@ jobs:
         run: node scripts/probe-cold-shells.mjs release/evidence/win32-x64/shell-startup-diagnostic.json
       - name: Stage pinned private Python, native CPU dependencies and complete Whisper Small
         run: node scripts/prepare-bundled-asr.mjs
+      - name: Stage automatic ASR wake-word model
+        run: node scripts/prepare-wake-model.mjs
       - name: Build native versioned release artifacts (no publishing)
         run: node scripts/build-native-release.mjs
       - name: Verify actual packaged code and relocated offline recognition
@@ -134,14 +141,14 @@ jobs:
         run: >-
           ./scripts/validate-clean-install.ps1
           -ArtifactRoot "${{ github.workspace }}\release"
-          -ExpectedVersion "1.4.6"
+          -ExpectedVersion "1.4.7"
           -ReportRoot "${{ github.workspace }}\release\evidence\win32-x64\nsis"
           -VerifyBundledRuntime
       - name: Upload native packages and evidence even on failure
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ailis-v1.4.6-${{ matrix.target }}-${{ github.sha }}
+          name: ailis-v1.4.7-${{ matrix.target }}-${{ github.sha }}
           compression-level: 0
           retention-days: 7
           path: |

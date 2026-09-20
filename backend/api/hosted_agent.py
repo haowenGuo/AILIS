@@ -1,9 +1,10 @@
 from datetime import datetime, timezone
 
 import httpx
-from fastapi import APIRouter, Header, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
+from backend.api.account import require_ai_api_member, require_model_api_member
 from backend.core.config import get_settings
 from backend.services.hosted_agent_service import (
     HostedAgentRuntimeClient,
@@ -61,6 +62,7 @@ async def _read_limited_body(request: Request, max_bytes: int) -> bytes:
 @router.get("/agent/session")
 async def hosted_agent_session(
     x_ailis_web_session: str | None = Header(default=None),
+    _user=Depends(require_ai_api_member),
 ):
     _require_runtime_enabled()
     session = session_service.verify((x_ailis_web_session or "").strip())
@@ -81,6 +83,7 @@ async def hosted_agent_session(
 @router.get("/agent/status")
 async def hosted_agent_status(
     x_ailis_web_session: str | None = Header(default=None),
+    _user=Depends(require_ai_api_member),
 ):
     session = _resolve_session(x_ailis_web_session)
     try:
@@ -94,6 +97,7 @@ async def hosted_agent_events(
     cursor: int = 0,
     limit: int = 100,
     x_ailis_web_session: str | None = Header(default=None),
+    _user=Depends(require_ai_api_member),
 ):
     session = _resolve_session(x_ailis_web_session)
     try:
@@ -113,6 +117,7 @@ async def hosted_agent_upload_attachment(
     session_id: str = Query(default="main", alias="sessionId", max_length=160),
     mime_type: str = Query(default="application/octet-stream", alias="mimeType", max_length=160),
     x_ailis_web_session: str | None = Header(default=None),
+    _user=Depends(require_ai_api_member),
 ):
     session = _resolve_session(x_ailis_web_session)
     try:
@@ -150,6 +155,7 @@ async def hosted_agent_run(
     payload: dict,
     request: Request,
     x_ailis_web_session: str | None = Header(default=None),
+    _user=Depends(require_model_api_member),
 ):
     session = _resolve_session(x_ailis_web_session)
     forwarded = dict(payload or {})
@@ -177,6 +183,7 @@ async def hosted_agent_run(
 async def hosted_agent_interrupt(
     payload: dict,
     x_ailis_web_session: str | None = Header(default=None),
+    _user=Depends(require_ai_api_member),
 ):
     session = _resolve_session(x_ailis_web_session)
     try:

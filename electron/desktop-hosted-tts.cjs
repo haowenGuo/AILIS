@@ -1,4 +1,4 @@
-const DEFAULT_HOSTED_TTS_BASE_URL = 'https://101.133.239.56';
+const DEFAULT_HOSTED_TTS_BASE_URL = 'https://150.109.13.189';
 
 function normalizeHostedTtsBaseUrl(value) {
     try {

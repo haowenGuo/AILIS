@@ -112,7 +112,18 @@ async def _get_session_ids_to_check(db: AsyncSession) -> List[str]:
 
 async def timer_task_runner():
     """定时器循环本体"""
-    llm_svc = LLMService()
+    # A clean account/payment install may intentionally omit an LLM key.  Do
+    # not create a background task that immediately fails and leaves an
+    # unhandled exception; the chat/agent endpoints still report their own
+    # configuration state when called.
+    if not (settings.LLM_API_KEY or "").strip():
+        print("ℹ️ 未配置 LLM_API_KEY，记忆压缩计时器跳过")
+        return
+    try:
+        llm_svc = LLMService()
+    except Exception as exc:
+        print(f"⚠️ 记忆压缩计时器未启动：模型客户端配置无效：{exc}")
+        return
     while True:
         try:
             # 每次循环获取新的 DB Session

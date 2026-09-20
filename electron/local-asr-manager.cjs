@@ -471,7 +471,7 @@ class DesktopASRManager {
                     AILIS_ASR_LANGUAGE: process.env.AILIS_ASR_LANGUAGE || 'zh',
                     AILIS_ASR_TASK: process.env.AILIS_ASR_TASK || 'transcribe',
                     AILIS_ASR_CHUNK_LENGTH_S: process.env.AILIS_ASR_CHUNK_LENGTH_S || '15',
-                    AILIS_ASR_BATCH_SIZE: process.env.AILIS_ASR_BATCH_SIZE || '4',
+                    AILIS_ASR_BATCH_SIZE: process.env.AILIS_ASR_BATCH_SIZE || '1',
                     AILIS_ASR_CACHE_DIR: cacheDir
                 }
             }

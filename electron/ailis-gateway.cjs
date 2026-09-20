@@ -1449,7 +1449,7 @@ class AILISGateway extends EventEmitter {
 
     async executeGatewayToolSearch(args = {}) {
         const query = normalizeString(args.query || args.q);
-        const limit = Math.max(1, Math.min(Number(args.limit || 12), 50));
+        const limit = Math.max(1, Math.min(Number(args.limit ?? 12), 50));
         const retrievalLimit = Math.max(limit, Math.min(50, Math.max(12, limit * 4)));
         const includeDirect = args.includeDirect === true;
         const local = this.gatewayToolRuntimeRegistry.search(query, retrievalLimit)
@@ -1719,7 +1719,7 @@ class AILISGateway extends EventEmitter {
                 preferenceEventCount: result?.run?.preferenceEventCount || 0,
                 affinityChanged: result?.run?.affinityChanged === true
             });
-            if (result?.status === 'rebuild_partial') {
+            if (['rebuild_partial', 'partial_completed'].includes(result?.status)) {
                 this.scheduleProfileCurationSoon('profile_rebuild_resume');
             }
             return result;
