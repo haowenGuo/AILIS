@@ -3,7 +3,7 @@
   <h1>AILIS</h1>
   <p><strong>An open-source desktop AI companion that can see, listen, remember, and get real work done.</strong></p>
   <p>
-    <img alt="Version" src="https://img.shields.io/badge/version-1.4.2-2563eb?style=flat-square">
+    <img alt="Version" src="https://img.shields.io/badge/version-1.4.7-2563eb?style=flat-square">
     <img alt="Desktop" src="https://img.shields.io/badge/desktop-Electron-0f172a?style=flat-square">
     <img alt="License" src="https://img.shields.io/badge/license-MIT-059669?style=flat-square">
   </p>
@@ -110,9 +110,9 @@ Humanlike checkpoints come from 30-day companion scenarios, not a 30-day real-us
 
 ## Quick Start
 
-### v1.4.5 update
+### v1.4.7 update
 
-AILIS Server is now the Agent Runner's fail-safe default, not only a control-panel or desktop IPC default. Every packaged release must complete a real managed-model Agent turn in a fully isolated user environment before publication. See the [release notes](docs/releases/v1.4.5.md) and [v1.4.5 downloads](https://github.com/haowenGuo/AILIS/releases/tag/v1.4.5).
+Windows, Linux and both Mac architectures now ship with bundled offline speech recognition and automatic wake-word support. This release improves task output previews, memory processing and spoken replies, and retains the managed-server configuration fixes. Windows installation checks include a real server conversation from a fresh profile. See the [release notes](docs/releases/v1.4.7.md) and [v1.4.7 downloads](https://github.com/haowenGuo/AILIS/releases/tag/v1.4.7).
 
 ### Use AILIS
 

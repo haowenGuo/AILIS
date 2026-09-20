@@ -3,12 +3,12 @@
   <h1>AILIS</h1>
   <p><strong>能看、能听、能记住，也能真正把事情做完的开源桌面 AI 伙伴。</strong></p>
   <p>
-    <img alt="Version" src="https://img.shields.io/badge/version-1.4.2-2563eb?style=flat-square">
+    <img alt="Version" src="https://img.shields.io/badge/version-1.4.7-2563eb?style=flat-square">
     <img alt="Desktop" src="https://img.shields.io/badge/desktop-Electron-0f172a?style=flat-square">
     <img alt="License" src="https://img.shields.io/badge/license-MIT-059669?style=flat-square">
   </p>
   <p>
-    <a href="https://101.133.239.56/Test/"><strong>在线体验</strong></a> ·
+    <a href="https://150.109.13.189/Test/"><strong>在线体验</strong></a> ·
     <a href="https://github.com/haowenGuo/AILIS/releases"><strong>下载桌面版</strong></a> ·
     <a href="docs/guide/desktop.md">快速开始</a> ·
     <a href="docs/README.md">文档</a>
@@ -110,13 +110,13 @@ Humanlike 检查点来自 30 天陪伴场景，不代表真实用户连续使用
 
 ## 快速开始
 
-### v1.4.5 更新
+### v1.4.7 更新
 
-AILIS 服务器现在是 Agent Runner 最底层的兜底默认值，而不再只依赖控制面板或桌面 IPC 注入配置。每个安装包发布前都必须在完全隔离的用户环境中完成一次真实的托管模型 Agent 对话。详见[版本说明](docs/releases/v1.4.5.md)与 [v1.4.5 下载](https://github.com/haowenGuo/AILIS/releases/tag/v1.4.5)。
+Windows、Linux 与两种 Mac 架构均提供自带离线语音识别的安装包，支持自动 ASR 唤醒词。本版改进任务文件预览、记忆整理与口语回复，并保留 AILIS 服务器配置修复；Windows 安装验收包含全新用户环境中的真实服务器对话。详见[版本说明](docs/releases/v1.4.7.md)与 [v1.4.7 下载](https://github.com/haowenGuo/AILIS/releases/tag/v1.4.7)。
 
 ### 直接使用
 
-从 [Releases](https://github.com/haowenGuo/AILIS/releases) 下载桌面版，或先打开 [Web 体验](https://101.133.239.56/Test/) 认识 AILIS。
+从 [Releases](https://github.com/haowenGuo/AILIS/releases) 下载桌面版，或先打开 [Web 体验](https://150.109.13.189/Test/) 认识 AILIS。
 
 ### 本地开发
 
