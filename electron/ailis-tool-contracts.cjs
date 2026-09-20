@@ -789,9 +789,9 @@ const TOOL_CONTRACTS = Object.freeze({
             required: ['cell_id'],
             properties: {
                 cell_id: stringSchema({ minLength: 1 }),
-                yield_time_ms: numberSchema({ minimum: 0, maximum: 300000 }),
-                max_tokens: numberSchema({ minimum: 1, maximum: 50000 }),
-                terminate: booleanSchema()
+                yield_time_ms: { anyOf: [numberSchema({ minimum: 0, maximum: 300000 }), { type: 'null', enum: [null] }], default: 10000 },
+                max_tokens: { anyOf: [numberSchema({ minimum: 1, maximum: 50000 }), { type: 'null', enum: [null] }], default: 10000 },
+                terminate: { anyOf: [booleanSchema(), { type: 'null', enum: [null] }], default: false }
             },
             additionalProperties: false
         }),
@@ -996,11 +996,10 @@ const TOOL_CONTRACTS = Object.freeze({
                     minLength: 1,
                     description: 'Search query for deferred tools.'
                 }),
-                limit: numberSchema({
-                    minimum: 1,
-                    maximum: 50,
-                    description: 'Maximum number of tools to return.'
-                })
+                limit: {
+                    anyOf: [numberSchema({ minimum: 1, maximum: 50 }), { type: 'null', enum: [null] }],
+                    description: 'Maximum number of tools to return. Omit or use null to use the tool default.'
+                }
             },
             additionalProperties: false
         }),

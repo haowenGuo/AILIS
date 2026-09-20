@@ -206,7 +206,7 @@ test('desktop store migrates known OpenAI-compatible preset provider keys by bas
 test('desktop store uses AILIS Cloud only for clean-install defaults and preserves existing providers', () => {
     const cleanInstall = store.normalizeState({});
     assert.equal(cleanInstall.preferences.llmProvider, 'ailis-cloud');
-    assert.equal(cleanInstall.preferences.llmBaseUrl, 'https://101.133.239.56/api/llm/v1');
+    assert.equal(cleanInstall.preferences.llmBaseUrl, 'https://150.109.13.189/api/llm/v1');
     assert.equal(cleanInstall.preferences.llmModel, 'ailis-cloud');
 
     const existingInstall = store.normalizeState({

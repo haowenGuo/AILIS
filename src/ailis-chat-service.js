@@ -521,7 +521,7 @@ function parseAssistantReply(rawText) {
     };
 }
 
-function toAssistantPayload(text, extra = {}) {
+export function toAssistantPayload(text, extra = {}) {
     const parsed = parseAssistantReply(normalizeMarkdownSource(text, '任务执行完成。'));
     return {
         ...extra,
@@ -991,6 +991,7 @@ export class AILISDesktopChatService {
         return {
             ...turn,
             context,
+            hostOwned: reply.hostOwned === true,
             payload: toAssistantPayload(reply.text, {
                 speechText: reply.text,
                 bubbleText: reply.text,
@@ -1079,6 +1080,7 @@ export class AILISDesktopChatService {
         return {
             ...decision,
             context: decisionContext,
+            hostOwned: reply.hostOwned === true,
             payload: toAssistantPayload(reply.text, {
                 expression: surface.expression,
                 action: surface.action,
@@ -1108,7 +1110,7 @@ export class AILISDesktopChatService {
             : buildProactiveCompanionHeartbeatDeveloperMessage(messageHistory);
         try {
             const status = await this.ensureReady();
-            const result = await this.gateway.runAgent({
+            const request = {
                 sessionId,
                 message: normalizeText(latestUser?.content || latestUser?.text) || '日常陪伴',
                 messageHistory: sanitizeMessageHistoryForGateway(messageHistory),
@@ -1125,10 +1127,13 @@ export class AILISDesktopChatService {
                     suppressCurrentUserMessage: true,
                     ephemeralDeveloperMessage: turnContext
                 }
-            });
+            };
+            const result = window.ailisDesktop?.tasks?.proactive
+                ? await window.ailisDesktop.tasks.proactive({ ...request, clientMessageId: crypto.randomUUID() })
+                : await this.gateway.runAgent(request);
             const text = normalizeMarkdownSource(toAILISPayload(result).display_text || '');
             if (!text) return { ok: false, reasonType: 'empty_reply' };
-            return { ok: result.ok !== false, text, model: result.model || result.llm?.model || '' };
+            return { ok: result.ok !== false, text, model: result.model || result.llm?.model || '', hostOwned: result.hostOwned === true };
         } catch (error) {
             return { ok: false, reasonType: error?.code || 'reply_generation_failed', error: error?.message || String(error) };
         }

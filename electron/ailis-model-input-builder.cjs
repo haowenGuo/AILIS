@@ -16,6 +16,7 @@ const {
     toolOutputToResponseItems
 } = require('./ailis-agent-object-model.cjs');
 const { dropTrailingDuplicateUserMessage } = require('./ailis-message-history.cjs');
+const { appendPermissionsUpdate } = require('./ailis-permissions-instructions.cjs');
 
 function textContent(text = '') {
     const normalized = normalizeText(text);
@@ -239,6 +240,7 @@ function buildModelInput({
     modelImageAttachments = [],
     inputModalities = [],
     runtimeEnvironment = null,
+    permissionContext = null,
     capabilityCatalog = null,
     externalToolExposure = null,
     toolOutputChars = 24000,
@@ -254,6 +256,7 @@ function buildModelInput({
         fileAttachments,
         modelImageAttachments,
         runtimeEnvironment,
+        permissionContext,
         capabilityCatalog,
         externalToolExposure,
         toolOutputChars,
@@ -272,6 +275,7 @@ function buildModelInputContextManager({
     fileAttachments = [],
     modelImageAttachments = [],
     runtimeEnvironment = null,
+    permissionContext = null,
     capabilityCatalog = null,
     externalToolExposure = null,
     toolOutputChars = 24000,
@@ -297,6 +301,7 @@ function buildModelInputContextManager({
     if (contextMessage) {
         history.recordItems([contextMessage]);
     }
+    appendPermissionsUpdate(history, permissionContext);
     if (suppressCurrentUserMessage !== true) {
         const userContent = [
             ...textContent(message),

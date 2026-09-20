@@ -1,7 +1,10 @@
 from typing import Literal
 from urllib.parse import urlencode
 
-import stripe
+try:
+    import stripe
+except ImportError:  # 账号功能不应因支付 SDK 未安装而无法启动
+    stripe = None
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -28,6 +31,8 @@ class PortalSessionRequest(BaseModel):
 
 def configure_stripe() -> None:
     settings = get_settings()
+    if stripe is None:
+        raise HTTPException(status_code=503, detail="Stripe 支付模块尚未安装。")
     if not settings.STRIPE_SECRET_KEY:
         raise HTTPException(status_code=503, detail="Stripe secret key is not configured.")
 
@@ -134,13 +139,14 @@ async def create_checkout_session(
         "product": "ailis_membership",
     }
     session_params = {
-        "ui_mode": "elements",
         "mode": payload.mode,
         "customer": customer_id,
         "client_reference_id": str(user.id),
         "metadata": metadata,
         "line_items": [{"price": price_id, "quantity": payload.quantity}],
-        "return_url": build_return_url(request, payload.return_path),
+        # 使用 Stripe 托管 Checkout，官网无需接触卡号，也不必在浏览器加载 Stripe.js。
+        "success_url": build_return_url(request, payload.return_path),
+        "cancel_url": build_plain_return_url(request, payload.return_path),
         "billing_address_collection": "auto",
         "automatic_tax": {"enabled": settings.STRIPE_AUTOMATIC_TAX_ENABLED},
     }
@@ -166,7 +172,7 @@ async def create_checkout_session(
 
     return {
         "id": session.id,
-        "clientSecret": session.client_secret,
+        "url": session.url,
     }
 
 

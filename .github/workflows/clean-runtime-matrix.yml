@@ -1,0 +1,40 @@
+name: Cold-profile runtime contracts (three native operating systems)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  runtime:
+    name: Native runtime - ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Prepare application dependencies (build environment only)
+        run: pnpm install --frozen-lockfile
+      - name: Test with a fresh profile and system-only PATH
+        run: node scripts/test-clean-runtime.mjs --output clean-runtime-report.json
+      - name: Upload actual platform, test counts and failures
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: clean-runtime-${{ matrix.os }}
+          path: clean-runtime-report.json
+          if-no-files-found: error
+
+# This is not an installer VM or a GUI accessibility test. Native macOS must
+# actually finish this job before a macOS pass may be reported.

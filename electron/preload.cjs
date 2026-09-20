@@ -121,6 +121,8 @@ contextBridge.exposeInMainWorld('ailisDesktop', {
         }
     },
     tts: {
+        diagnostic: (payload) => ipcRenderer.send('ailis:tts-diagnostic', payload || {}),
+        prepareSpokenReply: (payload) => ipcRenderer.invoke('ailis:tts-prepare-spoken-reply', payload || {}),
         synthesize: (payload) => ipcRenderer.invoke('ailis:tts-synthesize', payload || {})
     },
     voiceRuntime: {
@@ -159,6 +161,11 @@ contextBridge.exposeInMainWorld('ailisDesktop', {
         cancel: () => ipcRenderer.invoke('ailis:ollama-runtime-cancel')
     },
     transcribeAudio: (audioBytes) => ipcRenderer.invoke('ailis:asr-transcribe', audioBytes),
+    wake: {
+        start: () => ipcRenderer.invoke('ailis:wake-start'),
+        frame: payload => ipcRenderer.invoke('ailis:wake-frame', payload),
+        stop: () => ipcRenderer.invoke('ailis:wake-stop')
+    },
     beginDragPetWindow: () => {
         ipcRenderer.send('ailis:begin-drag-pet-window', {});
     },
@@ -257,6 +264,26 @@ contextBridge.exposeInMainWorld('ailisDesktop', {
             return () => ipcRenderer.removeListener('ailis:assistant-event', wrapped);
         }
     },
+    // Enabled by the desktop host independently of isolated preview profiles.
+    tasks: initialPreferences?.taskInteractionEnabled === true ? {
+        currentSession: payload => ipcRenderer.invoke('ailis:task-current-session', payload),
+        sessionList: () => ipcRenderer.invoke('ailis:task-session-list'),
+        switchSession: payload => ipcRenderer.invoke('ailis:task-switch-session', payload),
+        proactive: payload => ipcRenderer.invoke('ailis:task-proactive', payload),
+        snapshot: payload => ipcRenderer.invoke('ailis:task-snapshot', payload),
+        receipt: payload => ipcRenderer.invoke('ailis:task-receipt', payload),
+        submit: payload => ipcRenderer.invoke('ailis:task-submit', payload),
+        stop: payload => ipcRenderer.invoke('ailis:task-stop', payload),
+        confirmRecovery: payload => ipcRenderer.invoke('ailis:task-confirm-recovery', payload),
+        resource: payload => ipcRenderer.invoke('ailis:task-resource', payload),
+        toolOutput: payload => ipcRenderer.invoke('ailis:task-tool-output', payload),
+        revealFile: payload => ipcRenderer.invoke('ailis:task-reveal-file', payload),
+        onEvent: listener => {
+            const wrapped = (_event, payload) => listener(payload);
+            ipcRenderer.on('ailis:task-event', wrapped);
+            return () => ipcRenderer.removeListener('ailis:task-event', wrapped);
+        }
+    } : undefined,
     gateway: {
         isSupported: true,
         getStatus: () => ipcRenderer.invoke('ailis:gateway-status'),

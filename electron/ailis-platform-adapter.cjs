@@ -1,4 +1,5 @@
 const path = require('path');
+const { shellArgsForExecutable } = require('./ailis-shell-launch.cjs');
 const { spawn } = require('child_process');
 
 function normalizeString(value, fallback = '') {
@@ -260,16 +261,14 @@ class AILISPlatformAdapter {
     }
 
     pathKey(filePath) {
-        const resolved = path.resolve(String(filePath || ''));
+        const resolved = (this.isHostWindows() ? path.win32 : path.posix).resolve(String(filePath || ''));
         return this.isHostWindows() ? resolved.toLowerCase() : resolved;
     }
 
     isPathInside(rootPath, targetPath) {
-        const root = path.resolve(rootPath);
-        const target = path.resolve(targetPath);
-        const rootComparable = this.pathKey(root);
-        const targetComparable = this.pathKey(target);
-        return targetComparable === rootComparable || targetComparable.startsWith(`${rootComparable}${path.sep}`);
+        const hostPath = this.isHostWindows() ? path.win32 : path.posix;
+        const relative = hostPath.relative(this.pathKey(rootPath), this.pathKey(targetPath));
+        return relative === '' || (relative !== '..' && !relative.startsWith(`..${hostPath.sep}`) && !hostPath.isAbsolute(relative));
     }
 
     uniquePaths(paths = []) {
@@ -280,7 +279,7 @@ class AILISPlatformAdapter {
             if (!normalized) {
                 continue;
             }
-            const resolved = path.resolve(normalized);
+            const resolved = (this.isHostWindows() ? path.win32 : path.posix).resolve(normalized);
             const key = this.pathKey(resolved);
             if (!seen.has(key)) {
                 seen.add(key);
@@ -333,7 +332,7 @@ class AILISPlatformAdapter {
         return configuredPosixShell || usableEnvironmentShell || 'bash';
     }
 
-    shellArgs(command = '') {
+    shellArgs(command = '', executable = this.defaultShellExecutable(), options = {}) {
         const text = normalizeString(command);
         if (!text) {
             return [];
@@ -344,7 +343,7 @@ class AILISPlatformAdapter {
         if (this.isAppleMobile()) {
             return [];
         }
-        return this.isWindows() ? ['/d', '/s', '/c', text] : ['-lc', text];
+        return shellArgsForExecutable(executable, text, options);
     }
 
     shellSpawnOptions({ cwd, env } = {}) {
@@ -465,7 +464,7 @@ class AILISPlatformAdapter {
         return this.scriptShellSpawnSpec(text, { cwd, env });
     }
 
-    ptySpawnOptions({ command = '', executable = '', args = [], cwd, env, term = 'xterm-256color', cols = 100, rows = 30, useConpty, useConptyDll } = {}) {
+    ptySpawnOptions({ command = '', executable = '', args = [], cwd, env, login = true, term = 'xterm-256color', cols = 100, rows = 30, useConpty, useConptyDll } = {}) {
         if (this.isAndroid()) {
             const ptyArgs = Array.isArray(args) && args.length
                 ? ['shell', ...args.map((entry) => String(entry))]
@@ -496,7 +495,7 @@ class AILISPlatformAdapter {
         const shell = normalizeString(executable, this.defaultShellExecutable());
         const ptyArgs = Array.isArray(args) && args.length
             ? args.map((entry) => String(entry))
-            : this.shellArgs(command);
+            : this.shellArgs(command, shell, { login });
         return {
             executable: shell,
             args: ptyArgs,

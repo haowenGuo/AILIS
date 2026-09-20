@@ -4,6 +4,7 @@ const path = require('node:path');
 const fs = require('node:fs');
 const { fork } = require('node:child_process');
 const { randomUUID } = require('node:crypto');
+const { validateToolContract } = require('./ailis-tool-contracts.cjs');
 
 const {
     DEFAULT_EXEC_YIELD_TIME_MS,
@@ -20,8 +21,12 @@ const MAX_CELL_LIFETIME_MS = 30 * 60 * 1000;
 function resolveCodeModeWorkerLaunch({ moduleDir = __dirname, electron = process.versions.electron, env = process.env } = {}) {
     // ASAR directories are virtual: neither OS cwd nor the isolated Node
     // permission allowlist can use them. The build unpacks this worker.
-    const workerPath = path.join(moduleDir, 'ailis-code-mode-worker.cjs')
+    const unpackedWorkerPath = path.join(moduleDir, 'ailis-code-mode-worker.cjs')
         .replace(/\.asar([\\/])/g, '.asar.unpacked$1');
+    // Resolve directory aliases before entering the permission-restricted child
+    // (e.g. macOS /var -> /private/var). Permit only the same physical worker,
+    // not the alias's parents or any additional workspace content.
+    const workerPath = fs.realpathSync.native(unpackedWorkerPath);
     if (!fs.statSync(workerPath).isFile()) throw new Error(`exec worker is not a file: ${workerPath}`);
     return {
         workerPath,
@@ -92,7 +97,7 @@ function unwrapGatewayToolEnvelope(value) {
         value &&
         typeof value === 'object' &&
         !Array.isArray(value) &&
-        Object.prototype.hasOwnProperty.call(value, 'result') &&
+        (Object.prototype.hasOwnProperty.call(value, 'result') || value.ok === false) &&
         ('callId' in value || 'durationMs' in value || 'tool' in value)
     ) {
         return { envelope: value, result: value.result };
@@ -202,11 +207,14 @@ class AILISCodeModeRuntime {
         if (toolName === 'exec_command' || toolName === 'write_stdin') {
             const details = result?.details && typeof result.details === 'object' ? result.details : {};
             const hasExecShape = 'output' in details || 'exit_code' in details || 'session_id' in details || 'sessionId' in details;
-            if (envelope?.ok === false && !hasExecShape) {
-                throw new Error(normalizeString(
-                    envelope.error || textFromToolResult(result),
+            const processFailure = ['error', 'timeout'].includes(details.process_status);
+            if ((envelope?.ok === false || result?.isError === true) && (!hasExecShape || processFailure)) {
+                const reason = normalizeString(
+                    details.error || envelope?.error || textFromToolResult(result),
                     `${toolName} failed`
-                ));
+                );
+                const output = typeof details.output === 'string' ? details.output : '';
+                throw new Error(output && !reason.includes(output) ? `${reason}\n${output}` : reason);
             }
             return compactUnifiedExecResult(result, {
                 envelope,
@@ -421,7 +429,14 @@ class AILISCodeModeRuntime {
         return this.formatResponse(cell, { maxTokens: maxOutputTokens, wallTimeMs: Date.now() - startedAt });
     }
 
-    async wait({ cell_id: cellId = '', yield_time_ms: yieldTimeMs = DEFAULT_WAIT_YIELD_TIME_MS, max_tokens: maxTokens = DEFAULT_MAX_OUTPUT_TOKENS_PER_EXEC_CALL, terminate = false } = {}) {
+    async wait(args = {}) {
+        const validation = validateToolContract('exec_wait', args);
+        if (!validation.ok) throw new TypeError(`Invalid exec_wait arguments: ${validation.errors.join('; ')}`);
+        // Optional nulls from providers mean "use the default", not zero or stop.
+        const cellId = args.cell_id;
+        const yieldTimeMs = args.yield_time_ms ?? DEFAULT_WAIT_YIELD_TIME_MS;
+        const maxTokens = args.max_tokens ?? DEFAULT_MAX_OUTPUT_TOKENS_PER_EXEC_CALL;
+        const terminate = args.terminate ?? false;
         const startedAt = Date.now();
         const cell = this.cells.get(normalizeString(cellId));
         if (!cell) {
@@ -437,7 +452,7 @@ class AILISCodeModeRuntime {
             this.sendToWorker(cell, { type: 'terminate' }, { terminating: true });
             setTimeout(() => cell.child.kill(), 250).unref?.();
         } else if (!cell.completed && !cell.terminated) {
-            await this.waitForSignal(cell, Math.max(0, Number(yieldTimeMs) || DEFAULT_WAIT_YIELD_TIME_MS));
+            await this.waitForSignal(cell, yieldTimeMs);
         }
         return this.formatResponse(cell, { maxTokens, wallTimeMs: Date.now() - startedAt });
     }

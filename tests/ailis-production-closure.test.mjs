@@ -9,6 +9,12 @@ const require = createRequire(import.meta.url);
 const { ROOT, audit, assertValid, desktopFiles, assertDesktopBuild, extract, readManifest } = require('../scripts/production-closure.cjs');
 const report = audit();
 
+test('desktop packaging keeps TypeScript standard libraries as runtime data', () => {
+    const config = require('../electron-builder.runtime.cjs');
+    assert.ok(config.files.some(rule => typeof rule === 'object' && rule.from === 'node_modules/typescript/lib'
+        && rule.to === 'node_modules/typescript/lib' && rule.filter.includes('lib*.d.ts')));
+});
+
 test('desktop closure has explicit evidence for subprocesses and runtime resources', () => {
     assertValid(report);
     for (const file of ['electron/main.cjs', 'electron/preload.cjs', 'electron/ailis-code-mode-worker.cjs',

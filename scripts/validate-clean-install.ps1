@@ -4,10 +4,13 @@ param(
 
     [string]$ExpectedVersion = "",
 
-    [string]$ReportRoot = ""
+    [string]$ReportRoot = "",
+
+    [switch]$VerifyBundledRuntime
 )
 
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot 'invoke-installed-probe.ps1')
 if (-not $ExpectedVersion) {
     $ExpectedVersion = (Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot "../package.json") | ConvertFrom-Json).version
 }
@@ -50,7 +53,11 @@ function Add-Check {
 }
 
 function Stop-AilisProcesses {
-    Get-Process -Name "AILIS" -ErrorAction SilentlyContinue |
+    Get-Process -Name "AILIS" -ErrorAction SilentlyContinue | Where-Object {
+        $_.Path -and (($_.Path.StartsWith($ArtifactRoot + '\', [StringComparison]::OrdinalIgnoreCase)) -or
+        ($script:installRoot -and $_.Path.StartsWith($script:installRoot + '\', [StringComparison]::OrdinalIgnoreCase)) -or
+        ($env:CI -eq 'true' -and $_.Path.StartsWith($env:TEMP + '\', [StringComparison]::OrdinalIgnoreCase)))
+    } |
         Stop-Process -Force -ErrorAction SilentlyContinue
     Start-Sleep -Seconds 2
 }
@@ -59,23 +66,41 @@ function Assert-AppStaysRunning {
     param(
         [string]$Executable,
         [string]$Label,
-        [string]$UserDataDir,
         [int]$WaitSeconds = 35
     )
 
     $stdoutPath = Join-Path $ReportRoot "$Label.stdout.log"
     $stderrPath = Join-Path $ReportRoot "$Label.stderr.log"
     $env:ELECTRON_ENABLE_LOGGING = "1"
+    $launchTime = Get-Date
     $process = Start-Process -FilePath $Executable `
-        -ArgumentList @("--disable-gpu", "--enable-logging", "--user-data-dir=$UserDataDir") `
+        -WindowStyle Hidden `
+        -ArgumentList @("--disable-gpu", "--enable-logging") `
         -PassThru `
         -RedirectStandardOutput $stdoutPath `
         -RedirectStandardError $stderrPath
 
-    Start-Sleep -Seconds $WaitSeconds
-    $running = Get-Process -Name "AILIS" -ErrorAction SilentlyContinue
+    $deadline = $launchTime.AddSeconds($WaitSeconds)
+    $running = @()
+    do {
+        Start-Sleep -Seconds 2
+        $running = @(Get-Process -Name "AILIS" -ErrorAction SilentlyContinue | Where-Object {
+            $_.Path -and $_.StartTime -ge $launchTime -and (
+                $_.Path.StartsWith($script:installRoot + '\', [StringComparison]::OrdinalIgnoreCase) -or
+                ($env:CI -eq 'true' -and $_.Path.StartsWith($env:TEMP + '\', [StringComparison]::OrdinalIgnoreCase))
+            )
+        })
+        $process.Refresh()
+        if ($process.HasExited -and $process.ExitCode -ne 0) { break }
+    } while (-not $running -and (Get-Date) -lt $deadline)
+    if ($running) {
+        # Extraction time is separate from application stability.
+        $observedPids = @($running.Id)
+        Start-Sleep -Seconds 15
+        $running = @(Get-Process -Id $observedPids -ErrorAction SilentlyContinue)
+    }
     $detail = if ($running) {
-        "AILIS remained active for ${WaitSeconds}s; pids=$($running.Id -join ',')"
+        "AILIS started within ${WaitSeconds}s and remained active for 15s; pids=$($running.Id -join ',')"
     } elseif ($process.HasExited) {
         "AILIS exited early with code $($process.ExitCode)"
     } else {
@@ -113,18 +138,11 @@ try {
     Add-Check -Name "setup-package-found" -Ok ([bool]$setup) -Detail ($setup.FullName ?? "missing")
     Add-Check -Name "portable-package-found" -Ok ([bool]$portable) -Detail ($portable.FullName ?? "missing")
 
-    $installRoot = Join-Path $env:RUNNER_TEMP "ailis-clean-install"
-    $userDataRoot = Join-Path $env:RUNNER_TEMP "ailis-clean-user-data"
-    if (Test-Path -LiteralPath $installRoot) {
-        Remove-Item -LiteralPath $installRoot -Recurse -Force
-    }
-    if (Test-Path -LiteralPath $userDataRoot) {
-        Remove-Item -LiteralPath $userDataRoot -Recurse -Force
-    }
-    New-Item -ItemType Directory -Force -Path $userDataRoot | Out-Null
+    $installRoot = Join-Path $env:RUNNER_TEMP ("ailis-clean-install-" + [guid]::NewGuid().ToString('N'))
     Stop-AilisProcesses
 
     $install = Start-Process -FilePath $setup.FullName `
+        -WindowStyle Hidden `
         -ArgumentList @("/S", "/D=$installRoot") `
         -Wait `
         -PassThru
@@ -135,12 +153,35 @@ try {
     $installedVersion = (Get-Item -LiteralPath $installedExe).VersionInfo.ProductVersion
     Add-Check -Name "installed-version" -Ok ($installedVersion -like "$ExpectedVersion*") -Detail $installedVersion
 
-    Assert-AppStaysRunning -Executable $installedExe -Label "installed" -UserDataDir $userDataRoot -WaitSeconds 35
+    if ($VerifyBundledRuntime) {
+        $priorNodeMode = $env:ELECTRON_RUN_AS_NODE
+        $env:ELECTRON_RUN_AS_NODE = '1'
+        try {
+            $probeCode = Invoke-InstalledProbe $installedExe @((Join-Path $PSScriptRoot 'probe-native-package.cjs'), $installRoot, (Join-Path $ArtifactRoot 'source-identity-win32-x64.json'), (Join-Path $ReportRoot 'installed-source-identity.json')) (Join-Path $ReportRoot 'identity-probe')
+            Add-Check -Name 'installed-source-identity' -Ok ($probeCode -eq 0) -Detail "exitCode=$probeCode; see identity-probe logs"
+            $probeCode = Invoke-InstalledProbe $installedExe @((Join-Path $PSScriptRoot 'verify-bundled-asr.cjs'), $installRoot, (Join-Path $PSScriptRoot '../tests/fixtures/asr-install'), (Join-Path $ReportRoot 'installed-offline-asr.json')) (Join-Path $ReportRoot 'asr-probe')
+            Add-Check -Name 'installed-offline-asr' -Ok ($probeCode -eq 0) -Detail "exitCode=$probeCode; see asr-probe logs"
+            $probeCode = Invoke-InstalledProbe $installedExe @((Join-Path $PSScriptRoot 'test-clean-runtime.mjs'), '--module-root', (Join-Path $installRoot 'resources/app.asar/electron'), '--output', (Join-Path $ReportRoot 'installed-cold-runtime.json'), 'tests/ailis-clean-environment.test.mjs') (Join-Path $ReportRoot 'runtime-probe')
+            Add-Check -Name 'installed-cold-runtime' -Ok ($probeCode -eq 0) -Detail "exitCode=$probeCode; see runtime-probe logs"
+        } finally { $env:ELECTRON_RUN_AS_NODE = $priorNodeMode }
+    }
+
+    Assert-AppStaysRunning -Executable $installedExe -Label "installed" -WaitSeconds 35
+
+    # A fresh profile must complete a real hosted model turn, not merely save defaults.
+    $agentTurnOutput = (& node (Join-Path $PSScriptRoot 'validate-clean-agent-turn.mjs') `
+        "--artifact=$installedExe" "--expected-version=$ExpectedVersion" 2>&1 | Out-String).Trim()
+    $agentTurnExitCode = $LASTEXITCODE
+    $agentTurn = $null
+    try { $agentTurn = $agentTurnOutput | ConvertFrom-Json } catch { }
+    Add-Check -Name 'installed-clean-agent-turn' `
+        -Ok ($agentTurnExitCode -eq 0 -and $agentTurn.ok -eq $true -and $agentTurn.agentTurn.nonceMatched -eq $true) `
+        -Detail $agentTurnOutput
+    $report.cleanAgentTurn = $agentTurn
 
     $stateCandidates = @(
-        (Join-Path $userDataRoot "desktop-state.json"),
-        (Join-Path $userDataRoot "AILIS\desktop-state.json"),
-        (Join-Path $userDataRoot "ailis\desktop-state.json")
+        (Join-Path $env:APPDATA "ailis\desktop-state.json"),
+        (Join-Path $env:APPDATA "AILIS\desktop-state.json")
     )
     $statePath = $stateCandidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
     Add-Check -Name "first-run-state-created" -Ok ([bool]$statePath) -Detail ($statePath ?? ($stateCandidates -join ";"))
@@ -150,35 +191,11 @@ try {
         Add-Check -Name "first-run-cloud-model" -Ok ($state.preferences.llmModel -eq "ailis-cloud") -Detail ([string]$state.preferences.llmModel)
     }
 
-    # Starting successfully and writing defaults are insufficient: exercise the
-    # packaged Electron IPC -> Gateway -> Agent Runner -> managed LLM path from a
-    # second, fully isolated user environment with all model env vars removed.
-    $agentTurnValidator = Join-Path $PSScriptRoot "validate-clean-agent-turn.mjs"
-    $agentTurnOutput = (& node $agentTurnValidator `
-        "--artifact=$installedExe" `
-        "--expected-version=$ExpectedVersion" 2>&1 | Out-String).Trim()
-    $agentTurnExitCode = $LASTEXITCODE
-    $agentTurn = $null
-    try {
-        $agentTurn = $agentTurnOutput | ConvertFrom-Json
-    } catch {
-        $agentTurn = $null
-    }
-    $agentTurnDetail = if ($agentTurn) {
-        "status=$($agentTurn.agentTurn.status); durationMs=$($agentTurn.agentTurn.durationMs); provider=$($agentTurn.preferences.llmProvider); nonceMatched=$($agentTurn.agentTurn.nonceMatched)"
-    } else {
-        "exitCode=$agentTurnExitCode; output=$agentTurnOutput"
-    }
-    Add-Check -Name "installed-clean-agent-turn" `
-        -Ok ($agentTurnExitCode -eq 0 -and $agentTurn.ok -eq $true -and $agentTurn.agentTurn.configError -eq $false) `
-        -Detail $agentTurnDetail
-    $report.cleanAgentTurn = $agentTurn
-
-    Assert-AppStaysRunning -Executable $portable.FullName -Label "portable" -UserDataDir $userDataRoot -WaitSeconds 45
+    Assert-AppStaysRunning -Executable $portable.FullName -Label "portable" -WaitSeconds 300
 
     $uninstaller = Join-Path $installRoot "Uninstall AILIS.exe"
     Add-Check -Name "uninstaller-present" -Ok (Test-Path -LiteralPath $uninstaller) -Detail $uninstaller
-    $uninstall = Start-Process -FilePath $uninstaller -ArgumentList @("/S") -Wait -PassThru
+    $uninstall = Start-Process -FilePath $uninstaller -ArgumentList @("/S") -WindowStyle Hidden -Wait -PassThru
     Add-Check -Name "silent-uninstall-exit" -Ok ($uninstall.ExitCode -eq 0) -Detail "exitCode=$($uninstall.ExitCode)"
     Start-Sleep -Seconds 3
     Add-Check -Name "uninstall-removed-executable" -Ok (-not (Test-Path -LiteralPath $installedExe)) -Detail $installedExe

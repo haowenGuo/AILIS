@@ -275,6 +275,10 @@ class AILISRawMemoryLedger {
         }
     }
 
+    readCurationPage(options = {}) {
+        return require('./ailis-curation-reader.cjs').readCurationPage(this.entriesDir, options);
+    }
+
     replay(options = {}) {
         const sessionId = normalizeString(options.sessionId);
         const runId = normalizeString(options.runId);
@@ -292,6 +296,11 @@ class AILISRawMemoryLedger {
         );
         const entries = [];
         for (const filePath of this.listEntryFiles()) {
+            // Legacy synchronous diagnostics must fail safely on large archives.
+            // Background curation uses readCurationPage instead.
+            if (fs.statSync(filePath).size > 8 * 1024 * 1024) {
+                throw new Error('raw_replay_requires_paging: archive too large for synchronous replay');
+            }
             const text = fs.readFileSync(filePath, 'utf8');
             for (const line of text.split(/\r?\n/)) {
                 if (!line) {

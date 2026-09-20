@@ -20,6 +20,11 @@ function delay(ms) {
 }
 
 async function removeTreeAfterProcessExit(root) {
+    const temporaryRoot = path.resolve(os.tmpdir());
+    const resolved = path.resolve(root);
+    if (path.dirname(resolved) !== temporaryRoot || !path.basename(resolved).startsWith('ailis-clean-agent-turn-')) {
+        throw new Error('Refusing to remove a path outside the generated validation directory');
+    }
     let lastError = null;
     for (let attempt = 0; attempt < 12; attempt++) {
         try {
@@ -206,7 +211,7 @@ async function main() {
         })})`, 180000);
         const displayText = String(result?.displayText || result?.speechText || result?.finalAnswer || '').trim();
         const configError = result?.status === 'needs_llm_config' || /可用的大模型配置|API Base、模型和 Key/.test(displayText);
-        const ok = !configError && result?.ok !== false && displayText.length > 0;
+        const ok = !configError && result?.ok === true && displayText.includes(nonce);
         report = {
             schemaVersion: 1,
             ok,

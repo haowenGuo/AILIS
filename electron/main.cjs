@@ -34,6 +34,7 @@ const {
 } = require('./openclaw-runtime.cjs');
 const { AILISGateway } = require('./ailis-gateway.cjs');
 const { AILISChatHistoryStore } = require('./ailis-chat-history-store.cjs');
+const { AILISTaskInteraction } = require('./ailis-task-interaction.cjs');
 const { createAILISDesktopPlatformAdapter } = require('./ailis-desktop-platform-adapter.cjs');
 const {
     getOpenClawToolSurface: getAgentToolSurface,
@@ -339,9 +340,18 @@ function getTrayIconPath() {
 }
 
 app.setName('AILIS');
+const taskInteractionPreview = process.env.AILIS_TASK_INTERACTION_PREVIEW === '1' && !app.isPackaged;
+const taskInteractionPreviewRoot = path.resolve(__dirname, '..', 'tmp', 'task-interaction-profile');
+if (taskInteractionPreview) {
+    // Development preview never loads the user's live desktop settings/history.
+    const profile = path.join(taskInteractionPreviewRoot, 'profile');
+    fs.mkdirSync(profile, { recursive: true });
+    app.setPath('userData', profile);
+    app.setPath('sessionData', profile);
+}
 // Optional headless world transport: use this source's unified Agent, settings and stores.
 const worldServiceOnly = process.env.AILIS_WORLD_SERVICE_ONLY === '1';
-if (worldServiceOnly && process.env.AILIS_SHARED_USER_DATA_DIR) {
+if (worldServiceOnly && !taskInteractionPreview && process.env.AILIS_SHARED_USER_DATA_DIR) {
     app.setPath('userData', path.resolve(process.env.AILIS_SHARED_USER_DATA_DIR));
 }
 app.setAppUserModelId('com.ailis.desktop');
@@ -851,6 +861,11 @@ function getRuntimeComponentsState() {
 }
 
 function getGatewayWorkspaceRoot() {
+    if (taskInteractionPreview) {
+        const workspace = path.join(taskInteractionPreviewRoot, 'workspace');
+        fs.mkdirSync(workspace, { recursive: true });
+        return workspace;
+    }
     if (app.isPackaged) {
         return path.join(app.getPath('userData'), 'workspace');
     }
@@ -876,6 +891,7 @@ function resolveAILISStateDir(value = '') {
 }
 
 function getPersistedAILISStateDir() {
+    if (taskInteractionPreview) return path.join(taskInteractionPreviewRoot, 'state');
     if (worldServiceOnly && process.env.AILIS_WORLD_SERVICE_STATE_DIR) {
         return path.resolve(process.env.AILIS_WORLD_SERVICE_STATE_DIR);
     }
@@ -2612,7 +2628,6 @@ function resolveAgentRunLlmSettings(settings) {
     if (!settings || typeof settings !== 'object' || Array.isArray(settings)) {
         return persisted;
     }
-
     const provider = normalizeLlmProvider(settings.provider || settings.llmProvider || persisted.provider);
     if (provider === 'ailis-cloud') {
         return buildTemporaryLlmSettings({
@@ -2622,13 +2637,8 @@ function resolveAgentRunLlmSettings(settings) {
             apiKey: ''
         });
     }
-
     const inherited = persisted.provider === provider ? persisted : {};
-    return buildTemporaryLlmSettings({
-        ...inherited,
-        ...settings,
-        provider
-    });
+    return buildTemporaryLlmSettings({ ...inherited, ...settings, provider });
 }
 
 function getPersistedEmailProfiles() {
@@ -3134,6 +3144,22 @@ function broadcastHumanGatewayEvent(payload) {
     }
 }
 
+let taskInteraction = null;
+function ensureTaskInteraction() {
+    if (!taskInteraction) {
+        taskInteraction = new AILISTaskInteraction({ rootDir: path.join(getPersistedAILISStateDir(), 'task-interaction'),
+            gateway: ensureAILISGateway(), getSettings: getResolvedLlmSettings,
+            getLegacyHistory: sessionId => ensureAILISChatHistoryStore().getSession(sessionId) });
+        taskInteraction.on('event', event => {
+            for (const window of getOpenWindows()) window.webContents.send('ailis:task-event', event);
+        });
+        taskInteraction.on('storage-error', event => {
+            for (const window of getOpenWindows()) window.webContents.send('ailis:task-event', { ...event, type: 'storage-error' });
+        });
+    }
+    return taskInteraction;
+}
+
 function ensureAILISGateway() {
     if (ailisGateway) {
         return ailisGateway;
@@ -3144,12 +3170,14 @@ function ensureAILISGateway() {
     );
     ailisGateway = new AILISGateway({
         app,
+        ...(taskInteractionPreview ? { port: 0 } : {}),
         ...(worldServiceOnly ? {
             toolAllowlist: [], mcpServers: [], disableBuiltinAilisResearchMcp: true,
             profileCurationEnabled: false
         } : {}),
         projectRoot: getProjectRoot(),
         workspaceRoot: getGatewayWorkspaceRoot(),
+        initializeOwnedWorkspace: app.isPackaged === true,
         auditDir: getPersistedAILISStateDir(),
         emberHarnessEnabled: emberHarnessMode !== 'off',
         emberHarnessMode: emberHarnessMode === 'enforce' ? 'enforce' : 'observe',
@@ -3326,6 +3354,7 @@ function getRendererPreferences() {
         speechMode: normalizeSpeechMode(desktopState?.preferences?.speechMode),
         hostedTtsBaseUrl: desktopState.preferences.hostedTtsBaseUrl,
         recognitionMode: normalizeRecognitionMode(desktopState?.preferences?.recognitionMode),
+        wakeWords: require('./wake-word-catalog.cjs').normalizeWakeWords(desktopState?.preferences?.wakeWords),
         conversationMode: normalizeConversationMode(
             desktopState?.preferences?.conversationMode || DEFAULT_CONVERSATION_MODE
         ),
@@ -3812,6 +3841,7 @@ function applyPreferencesPatch(partialPreferences = {}) {
         speechMode: rendererPreferences.speechMode,
         hostedTtsBaseUrl: rendererPreferences.hostedTtsBaseUrl,
         recognitionMode: rendererPreferences.recognitionMode,
+        wakeWords: rendererPreferences.wakeWords,
         conversationMode: rendererPreferences.conversationMode,
         uiLanguage: rendererPreferences.uiLanguage,
         preferredMicDeviceId: rendererPreferences.preferredMicDeviceId,
@@ -3895,6 +3925,11 @@ function applyPreferencesPatch(partialPreferences = {}) {
     }
     if ('recognitionMode' in partialPreferences) {
         nextPreferences.recognitionMode = normalizeRecognitionMode(partialPreferences.recognitionMode);
+    }
+    if ('wakeWords' in partialPreferences) {
+        const words = require('./wake-word-catalog.cjs').normalizeWakeWords(partialPreferences.wakeWords);
+        if (!words.length) throw new Error('请至少选择一个唤醒词');
+        nextPreferences.wakeWords = words;
     }
     if ('conversationMode' in partialPreferences) {
         nextPreferences.conversationMode = normalizeConversationMode(partialPreferences.conversationMode);
@@ -4788,7 +4823,7 @@ function createChatWindow() {
 
     void loadWindowContent(chatWindow, 'chat.html')
         .then(() => {
-            if (desktopState.chatWindow.visible) {
+            if (desktopState.chatWindow.visible || taskInteractionPreview) {
                 chatWindow.show();
             }
         })
@@ -5267,7 +5302,7 @@ async function uninstallAssetPack(payload = {}) {
 
 function registerIpc() {
     ipcMain.on('ailis:get-preferences-sync', (event) => {
-        event.returnValue = getRendererPreferences();
+        event.returnValue = { ...getRendererPreferences(), taskInteractionPreview, taskInteractionEnabled: true };
     });
 
     ipcMain.handle('ailis:get-preferences', () => getRendererPreferences());
@@ -5551,7 +5586,34 @@ function registerIpc() {
         cancelVisionRegionSelection(event);
     });
     ipcMain.handle('ailis:llm-chat', async (_event, payload = {}) => callDesktopLlm(payload));
+    ipcMain.handle('ailis:tts-prepare-spoken-reply', async (_event, payload = {}) => {
+        const { appendSpeechDiagnostic } = require('./ailis-speech-diagnostics.cjs');
+        const trace = (stage, data = {}) => appendSpeechDiagnostic(getPersistedAILISStateDir(), { ...data, stage, traceId: payload.traceId });
+        try {
+            const { prepareSpokenReply } = require('./ailis-spoken-reply.cjs');
+            const persona = ensureAILISGateway().memoryRuntime?.state?.blocks?.persona?.value || '';
+            return await prepareSpokenReply({
+                text: payload.text,
+                persona,
+                trace,
+                callModel: (request) => callDesktopLlmProvider(getResolvedLlmSettings(), request)
+            });
+        } catch (error) {
+            trace('request_failed', { reason: 'rewrite_exception' });
+            return { ok: false, error: error?.message || String(error) };
+        }
+    });
+    ipcMain.on('ailis:tts-diagnostic', (_event, payload = {}) => {
+        require('./ailis-speech-diagnostics.cjs').appendSpeechDiagnostic(getPersistedAILISStateDir(), payload);
+    });
     ipcMain.handle('ailis:tts-synthesize', async (_event, payload = {}) => callDesktopTts(payload));
+    const stopWakeListeners = require('./wake-word-host.cjs').registerWakeWord({
+        ipcMain,
+        getMode: () => normalizeRecognitionMode(desktopState?.preferences?.recognitionMode),
+        getWords: () => desktopState?.preferences?.wakeWords,
+        root: app.isPackaged ? path.join(process.resourcesPath, 'ailis-wake-model') : path.join(__dirname, '..', 'build-cache', 'ailis-wake-model')
+    });
+    app.once('before-quit', stopWakeListeners);
     ipcMain.handle('ailis:asr-transcribe', async (_event, audioBytes) => {
         if (!desktopASRManager) {
             throw new Error('本地语音识别管理器尚未初始化');
@@ -5605,6 +5667,28 @@ function registerIpc() {
             ...(payload || {}),
             llmSettings: resolveAgentRunLlmSettings(payload?.llmSettings)
         });
+    });
+    ipcMain.handle('ailis:task-current-session', (_event, payload = {}) => ensureTaskInteraction().currentSession(payload));
+    ipcMain.handle('ailis:task-session-list', () => ensureTaskInteraction().sessionList());
+    ipcMain.handle('ailis:task-switch-session', (_event, payload = {}) => ensureTaskInteraction().switchSession(payload));
+    ipcMain.handle('ailis:task-proactive', async (_event, payload = {}) => {
+        await ensureAILISGatewayStarted('task_interaction_proactive');
+        return ensureTaskInteraction().proactive(payload);
+    });
+    ipcMain.handle('ailis:task-snapshot', (_event, payload = {}) => ensureTaskInteraction().snapshot(payload.sessionId));
+    ipcMain.handle('ailis:task-receipt', (_event, payload = {}) => ensureTaskInteraction().receipt(payload));
+    ipcMain.handle('ailis:task-submit', async (_event, payload = {}) => {
+        await ensureAILISGatewayStarted('task_interaction');
+        return ensureTaskInteraction().submit(payload);
+    });
+    ipcMain.handle('ailis:task-stop', (_event, payload = {}) => ensureTaskInteraction().stop(payload));
+    ipcMain.handle('ailis:task-confirm-recovery', (_event, payload = {}) => ensureTaskInteraction().confirmRecovery(payload));
+    ipcMain.handle('ailis:task-resource', (_event, payload = {}) => ensureTaskInteraction().readResource(payload));
+    ipcMain.handle('ailis:task-tool-output', (_event, payload = {}) => ensureTaskInteraction().readToolOutput(payload));
+    ipcMain.handle('ailis:task-reveal-file', (_event, payload = {}) => {
+        const result = ensureTaskInteraction().locateFile(payload);
+        shell.showItemInFolder(result.path);
+        return { ok: true, changedSince: result.changedSince };
     });
     ipcMain.handle('ailis:gateway-agent-interrupt', async (_event, payload = {}) =>
         ensureAILISGateway().interruptAgentRun(payload || {})
@@ -5921,12 +6005,6 @@ app.whenReady().then(async () => {
         createControlWindow();
     }
     createTray();
-
-    setTimeout(() => {
-        desktopASRManager?.warmup?.().catch((error) => {
-            console.warn('[ASR] 后台预热失败：', error.message || error);
-        });
-    }, 4000);
 
     const initialSpeechMode = normalizeSpeechMode(desktopState?.preferences?.speechMode);
     warmupDesktopSpeechMode(initialSpeechMode, {

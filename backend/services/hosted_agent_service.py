@@ -108,6 +108,23 @@ class HostedAgentRuntimeClient:
             max(30, settings.AILIS_HOSTED_RUNTIME_TIMEOUT_SECONDS),
             connect=10,
         )
+        self._client: httpx.AsyncClient | None = None
+
+    async def _get_client(self) -> httpx.AsyncClient:
+        if self._client is None or self._client.is_closed:
+            self._client = httpx.AsyncClient(
+                timeout=self.timeout,
+                limits=httpx.Limits(
+                    max_connections=max(1, settings.AILIS_HOSTED_HTTP_MAX_CONNECTIONS),
+                    max_keepalive_connections=max(1, settings.AILIS_HOSTED_HTTP_MAX_KEEPALIVE_CONNECTIONS),
+                    keepalive_expiry=max(1.0, settings.AILIS_HOSTED_HTTP_KEEPALIVE_EXPIRY_SECONDS),
+                ),
+            )
+        return self._client
+
+    async def aclose(self) -> None:
+        if self._client is not None and not self._client.is_closed:
+            await self._client.aclose()
 
     def _headers(self) -> dict[str, str]:
         headers = {"accept": "application/json"}
@@ -130,13 +147,14 @@ class HostedAgentRuntimeClient:
         payload: dict[str, Any] | None = None,
         timeout: httpx.Timeout | float | None = None,
     ) -> dict[str, Any]:
-        async with httpx.AsyncClient(timeout=timeout or self.timeout) as client:
-            response = await client.request(
-                method,
-                f"{self.base_url}{path}",
-                headers=self._headers(),
-                json=payload,
-            )
+        client = await self._get_client()
+        response = await client.request(
+            method,
+            f"{self.base_url}{path}",
+            headers=self._headers(),
+            json=payload,
+            timeout=timeout or self.timeout,
+        )
         response.raise_for_status()
         return response.json()
 
@@ -157,17 +175,17 @@ class HostedAgentRuntimeClient:
         self,
         payload: dict[str, Any],
     ) -> AsyncIterator[bytes]:
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
-            async with client.stream(
+        client = await self._get_client()
+        async with client.stream(
                 "POST",
                 f"{self.base_url}/llm/chat/completions",
                 headers=self._stream_headers(),
                 json=payload,
             ) as response:
-                response.raise_for_status()
-                async for chunk in response.aiter_bytes():
-                    if chunk:
-                        yield chunk
+            response.raise_for_status()
+            async for chunk in response.aiter_bytes():
+                if chunk:
+                    yield chunk
 
     async def tenant_status(self, tenant_id: str) -> dict[str, Any]:
         query = urlencode({"tenantId": tenant_id})
@@ -205,12 +223,12 @@ class HostedAgentRuntimeClient:
             **self._headers(),
             "content-type": "application/octet-stream",
         }
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
-            response = await client.post(
-                f"{self.base_url}/attachments/upload?{query}",
-                headers=headers,
-                content=content,
-            )
+        client = await self._get_client()
+        response = await client.post(
+            f"{self.base_url}/attachments/upload?{query}",
+            headers=headers,
+            content=content,
+        )
         response.raise_for_status()
         return response.json()
 
@@ -226,17 +244,17 @@ class HostedAgentRuntimeClient:
         tenant_id: str,
         payload: dict[str, Any],
     ) -> AsyncIterator[bytes]:
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
-            async with client.stream(
+        client = await self._get_client()
+        async with client.stream(
                 "POST",
                 f"{self.base_url}/agent/run",
                 headers=self._stream_headers(),
                 json={"tenantId": tenant_id, "payload": payload},
             ) as response:
-                response.raise_for_status()
-                async for chunk in response.aiter_bytes():
-                    if chunk:
-                        yield chunk
+            response.raise_for_status()
+            async for chunk in response.aiter_bytes():
+                if chunk:
+                    yield chunk
 
     async def interrupt(self, tenant_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         return await self._request(

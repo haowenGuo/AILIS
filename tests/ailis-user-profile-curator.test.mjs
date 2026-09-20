@@ -604,7 +604,8 @@ test('AILIS user profile curator processes raw memory in resumable chronological
     const first = await curator.runDailyCuration(options);
     assert.equal(first.status, 'partial_completed');
     assert.equal(first.run.processedEntryCount, 2);
-    assert.equal(first.run.remainingEntryCount, 3);
+    assert.equal(first.run.remainingEntryCount, 1); // Lower bound: another page exists.
+    assert.equal(first.run.remainingEntryCountExact, false);
     assert.deepEqual(calls[0].evidenceIds, ['raw-1', 'raw-2']);
     assert.equal(first.run.cursor.lastProcessedEntryId, 'raw-2');
     let state = JSON.parse(await fs.readFile(path.join(rootDir, 'memory', 'profile-curation-state.json'), 'utf8'));

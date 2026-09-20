@@ -3,6 +3,7 @@ from starlette.background import BackgroundTask
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.api.account import require_model_api_member
 from backend.api.schemas import ChatRequest
 from backend.core.database import AsyncSessionLocal, get_db
 from backend.services.llm_service import LLMService
@@ -16,7 +17,8 @@ router = APIRouter()
 @router.post("/chat")
 async def chat_endpoint(
         request: ChatRequest,
-        db: AsyncSession = Depends(get_db)
+        db: AsyncSession = Depends(get_db),
+        _user=Depends(require_model_api_member),
 ):
     """
     安全流式版：流式输出完，再统一存数据库

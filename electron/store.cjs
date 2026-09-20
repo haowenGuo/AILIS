@@ -39,7 +39,7 @@ const LLM_PROVIDER_OPTIONS = [
     'ollama'
 ];
 const DEFAULT_LLM_PROVIDER = AILIS_CLOUD_PROVIDER;
-const DEFAULT_LLM_BASE_URL = 'https://101.133.239.56/api/llm/v1';
+const DEFAULT_LLM_BASE_URL = 'https://150.109.13.189/api/llm/v1';
 const DEFAULT_LLM_MODEL = 'ailis-cloud';
 const DEFAULT_OPENAI_COMPATIBLE_BASE_URL = 'https://ark.cn-beijing.volces.com/api/v3';
 const DEFAULT_OPENAI_COMPATIBLE_MODEL = 'doubao-seed-2-0-mini-260215';
@@ -1026,6 +1026,7 @@ function getDefaultState() {
             speechMode: 'hosted',
             hostedTtsBaseUrl: DEFAULT_HOSTED_TTS_BASE_URL,
             recognitionMode: 'fast-vad',
+            wakeWords: require('./wake-word-catalog.cjs').normalizeWakeWords(),
             conversationMode: DEFAULT_CONVERSATION_MODE,
             uiLanguage: DEFAULT_UI_LANGUAGE,
             preferredMicDeviceId: '',
@@ -1194,6 +1195,7 @@ function normalizeState(inputState) {
     normalizedState.preferences.speechMode = normalizeSpeechMode(normalizedState.preferences.speechMode);
     normalizedState.preferences.hostedTtsBaseUrl = normalizeHostedTtsBaseUrl(normalizedState.preferences.hostedTtsBaseUrl) || DEFAULT_HOSTED_TTS_BASE_URL;
     normalizedState.preferences.recognitionMode = normalizeRecognitionMode(normalizedState.preferences.recognitionMode);
+    normalizedState.preferences.wakeWords = require('./wake-word-catalog.cjs').normalizeWakeWords(normalizedState.preferences.wakeWords);
     normalizedState.preferences.conversationMode = normalizeConversationMode(
         normalizedState.preferences.conversationMode
     );

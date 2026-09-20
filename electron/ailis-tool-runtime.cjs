@@ -19,9 +19,30 @@ const {
     buildToolRoutingAdvice,
     rankToolSearchResults
 } = require('./ailis-tool-routing.cjs');
-const {
-    createDefaultArtifactToolsRuntime
-} = require('./ailis-artifact-tools-runtime.cjs');
+// Artifact adapters are intentionally lazy.  The ALE adapter exposes only
+// sandbox-bound execution tools, and loading the optional XLSX/PDF runtime
+// eagerly makes a Linux/WLS launch pay for native workbook dependencies before
+// the first model turn.  The normal desktop path still loads it on demand.
+let createDefaultArtifactToolsRuntime;
+function getArtifactToolsRuntime(runtime) {
+    if (runtime?.artifactToolsRuntime) {
+        return runtime.artifactToolsRuntime;
+    }
+    if (process.env.AILIS_ALE_DISABLE_ARTIFACT_TOOLS === '1') {
+        return {
+            async execute(args = {}) {
+                return {
+                    ok: false,
+                    status: 'artifact_tools_disabled_for_ale',
+                    action: args.action || '',
+                    diagnostics: [{ code: 'ale_profile_disabled', severity: 'info' }]
+                };
+            }
+        };
+    }
+    ({ createDefaultArtifactToolsRuntime } = require('./ailis-artifact-tools-runtime.cjs'));
+    return createDefaultArtifactToolsRuntime();
+}
 const { summarizeForModel } = require('./ailis-runtime-budget.cjs');
 
 const TOOL_EXPOSURE = AILIS_TOOL_EXPOSURE;
@@ -380,7 +401,7 @@ class AILISToolRuntimeRegistry {
 
 async function executeToolSearch(registry, args = {}) {
     const query = normalizeString(args.query || args.q);
-    const limit = Math.max(1, Math.min(Number(args.limit || 8), 50));
+    const limit = Math.max(1, Math.min(Number(args.limit ?? 8), 50));
     const includeMcp = args.includeMcp !== false;
     const includeDirect = args.includeDirect === true;
     const local = registry.search(query, limit)
@@ -496,7 +517,7 @@ async function executeToolSearch(registry, args = {}) {
 function createAILISToolRuntimeRegistry(runtime) {
     const registry = new AILISToolRuntimeRegistry({ runtime });
     const definitionById = Object.fromEntries(CORE_RUNTIME_TOOL_DEFINITIONS.map((definition) => [definition.id, definition]));
-    const artifactToolsRuntime = runtime.artifactToolsRuntime || createDefaultArtifactToolsRuntime();
+    const artifactToolsRuntime = getArtifactToolsRuntime(runtime);
     runtime.artifactToolsRuntime = artifactToolsRuntime;
     registry.register(new AILISRuntimeTool({
         definition: definitionById.update_plan,

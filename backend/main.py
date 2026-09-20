@@ -15,11 +15,17 @@ from backend.api.edu import router as edu_router
 from backend.api.vivix import router as vivix_router
 from backend.api.hosted_agent import router as hosted_agent_router
 from backend.api.llm_relay import router as llm_relay_router
+from backend.api.account import router as account_router
+from backend.api.admin import router as admin_router
+from backend.api.stripe_checkout import router as stripe_router
+from backend.api.token_payments import router as token_payments_router
 from backend.AISafety import router as ai_safety_router
 from backend.models import db_models, edu_models  # noqa: F401
 # 🔴 导入新的压缩服务（而不是从 chat.py 导入）
 from backend.services.compress_service import timer_task_runner
 from backend.services.edu_platform_service import ensure_admin_account
+from backend.api.llm_relay import close_llm_relay_resources
+from backend.infrastructure.object_storage import create_object_storage
 
 settings = get_settings()
 
@@ -35,6 +41,8 @@ async def lifespan(app: FastAPI):
     # 1. 服务启动前：初始化数据库
     print(f"🚀 启动 {settings.APP_NAME}...")
     await init_db()
+    # Keep storage behind an adapter. Local storage remains the compatibility default.
+    app.state.object_storage = create_object_storage(settings)
     async with AsyncSessionLocal() as db:
         await ensure_admin_account(db)
     print("✅ 数据库初始化完成")
@@ -54,6 +62,7 @@ async def lifespan(app: FastAPI):
         timer_task.cancel()
         await timer_task
         print("✅ 记忆压缩计时器已安全关闭")
+    await close_llm_relay_resources()
 
 
 # ---------------- 创建 FastAPI 实例 ----------------
@@ -86,6 +95,10 @@ app.include_router(edu_router, tags=["教学"])
 app.include_router(vivix_router, tags=["Vivix"])
 app.include_router(hosted_agent_router, prefix="/api", tags=["AILIS Agent Runtime"])
 app.include_router(llm_relay_router, prefix="/api", tags=["AILIS Cloud LLM Relay"])
+app.include_router(account_router, prefix="/api", tags=["官网账号"])
+app.include_router(stripe_router, prefix="/api", tags=["支付"])
+app.include_router(token_payments_router, prefix="/api", tags=["会员订阅"])
+app.include_router(admin_router, prefix="/api", tags=["后台管理"])
 
 
 # ---------------- 根路径测试 ----------------

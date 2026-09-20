@@ -344,6 +344,56 @@ describe('desktop LLM provider', () => {
         assert.equal(JSON.stringify(result).includes('test-secret-key'), false);
     });
 
+    it('preserves developer roles in chat and canonical inputs on the actual request body', async () => {
+        const messages = [
+            { role: 'system', content: 'Fixed system rules.' },
+            { role: 'developer', content: '<memory_context>Historical background.</memory_context>' },
+            { role: 'developer', content: '<permissions instructions>Current host permissions.</permissions instructions>' },
+            { role: 'user', content: 'Continue.' }
+        ];
+        for (const provider of ['openai-compatible']) {
+            for (const canonical of [false, true]) {
+                const request = canonical ? {
+                    instructions: messages[0].content,
+                    input: messages.slice(1).map(message => ({
+                        type: 'message', role: message.role,
+                        content: [{ type: 'input_text', text: message.content }]
+                    }))
+                } : { messages };
+                const result = await callDesktopLlmProvider({
+                    provider,
+                    baseUrl: `${serverUrl}${provider === 'ailis-cloud' ? '/api/llm/v1' : '/v1'}`,
+                    apiKey: 'test-secret-key',
+                    model: 'demo-model',
+                    timeoutMs: 5000
+                }, request);
+                assert.equal(result.ok, true, `${provider}, canonical=${canonical}`);
+                assert.deepEqual(receivedRequest.body.messages, messages);
+            }
+        }
+    });
+
+    it('adapts DeepSeek developer roles without promoting recalled memory to system', async () => {
+        const messages = [
+            { role: 'system', content: 'Fixed rules.' },
+            { role: 'developer', content: '<permissions instructions>Host permissions.</permissions instructions>' },
+            { role: 'developer', content: '<memory_context>Old assistant claim.</memory_context>' },
+            { role: 'developer', content: '<ailis_semantic_task_memory schema="v1">Summary.</ailis_semantic_task_memory>' },
+            { role: 'user', content: 'Current request.' }
+        ];
+        const result = await callDesktopLlmProvider({
+            provider: 'deepseek', baseUrl: `${serverUrl}/v1`,
+            model: 'deepseek-v4-flash', apiKey: 'test-key', timeoutMs: 5000
+        }, { messages });
+        assert.equal(result.ok, true);
+        assert.deepEqual(receivedRequest.body.messages.map(m => m.role), ['system', 'system', 'user', 'user', 'user']);
+        assert.deepEqual(receivedRequest.body.messages.map(m => m.content), messages.map(m => m.content));
+        assert.deepEqual(messages.map(m => m.role), ['system', 'developer', 'developer', 'developer', 'user']);
+        const { projectChatRole } = require('../electron/ailis-provider-role-policy.cjs');
+        assert.equal(projectChatRole(messages[1], { provider: 'openai-compatible', baseUrl: 'https://api.deepseek.com/v1' }), 'system');
+        assert.equal(projectChatRole(messages[1], { provider: 'openai-compatible', baseUrl: 'https://api.deepseek.com.example.org' }), 'developer');
+    });
+
     it('streams OpenAI-compatible text deltas without changing the final result', async () => {
         const deltas = [];
         const result = await callDesktopLlmProvider({
@@ -397,6 +447,29 @@ describe('desktop LLM provider', () => {
         assert.equal(cloudRequests[0].url, '/api/llm/session');
         assert.equal(cloudRequests[1].url, '/api/llm/v1/chat/completions');
         assert.equal(cloudRequests[1].authorization, 'Bearer signed-ailis-session');
+    });
+
+    it('preserves developer memory and permission roles through the cloud adapter', async () => {
+        const messages = [
+            { role: 'system', content: 'Fixed system rules.' },
+            { role: 'developer', content: '<memory_context>Historical background.</memory_context>' },
+            { role: 'developer', content: '<permissions instructions>Host permissions.</permissions instructions>' },
+            { role: 'user', content: 'Continue.' }
+        ];
+        for (const canonical of [false, true]) {
+            const result = await callDesktopLlmProvider({
+                provider: 'ailis-cloud', baseUrl: `${serverUrl}/api/llm/v1`,
+                model: 'ailis-cloud', timeoutMs: 5000
+            }, canonical ? {
+                instructions: messages[0].content,
+                input: messages.slice(1).map(message => ({
+                    type: 'message', role: message.role,
+                    content: [{ type: 'input_text', text: message.content }]
+                }))
+            } : { messages });
+            assert.equal(result.ok, true);
+            assert.deepEqual(receivedRequest.body.messages, messages);
+        }
     });
 
     it('assembles OpenAI-compatible native tool calls from streamed deltas', async () => {

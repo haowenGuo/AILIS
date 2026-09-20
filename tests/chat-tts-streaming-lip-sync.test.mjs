@@ -4,6 +4,55 @@ import test from 'node:test';
 
 import { ChatTTSSystem } from '../src/chat-tts-system.js';
 
+test('host unknown state blocks avatar input and stops proactive scheduling', async () => {
+    const previousWindow = globalThis.window, previousStorage = globalThis.localStorage;
+    let receive;
+    const calls = [];
+    const system = Object.create(ChatTTSSystem.prototype);
+    system.sessionId = 'host-state-test';
+    system.messageListEl = { replaceChildren() {} };
+    system.setBusy = value => { system.isBusy = value; };
+    system.stopLingeringSpeech = reason => calls.push(reason);
+    system.proactiveCompanion = { stop: () => calls.push('proactive-stop') };
+    system.startAutoChatTimer = () => calls.push('proactive-start');
+    globalThis.localStorage = { setItem() {} };
+    globalThis.window = { addEventListener() {}, ailisDesktop: { tasks: {
+        currentSession: async () => ({ sessionId: system.sessionId }),
+        snapshot: async () => ({ runs: [] }),
+        onEvent: callback => { receive = callback; return () => {}; }
+    } } };
+    try {
+        await system.bindHostTasks();
+        assert.equal(system.isBusy, false);
+        receive({ type: 'run.patch', sessionId: system.sessionId, patch: { status: 'unknown' } });
+        await new Promise(resolve => setImmediate(resolve));
+        assert.equal(system.isBusy, true);
+        assert.ok(calls.includes('proactive-stop'));
+        assert.ok(calls.includes('host-task-unknown'));
+        assert.ok(!calls.includes('proactive-start'));
+    } finally {
+        if (previousWindow === undefined) delete globalThis.window; else globalThis.window = previousWindow;
+        if (previousStorage === undefined) delete globalThis.localStorage; else globalThis.localStorage = previousStorage;
+    }
+});
+
+test('host preview never writes its projection to legacy history or subscribes to duplicate assistant events', async () => {
+    const previousWindow = globalThis.window;
+    const system = Object.create(ChatTTSSystem.prototype);
+    let notices = 0;
+    const forbidden = () => { throw new Error('legacy duplicate writer'); };
+    system.saveBrowserHistory = forbidden;
+    system.chatService = { onBackgroundAssistantMessage: forbidden, onSystemNotice: () => { notices++; } };
+    globalThis.window = { ailisDesktop: { tasks: {}, chatHistory: { save: forbidden } } };
+    try {
+        assert.deepEqual(await system.persistConversation(), { ok: true, hostOwned: true });
+        system.bindBackgroundAssistantMessages();
+        assert.equal(notices, 1);
+    } finally {
+        if (previousWindow === undefined) delete globalThis.window; else globalThis.window = previousWindow;
+    }
+});
+
 function createStreamingHarness() {
     const calls = [];
     const system = Object.create(ChatTTSSystem.prototype);

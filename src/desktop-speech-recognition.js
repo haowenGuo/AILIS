@@ -1,4 +1,5 @@
 import { CONFIG } from './config.js';
+import { createWakeRecorder } from './realtime-voice/wake-recorder.js';
 
 const RECORDING_MIME_TYPES = [
     'audio/webm;codecs=opus',
@@ -144,7 +145,8 @@ export function createDesktopSpeechRecognitionService() {
 
     return {
         supportsRecognition,
-        async createRecorder({ preferredDeviceId = '', timesliceMs = 200 } = {}) {
+        async createRecorder({ preferredDeviceId = '', timesliceMs = 200, wake = false } = {}) {
+            if (wake) return createWakeRecorder({ preferredDeviceId });
             if (!supportsRecognition) {
                 throw new Error('当前桌面环境不支持本地语音识别');
             }

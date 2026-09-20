@@ -2,6 +2,7 @@ const fs = require('fs');
 const fsp = require('fs/promises');
 const os = require('os');
 const path = require('path');
+const { shellArgsForExecutable } = require('./ailis-shell-launch.cjs');
 const crypto = require('crypto');
 const zlib = require('zlib');
 const { execFile, spawn } = require('child_process');
@@ -160,7 +161,7 @@ function explicitShellSpawnSpec(shell = '', command = '', { cwd, env, login = tr
         return {
             supported: true,
             command: executable,
-            args: ['/d', '/s', '/c', command],
+            args: shellArgsForExecutable(executable, command, { login }),
             options: spawnOptions,
             targetCommand: command,
             backend: 'explicit-cmd'
@@ -170,7 +171,7 @@ function explicitShellSpawnSpec(shell = '', command = '', { cwd, env, login = tr
         return {
             supported: true,
             command: executable,
-            args: ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', command],
+            args: shellArgsForExecutable(executable, command, { login }),
             options: spawnOptions,
             targetCommand: command,
             backend: 'explicit-powershell'
@@ -179,7 +180,7 @@ function explicitShellSpawnSpec(shell = '', command = '', { cwd, env, login = tr
     return {
         supported: true,
         command: executable,
-        args: [login === false ? '-c' : '-lc', command],
+        args: shellArgsForExecutable(executable, command, { login }),
         options: spawnOptions,
         targetCommand: command,
         backend: 'explicit-shell'
@@ -2037,6 +2038,18 @@ function resolveWorkdir(args, context, runtime) {
     return resolveTargetPath(args.workdir || args.cwd || runtime.workspaceDir || runtime.workspaceRoot || '.', runtime);
 }
 
+function validateWorkingDirectory(workdir) {
+    try {
+        if (!fs.statSync(workdir).isDirectory()) {
+            const error = new Error('not a directory'); error.code = 'ENOTDIR'; throw error;
+        }
+    } catch (cause) {
+        const error = new Error(`Invalid working directory: ${workdir} (${cause.code || cause.message})`, { cause });
+        error.code = 'invalid_working_directory';
+        throw error;
+    }
+}
+
 function appendBounded(buffer, chunk, maxBytes = DEFAULT_PROCESS_BUFFER_BYTES) {
     const text = Buffer.isBuffer(chunk) ? chunk.toString('utf8') : String(chunk);
     const merged = buffer + text;
@@ -2402,7 +2415,7 @@ class ComputerRuntime {
         });
     }
 
-    createSessionRecord({ command, workdir, child, timeoutMs, outputCapture = null }) {
+    createSessionRecord({ command, workdir, child, timeoutMs, outputCapture = null, runId = '' }) {
         const id = randomUUID();
         const record = {
             id,
@@ -2417,6 +2430,7 @@ class ComputerRuntime {
             stdout: '',
             stderr: '',
             child,
+            runId,
             timeout: null,
             outputCapture,
             outputStore: summarizeExecOutputCapture(outputCapture)
@@ -2432,7 +2446,7 @@ class ComputerRuntime {
             record.updatedAt = Date.now();
         });
         child.on('exit', (code, signal) => {
-            record.status = 'exited';
+            if (record.status !== 'timeout') record.status = 'exited';
             record.exitCode = code;
             record.signal = signal;
             record.updatedAt = Date.now();
@@ -2452,6 +2466,9 @@ class ComputerRuntime {
         });
         child.on('error', (error) => {
             record.status = 'error';
+            record.error = error.message || String(error);
+            record.errorCode = error.code;
+            if (record.timeout) { clearTimeout(record.timeout); record.timeout = null; }
             record.stderr = appendBounded(record.stderr, `\n${error.message || error}`);
             record.outputCapture?.append('stderr', `\n${error.message || error}`);
             record.updatedAt = Date.now();
@@ -2518,7 +2535,9 @@ class ComputerRuntime {
         const running = record.status === 'running';
         const outputStore = record.outputStore || summarizeExecOutputCapture(record.outputCapture);
         return {
-            status: 'completed',
+            status: ['error', 'timeout'].includes(record.status) ? 'error' : 'completed',
+            error: record.error || (record.status === 'timeout' ? 'Process timed out' : undefined),
+            errorCode: record.errorCode,
             action: options.action || 'exec_command',
             command: record.command,
             workdir: record.workdir,
@@ -2619,11 +2638,13 @@ class ComputerRuntime {
             });
         }
         const cols = normalizeNumber(args.cols, 100, 20, 400);
+        validateWorkingDirectory(workdir);
         const rows = normalizeNumber(args.rows, 30, 5, 200);
         const ptySpec = getRuntimePlatform(runtime).ptySpawnOptions({
             command,
             executable: args.executable || args.shell,
             args: args.args,
+            login: args.login !== false,
             cwd: workdir,
             env: args.env,
             term: normalizeString(args.term, 'xterm-256color'),
@@ -2635,6 +2656,7 @@ class ComputerRuntime {
         const terminal = ptyLoad.pty.spawn(ptySpec.executable, ptySpec.args, ptySpec.options);
         const record = {
             id: randomUUID(),
+            runId: context.runId || '',
             command,
             executable: ptySpec.executable,
             args: ptySpec.args,
@@ -2659,6 +2681,12 @@ class ComputerRuntime {
             record.exitCode = exitCode;
             record.signal = signal;
             record.updatedAt = Date.now();
+            // node-pty 1.1.x closes ConPTY's output socket on natural exit but
+            // leaves its relay worker alive. Release only that owned IPC worker;
+            // do not call kill() with an exited/reusable process id.
+            if (process.platform === 'win32') {
+                terminal._agent?._conoutSocketWorker?.dispose?.();
+            }
         });
         this.ptySessions.set(record.id, record);
         return createTextResult(JSON.stringify(this.publicPty(record), null, 2), {
@@ -2815,6 +2843,7 @@ class ComputerRuntime {
                 workdir
             });
         }
+        validateWorkingDirectory(workdir);
         const timeoutMs = normalizeNumber(args.timeoutMs || args.timeout, DEFAULT_EXEC_TIMEOUT_MS, 1000, 10 * 60 * 1000);
         const maxOutputTokens = normalizeNumber(args.max_output_tokens || args.maxOutputTokens, DEFAULT_EXEC_MAX_OUTPUT_TOKENS, 256, 100000);
         const startedAt = Date.now();
@@ -2865,6 +2894,9 @@ class ComputerRuntime {
                 details
             };
         }
+        this.runChildren ||= new Map();
+        this.runChildren.set(child, { child, runId: context.runId || '' });
+        child.once('close', () => this.runChildren.delete(child));
         return await new Promise((resolve) => {
             let settled = false;
             let timedOut = false;
@@ -2995,6 +3027,7 @@ class ComputerRuntime {
             details.stdout = details.output;
             return createTextResult(details.output || JSON.stringify(details, null, 2), details);
         }
+        validateWorkingDirectory(workdir);
         const timeoutMs = normalizeNumber(args.timeoutMs || args.timeout, DEFAULT_SESSION_TIMEOUT_MS, 1000, 24 * 60 * 60 * 1000);
         const platformAdapter = getRuntimePlatform(runtime);
         const spawnSpec = explicitShellSpawnSpec(args.shell, command, {
@@ -3046,7 +3079,7 @@ class ComputerRuntime {
                 details
             };
         }
-        const record = this.createSessionRecord({ command, workdir, child, timeoutMs, outputCapture });
+        const record = this.createSessionRecord({ command, workdir, child, timeoutMs, outputCapture, runId: context.runId || '' });
         const details = await this.waitForProcessSnapshot(record, yieldTimeMs);
         details.max_output_tokens = maxOutputTokens;
         details.output = truncateByApproxTokens(collectSessionText(record), maxOutputTokens);
@@ -3059,7 +3092,8 @@ class ComputerRuntime {
             annotateExecDetails(details, { command, args: commandArgs, platformAdapter }),
             outputStore
         );
-        return createTextResult(formatExecContent(annotatedDetails), annotatedDetails);
+        return { ...createTextResult(formatExecContent(annotatedDetails), annotatedDetails),
+            ...(annotatedDetails.status === 'error' ? { isError: true } : {}) };
     }
 
     async sessionStart(args, context, runtime) {
@@ -3084,6 +3118,7 @@ class ComputerRuntime {
                 workdir
             });
         }
+        validateWorkingDirectory(workdir);
         const timeoutMs = normalizeNumber(args.timeoutMs || args.timeout, DEFAULT_SESSION_TIMEOUT_MS, 1000, 24 * 60 * 60 * 1000);
         const platformAdapter = getRuntimePlatform(runtime);
         const spawnSpec = platformAdapter.commandSpawnSpec
@@ -3125,7 +3160,7 @@ class ComputerRuntime {
             }, outputStore);
             return createErrorResult('error', error?.message || String(error), details);
         }
-        const record = this.createSessionRecord({ command, workdir, child, timeoutMs, outputCapture });
+        const record = this.createSessionRecord({ command, workdir, child, timeoutMs, outputCapture, runId: context.runId || '' });
         return createTextResult(JSON.stringify(this.publicSession(record), null, 2), {
             status: 'completed',
             action: 'session_start',
@@ -3214,7 +3249,8 @@ class ComputerRuntime {
             details.bytes_written = Buffer.byteLength(input);
             const outputStore = await summarizeRecordOutputStore(processRecord);
             const withOutputStore = attachOutputStoreDetails(details, outputStore);
-            return createTextResult(formatExecContent(withOutputStore), withOutputStore);
+            return { ...createTextResult(formatExecContent(withOutputStore), withOutputStore),
+                ...(withOutputStore.status === 'error' ? { isError: true } : {}) };
         }
         if (input && ptyRecord.status !== 'running') {
             return createErrorResult('error', `PTY 会话不是 running：${ptyRecord.status}`, { sessionId: id, status: ptyRecord.status });
@@ -3262,6 +3298,21 @@ class ComputerRuntime {
             outputId: record.outputStore?.outputId,
             outputStore: record.outputStore
         });
+    }
+
+    async stopOwnedRun(runId) {
+        if (!runId) return false;
+        const alive = record => record.child
+            ? Boolean(record.child.pid && record.child.exitCode === null && record.child.signalCode === null)
+            : record.status === 'running';
+        const records = [...this.sessions.values(), ...this.ptySessions.values(), ...(this.runChildren?.values() || [])].filter(record => record.runId === runId && alive(record));
+        for (const record of records) {
+            if (record.child) await this.platformAdapter.killProcessTree(record.child, 'SIGTERM');
+            else record.terminal?.kill();
+        }
+        const until = Date.now() + 15000;
+        while (records.some(alive) && Date.now() < until) await new Promise(resolve => setTimeout(resolve, 50));
+        return records.every(record => !alive(record));
     }
 
     async shutdown() {

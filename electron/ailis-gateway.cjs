@@ -2,6 +2,8 @@ const http = require('http');
 const fs = require('fs');
 const fsp = require('fs/promises');
 const path = require('path');
+const { assertRealPathInside, initializeOwnedWorkspace } = require('./ailis-filesystem-boundary.cjs');
+const { applyLocalPatch } = require('./ailis-local-patch.cjs');
 const { EventEmitter } = require('events');
 const { randomUUID } = require('crypto');
 const { pathToFileURL } = require('url');
@@ -1174,6 +1176,7 @@ class AILISGateway extends EventEmitter {
         this.app = options.app;
         this.projectRoot = path.resolve(options.projectRoot || PROJECT_ROOT);
         this.workspaceRoot = path.resolve(options.workspaceRoot || this.projectRoot);
+        this.initializeOwnedWorkspace = options.initializeOwnedWorkspace === true;
         this.taskVerificationExecutor = typeof options.taskVerificationExecutor === 'function'
             ? options.taskVerificationExecutor
             : null;
@@ -1446,7 +1449,7 @@ class AILISGateway extends EventEmitter {
 
     async executeGatewayToolSearch(args = {}) {
         const query = normalizeString(args.query || args.q);
-        const limit = Math.max(1, Math.min(Number(args.limit || 12), 50));
+        const limit = Math.max(1, Math.min(Number(args.limit ?? 12), 50));
         const retrievalLimit = Math.max(limit, Math.min(50, Math.max(12, limit * 4)));
         const includeDirect = args.includeDirect === true;
         const local = this.gatewayToolRuntimeRegistry.search(query, retrievalLimit)
@@ -1563,6 +1566,7 @@ class AILISGateway extends EventEmitter {
             return this.getStatus({ includeAgentRunner: false });
         }
 
+        if (this.initializeOwnedWorkspace) await initializeOwnedWorkspace(this.workspaceRoot);
         await fsp.mkdir(this.auditDir, { recursive: true });
         this.server = http.createServer((req, res) => {
             this.handleHttpRequest(req, res).catch((error) => {
@@ -1715,7 +1719,7 @@ class AILISGateway extends EventEmitter {
                 preferenceEventCount: result?.run?.preferenceEventCount || 0,
                 affinityChanged: result?.run?.affinityChanged === true
             });
-            if (result?.status === 'rebuild_partial') {
+            if (['rebuild_partial', 'partial_completed'].includes(result?.status)) {
                 this.scheduleProfileCurationSoon('profile_rebuild_resume');
             }
             return result;
@@ -1956,6 +1960,13 @@ class AILISGateway extends EventEmitter {
     }
 
     emitGatewayEvent(type, payload = {}) {
+        if (type === 'agent.run.started') {
+            const owner = this.activeUnifiedTurns?.get(payload.sessionId);
+            if (owner?.runId === payload.runId) {
+                for (const pending of owner.pendingInteractionInputs || []) this.ensureAgentRunner().enqueueRunInput(pending);
+                owner.pendingInteractionInputs = [];
+            }
+        }
         const eventRunId = normalizeString(
             payload.runId || payload.childRunId || payload.payload?.runId
         );
@@ -2677,6 +2688,7 @@ class AILISGateway extends EventEmitter {
 
         this.emitGatewayEvent('tool.call.started', {
             callId,
+            runId: transcriptRunId, sessionId: transcriptSessionId,
             tool: toolId
         });
 
@@ -2782,7 +2794,9 @@ class AILISGateway extends EventEmitter {
             }
             const result = await withTimeout(
                 Number(request.timeoutMs || context.timeoutMs || TOOL_CALL_TIMEOUT_MS),
-                () => this.callAgentRuntimeTool({ callId, toolId, args, context, workspaceDir })
+                () => this.taskInteraction
+                    ? this.taskInteraction.trackTool(context, () => this.callAgentRuntimeTool({ callId, toolId, args, context, workspaceDir }))
+                    : this.callAgentRuntimeTool({ callId, toolId, args, context, workspaceDir })
             );
             const guardedResult = this.runtime.guardToolResult(result, { toolId, callId });
             attachObservationContract(guardedResult, { toolId });
@@ -2887,7 +2901,7 @@ class AILISGateway extends EventEmitter {
                 status,
                 durationMs: response.durationMs
             });
-            this.emitGatewayEvent('tool.call.finished', response);
+            this.emitGatewayEvent('tool.call.finished', { ...response, runId: transcriptRunId, sessionId: transcriptSessionId });
             return response;
         } catch (error) {
             const status = classifyError(error);
@@ -2977,7 +2991,7 @@ class AILISGateway extends EventEmitter {
                 error: response.error,
                 durationMs: response.durationMs
             });
-            this.emitGatewayEvent('tool.call.finished', response);
+            this.emitGatewayEvent('tool.call.finished', { ...response, runId: transcriptRunId, sessionId: transcriptSessionId });
             return response;
         }
     }
@@ -3148,6 +3162,23 @@ class AILISGateway extends EventEmitter {
     async runUnifiedAgentTurn({ input, context, sessionId, runId, llmSettings, finalize = async (result) => result }) {
         const runner = this.ensureAgentRunner();
         const active = this.activeUnifiedTurns.get(sessionId);
+        if (input.interactionStart && active) return { ok: false, status: 'session_busy', error: '此会话已由其他入口占用，未把消息转投过去' };
+        // UI additions target one exact turn. Never wait and silently create a
+        // different turn when this one closes while the input gate is running.
+        if (input.expectedRunId) {
+            if (!active || active.runId !== input.expectedRunId || active.finalizing || active.stopping) {
+                return { ok: false, status: 'run_conflict', error: '目标任务已经结束或正在停止' };
+            }
+            const pending = { runId: active.runId, sessionId,
+                message: input.message, clientMessageId: input.clientMessageId };
+            let accepted = false;
+            if (runner.activeRuns.has(active.runId)) accepted = runner.enqueueRunInput(pending);
+            else if ((active.pendingInteractionInputs || []).length < 32) {
+                (active.pendingInteractionInputs ||= []).push(pending); accepted = true;
+            }
+            return { ok: accepted, steerAccepted: accepted, deferAssistantCommit: true,
+                status: accepted ? 'running' : 'run_conflict', runId: active.runId, sessionId };
+        }
         if (active) {
             // Attachments and proactive packets must not be silently lost in the
             // text-only steering queue. Serialize those turns after the writer.
@@ -3280,6 +3311,7 @@ class AILISGateway extends EventEmitter {
                 emberHarness: summarizeEmberHarnessRecord(inputGate)
             };
         }
+        if (input.abortSignal?.aborted) return { ok: false, status: 'interrupted', runId, sessionId };
         const agentRole = normalizeString(input.agentRole || context.agentRole).toLowerCase();
         const explicitChildRole = ['task', 'task_agent', 'worker', 'subagent', 'child_agent'].includes(agentRole);
         const unifiedOwnsTurn = !explicitChildRole && (agentRole === 'unified_agent' || context.unifiedAgent === true ||
@@ -3417,6 +3449,8 @@ class AILISGateway extends EventEmitter {
     async interruptAgentRun(request = {}) {
         const input = request && typeof request === 'object' ? request : {};
         const context = input.context && typeof input.context === 'object' ? input.context : {};
+        const owner = this.activeUnifiedTurns.get(input.sessionId || context.sessionId || '');
+        if (owner && input.runId && owner.runId === input.runId) owner.stopping = true;
         return await this.ensureAgentRunner().requestInterruptRun({
             runId: input.runId || context.runId || '',
             sessionId: input.sessionId || input.sessionKey || context.sessionId || context.sessionKey || '',
@@ -4879,13 +4913,6 @@ class AILISGateway extends EventEmitter {
             });
         }
         if (toolId === COMPUTER_TOOL_ID) {
-            const action = normalizeString(args.action || args.operation || args.intent).toLowerCase().replace(/[-\s]+/g, '_');
-            if (['exec_command', 'exec', 'run'].includes(action)) {
-                const interceptedPatch = this.extractPatchFromCommand(args.cmd || args.command);
-                if (interceptedPatch) {
-                    return await this.executeLocalApplyPatch(interceptedPatch, workspaceDir, context);
-                }
-            }
             return await this.computerTool.execute(args, context, {
                 workspaceDir,
                 workspaceRoot: this.workspaceRoot,
@@ -4992,16 +5019,6 @@ class AILISGateway extends EventEmitter {
                 reason
             }
         };
-    }
-
-    extractPatchFromCommand(command = '') {
-        const text = normalizeString(command);
-        const start = text.indexOf('*** Begin Patch');
-        const end = text.indexOf('*** End Patch');
-        if (start < 0 || end < start) {
-            return '';
-        }
-        return text.slice(start, end + '*** End Patch'.length).trim();
     }
 
     parseLocalPatch(input = '') {
@@ -5117,36 +5134,16 @@ class AILISGateway extends EventEmitter {
     async executeLocalApplyPatch(input, workspaceDir, context = {}) {
         this.assertPatchInsideWorkspace(input, workspaceDir, context);
         const operations = this.parseLocalPatch(input);
-        const changedFiles = [];
-        for (const operation of operations) {
-            const target = this.resolveToolPath(operation.path, workspaceDir, 'patchPath', context);
-            if (operation.type === 'add') {
-                const content = this.patchBodyToText(operation.body);
-                await fsp.mkdir(path.dirname(target), { recursive: true });
-                await fsp.writeFile(target, content, 'utf8');
-                changedFiles.push({ action: 'add', path: target, bytes: Buffer.byteLength(content, 'utf8') });
-                continue;
-            }
-            if (operation.type === 'delete') {
-                await fsp.rm(target, { force: true });
-                changedFiles.push({ action: 'delete', path: target });
-                continue;
-            }
-            const source = await fsp.readFile(target, 'utf8').catch((error) => {
-                throwBlocked(`apply_patch update target not found: ${operation.path}`, { error: error?.message || String(error) });
-            });
-            const next = this.applyUpdatePatchText(source, operation.body);
-            await fsp.writeFile(target, next, 'utf8');
-            changedFiles.push({ action: 'update', path: target, bytes: Buffer.byteLength(next, 'utf8') });
-        }
-        return {
-            content: [{ type: 'text', text: `apply_patch completed: ${changedFiles.length} file(s)` }],
-            details: {
-                status: 'completed',
-                action: 'apply_patch',
-                changedFiles
-            }
-        };
+        return applyLocalPatch({ operations,
+            resolveTarget: (rawPath) => {
+                const target = this.resolveToolPath(rawPath, workspaceDir, 'patchPath', context);
+                assertRealPathInside(workspaceDir, target);
+                return target;
+            },
+            addText: (body) => this.patchBodyToText(body),
+            updateText: (source, body) => this.applyUpdatePatchText(source, body),
+            onCommitted: (file) => this.taskInteraction?.fileChange(context, file)
+        });
     }
 
     async executeLocalCoreTool({ toolId, args, context, workspaceDir }) {
@@ -5195,8 +5192,11 @@ class AILISGateway extends EventEmitter {
         if (toolId === 'write') {
             const target = this.resolveToolPath(args.path, workspaceDir, 'path', context);
             const content = typeof args.content === 'string' ? args.content : '';
+            const before = this.taskInteraction?.readBeforeWrite(context, target);
             await fsp.mkdir(path.dirname(target), { recursive: true });
             await fsp.writeFile(target, content, args.encoding || 'utf8');
+            if (before) this.taskInteraction.fileChange(context, { target, before: before.data,
+                after: Buffer.from(content, args.encoding || 'utf8'), uncertain: before.uncertain });
             return {
                 content: [{ type: 'text', text: `write completed: ${target}` }],
                 details: {
@@ -5213,10 +5213,6 @@ class AILISGateway extends EventEmitter {
         }
 
         if (toolId === 'exec_command') {
-            const interceptedPatch = this.extractPatchFromCommand(args.cmd || args.command);
-            if (interceptedPatch) {
-                return await this.executeLocalApplyPatch(interceptedPatch, workspaceDir, context);
-            }
             const workdir = this.resolveToolPath(args.workdir || workspaceDir, workspaceDir, 'workdir', context);
             return await this.computerTool.execute(
                 {
@@ -5265,10 +5261,6 @@ class AILISGateway extends EventEmitter {
         }
 
         if (toolId === 'exec') {
-            const interceptedPatch = this.extractPatchFromCommand(args.command || args.cmd);
-            if (interceptedPatch) {
-                return await this.executeLocalApplyPatch(interceptedPatch, workspaceDir, context);
-            }
             const finalArgs = this.prepareToolArgs({ toolId, args, context, workspaceDir });
             return await this.computerTool.execute(
                 {
@@ -5416,6 +5408,7 @@ class AILISGateway extends EventEmitter {
                 workspaceDir
             });
         }
+        assertRealPathInside(workspaceDir, target);
         return target;
     }
 

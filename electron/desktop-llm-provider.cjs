@@ -78,7 +78,7 @@ const PROVIDER_OPTIONS = Object.freeze([
 ]);
 
 const DEFAULT_PROVIDER_BASE_URLS = Object.freeze({
-    [AILIS_CLOUD_PROVIDER]: 'https://101.133.239.56/api/llm/v1',
+    [AILIS_CLOUD_PROVIDER]: 'https://150.109.13.189/api/llm/v1',
     [OPENAI_COMPATIBLE_PROVIDER]: 'https://ark.cn-beijing.volces.com/api/v3',
     [DOUBAO_PROVIDER]: 'https://ark.cn-beijing.volces.com/api/v3',
     [DEEPSEEK_PROVIDER]: 'https://api.deepseek.com',
@@ -950,9 +950,11 @@ function shouldPreserveEmptyToolCallReasoningContent(settings = {}, payload = {}
     return ['disabled', 'disable', 'off', 'false', 'none'].includes(thinkingType);
 }
 
+const { projectChatRole } = require('./ailis-provider-role-policy.cjs');
+
 function mapChatMessageForOpenAiCompatible(message = {}, settings = {}) {
     const mapped = {
-        role: message.role === 'developer' ? 'system' : message.role,
+        role: projectChatRole(message, settings),
         content: message.content,
         ...(message.toolCallId ? { tool_call_id: message.toolCallId } : {}),
         ...(message.name ? { name: message.name } : {}),

@@ -7,6 +7,19 @@ import {
 } from './i18n.js';
 import { createFormBaseline, hasFormChanges } from './control-panel-draft.js';
 import { installSettingsSearch } from './settings-search.js';
+import wakeWordCatalog from '../shared/wake-words.json';
+
+const defaultWakeWords = wakeWordCatalog.filter(row => row.default).map(row => row.word);
+const wakeWordContainer = document.getElementById('wake-words');
+for (const row of wakeWordCatalog) {
+    const label = document.createElement('label');
+    label.style.cssText = 'display:inline-flex;align-items:center;gap:6px;margin:4px 12px 4px 0';
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox'; checkbox.value = row.word; checkbox.checked = row.default;
+    checkbox.addEventListener('change', () => syncSaveButton());
+    label.append(checkbox, document.createTextNode(row.word));
+    wakeWordContainer?.append(label);
+}
 
 const elements = {
     llmModeButtons: [...document.querySelectorAll('[data-llm-mode]')],
@@ -377,7 +390,7 @@ const speechModeLabels = {
 const recognitionModeLabels = {
     'fast-vad': '快速 ASR：低延迟按钮',
     'auto-vad': '按钮开启 ASR',
-    continuous: '自动 ASR 常驻检测',
+    continuous: '自动 ASR（唤醒词触发）',
     manual: '手动开始/停止'
 };
 
@@ -450,7 +463,7 @@ const llmProviderLabels = {
 };
 
 const fallbackLlmProviderDefaultBaseUrls = {
-    'ailis-cloud': 'https://101.133.239.56/api/llm/v1',
+    'ailis-cloud': 'https://150.109.13.189/api/llm/v1',
     'openai-compatible': 'https://ark.cn-beijing.volces.com/api/v3',
     doubao: 'https://ark.cn-beijing.volces.com/api/v3',
     deepseek: 'https://api.deepseek.com',
@@ -488,7 +501,7 @@ const llmPresetCatalog = [
         label: 'AILIS Cloud（推荐，免 API Key）',
         help: 'Agent、记忆与电脑工具留在本机，仅模型推理经 AILIS 服务器中转。',
         provider: 'ailis-cloud',
-        baseUrl: 'https://101.133.239.56/api/llm/v1',
+        baseUrl: 'https://150.109.13.189/api/llm/v1',
         models: [
             { id: 'ailis-cloud', label: 'AILIS 托管模型（服务器自动选择）' }
         ]
@@ -1720,6 +1733,7 @@ function normalizePreferences(preferences = {}) {
         hostedTtsBaseUrl: String(preferences.hostedTtsBaseUrl || '').trim(),
         chunkedTtsEnabled: preferences.chunkedTtsEnabled !== false,
         recognitionMode: String(preferences.recognitionMode || 'fast-vad'),
+        wakeWords: wakeWordCatalog.filter(row => (Array.isArray(preferences.wakeWords) ? preferences.wakeWords : defaultWakeWords).includes(row.word)).map(row => row.word),
         conversationMode: 'assistant',
         uiLanguage: normalizeUiLanguage(preferences.uiLanguage || 'zh-CN'),
         preferredMicDeviceId: String(preferences.preferredMicDeviceId || ''),
@@ -2107,6 +2121,7 @@ function readFormPreferences({ includeSecret = false } = {}) {
         hostedTtsBaseUrl: elements.hostedTtsBaseUrl.value.trim(),
         chunkedTtsEnabled: elements.chunkedTtsEnabled.checked,
         recognitionMode: elements.recognitionMode.value,
+        wakeWords: [...wakeWordContainer.querySelectorAll('input:checked')].map(input => input.value),
         conversationMode: elements.conversationMode?.value || currentPreferences?.conversationMode || 'assistant',
         uiLanguage: elements.uiLanguage?.value || currentPreferences?.uiLanguage || 'zh-CN',
         preferredMicDeviceId: elements.preferredMic.value,
@@ -5607,6 +5622,7 @@ function fillForm(preferences) {
     elements.hostedTtsBaseUrl.value = normalized.hostedTtsBaseUrl;
     elements.chunkedTtsEnabled.checked = normalized.chunkedTtsEnabled;
     elements.recognitionMode.value = normalized.recognitionMode;
+    for (const input of wakeWordContainer.querySelectorAll('input')) input.checked = normalized.wakeWords.includes(input.value);
     if (elements.uiLanguage) {
         elements.uiLanguage.value = normalized.uiLanguage;
     }

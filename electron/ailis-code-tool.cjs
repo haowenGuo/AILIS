@@ -614,7 +614,9 @@ async function actionLspStatus(args, context, runtime) {
         return guard;
     }
     const version = ts.version;
-    const tls = await runExecFile(process.platform === 'win32' ? 'where.exe' : 'which', ['typescript-language-server'], { timeout: 5000 });
+    const tls = await runExecFile(process.execPath, [require.resolve('typescript-language-server/lib/cli.mjs'), '--version'], {
+        cwd, timeout: 5000, env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }
+    });
     return createTextResult(JSON.stringify({
         action: 'lsp_status',
         typescriptVersion: version,
@@ -640,8 +642,9 @@ async function actionLspDiagnostics(args, context, runtime) {
         return createErrorResult('not_found', `路径不存在：${target}`, { path: target });
     }
     if (stat.isDirectory()) {
-        const result = await runExecFile('npx', ['tsc', '--noEmit', '--pretty', 'false'], {
+        const result = await runExecFile(process.execPath, [require.resolve('typescript/lib/tsc.js'), '--noEmit', '--pretty', 'false'], {
             cwd: target,
+            env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
             timeout: normalizeNumber(args.timeoutMs, 60000, 1000, 300000)
         });
         return createTextResult(result.stdout || result.stderr || 'tsc completed', {
@@ -650,7 +653,8 @@ async function actionLspDiagnostics(args, context, runtime) {
             path: target,
             exitCode: result.exitCode,
             stdout: result.stdout,
-            stderr: result.stderr
+            stderr: result.stderr,
+            error: result.error
         });
     }
     const source = await fsp.readFile(target, 'utf8');

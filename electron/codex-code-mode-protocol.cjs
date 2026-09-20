@@ -592,9 +592,9 @@ function createExecWaitToolSpec() {
             required: ['cell_id'],
             properties: {
                 cell_id: { type: 'string', description: 'Identifier of the running exec cell.' },
-                yield_time_ms: { type: 'number', description: 'Wait before yielding more output. Defaults to 10000 ms.' },
-                max_tokens: { type: 'number', description: 'Output token budget for this wait call. Defaults to 10000 tokens.' },
-                terminate: { type: 'boolean', description: 'True stops the running exec cell; false or omitted waits for output.' }
+                yield_time_ms: { anyOf: [{ type: 'number', minimum: 0, maximum: 300000 }, { type: 'null', enum: [null] }], default: DEFAULT_WAIT_YIELD_TIME_MS, description: 'Wait before yielding more output. Defaults to 10000 ms.' },
+                max_tokens: { anyOf: [{ type: 'number', minimum: 1, maximum: 50000 }, { type: 'null', enum: [null] }], default: DEFAULT_MAX_OUTPUT_TOKENS_PER_EXEC_CALL, description: 'Output token budget for this wait call. Defaults to 10000 tokens.' },
+                terminate: { anyOf: [{ type: 'boolean' }, { type: 'null', enum: [null] }], default: false, description: 'True stops the running exec cell; false or omitted waits for output.' }
             },
             additionalProperties: false
         }

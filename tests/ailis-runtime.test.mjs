@@ -386,9 +386,10 @@ test('AILIS Gateway exposes runtime tools, update_plan, policy checks, and trans
                 sessionKey: 'runtime-gateway'
             }
         });
-        assert.equal(intercepted.body.ok, true, intercepted.body.error);
-        assert.equal(intercepted.body.result.details.action, 'apply_patch');
-        assert.equal(await fs.readFile(path.join(workspaceRoot, 'intercepted.txt'), 'utf8'), 'hello intercept\n');
+        // Command text is not a second patch API and does not bypass approval.
+        assert.notEqual(intercepted.body.result?.details?.action, 'apply_patch');
+        assert.match(JSON.stringify(intercepted.body), /needs_approval|approval_required/);
+        await assert.rejects(fs.stat(path.join(workspaceRoot, 'intercepted.txt')), { code: 'ENOENT' });
 
         const transcript = await jsonFetch(`${baseUrl}/transcript?runId=runtime-gateway-run`);
         assert.equal(transcript.body.ok, true);

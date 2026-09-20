@@ -184,7 +184,7 @@ if (process.type === 'renderer') {
             mode('local');
             result.local = visible('local-llm-runtime-panel') && !visible('llm-direct-fields') && $('llm-model').value === 'local-test';
             mode('server');
-            result.serverRestored = $('llm-base-url').value === 'https://101.133.239.56/api/llm/v1' &&
+            result.serverRestored = $('llm-base-url').value === 'https://150.109.13.189/api/llm/v1' &&
                 $('llm-model').value === 'ailis-cloud';
             mode('direct');
             result.directRestored = $('llm-model').value === 'my-ds-model' && $('llm-base-url').value === 'https://direct.example/v1';
@@ -199,13 +199,13 @@ if (process.type === 'renderer') {
         assert.equal(await evaluate(() => document.getElementById('footer-bar').dataset.state), 'dirty');
         assert.equal(saves, 1, 'selecting the managed server must activate it immediately');
         assert.equal(prefs.llmProvider, 'ailis-cloud');
-        assert.equal(prefs.llmBaseUrl, 'https://101.133.239.56/api/llm/v1');
+        assert.equal(prefs.llmBaseUrl, 'https://150.109.13.189/api/llm/v1');
         assert.equal(prefs.llmModel, 'ailis-cloud');
         assert.equal(externalRequests, initialExternalRequests, 'mode switches must not call remote services');
         await evaluate(() => document.getElementById('save-btn').click());
         for (let i = 0; i < 40 && saves < 2; i++) await new Promise((resolve) => setTimeout(resolve, 50));
         assert.equal(saves, 2);
-        assert.equal(prefs.llmConnectionProfiles.server.baseUrl, 'https://101.133.239.56/api/llm/v1');
+        assert.equal(prefs.llmConnectionProfiles.server.baseUrl, 'https://150.109.13.189/api/llm/v1');
         assert.equal(prefs.llmConnectionProfiles.server.model, 'ailis-cloud');
         assert.equal(prefs.ollamaTarget.modelId, 'local-test');
         assert.equal(prefs.desktopNativeTtsRate, 1.23, 'removed legacy controls must not reset saved values');
@@ -224,7 +224,7 @@ if (process.type === 'renderer') {
             document.querySelector('[data-llm-mode="server"]').click();
             return document.getElementById('llm-base-url').value;
         });
-        assert.equal(restored, 'https://101.133.239.56/api/llm/v1');
+        assert.equal(restored, 'https://150.109.13.189/api/llm/v1');
         assert.ok((await evaluate(() => document.getElementById('model-active-provider').textContent)).includes('AILIS Cloud'));
         await new Promise((resolve) => setTimeout(resolve, 500));
         const screenshot = path.join(temp, 'server-mode.png');

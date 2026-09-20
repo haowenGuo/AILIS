@@ -1363,10 +1363,6 @@ class AILISRuntime {
             if (typeof args.input === 'string') {
                 return { class: 'readonly_scoped', mutates: false, requiresApprovalCapable: false, action: 'code_mode_orchestration' };
             }
-            const command = normalizeString(args.cmd || args.command);
-            if (command.includes('*** Begin Patch') && command.includes('*** End Patch')) {
-                return { class: 'mutating', mutates: true, requiresApprovalCapable: false, action: 'apply_patch_intercept' };
-            }
         }
         if (toolId === 'write_stdin') {
             const chars = typeof args.chars === 'string'
@@ -1385,12 +1381,6 @@ class AILISRuntime {
             return { class: 'exec_capable', mutates: true, requiresApprovalCapable: true, action };
         }
         if (toolId === 'computer') {
-            if (['exec_command', 'exec', 'run'].includes(action)) {
-                const command = normalizeString(args.cmd || args.command);
-                if (command.includes('*** Begin Patch') && command.includes('*** End Patch')) {
-                    return { class: 'mutating', mutates: true, requiresApprovalCapable: false, action: 'apply_patch_intercept' };
-                }
-            }
             if (action === 'write_stdin') {
                 const chars = typeof args.chars === 'string'
                     ? args.chars

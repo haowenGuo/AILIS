@@ -1109,7 +1109,7 @@ class AILISUserProfileCurator {
         const force = options.force === true;
         const loaded = await this.loadState();
         const { state, userProfile, relationshipProfile, affinityState } = loaded;
-        if (!force && state.lastRunDate === runDate) {
+        if (!force && state.lastRunDate === runDate && !state.scanPending) {
             return {
                 ok: true,
                 status: 'already_curated_today',
@@ -1123,28 +1123,46 @@ class AILISUserProfileCurator {
         if (!this.rawMemoryLedger?.replay) {
             return { ok: false, status: 'raw_memory_ledger_not_configured' };
         }
-        const replay = this.rawMemoryLedger.replay({
+        this.emitGatewayEvent('memory.profile_curation.read_started', { runDate });
+        const paged = typeof this.rawMemoryLedger.readCurationPage === 'function';
+        const replayOptions = {
             since: state.cursor.lastProcessedIso || '',
             sinceExclusive: true,
             afterId: state.cursor.lastProcessedEntryId || '',
             includePayload: true,
             limit: Number(options.rawLimit) || 5000,
-            tail: false
+            tail: false,
+            scanCursor: state.scanCursor || null,
+            maxScanBytes: options.maxScanBytes
+        };
+        const replay = paged
+            ? await this.rawMemoryLedger.readCurationPage(replayOptions)
+            : await this.rawMemoryLedger.replay(replayOptions);
+        if (replay.ok === false) return replay;
+        this.emitGatewayEvent('memory.profile_curation.read_completed', {
+            runDate, bytesRead: replay.bytesRead || 0, entryCount: replay.entries?.length || 0,
+            hasMore: replay.hasMore === true, awaitingAppend: replay.awaitingAppend === true
         });
         const replayEntryCount = Math.max(Number(replay.count) || 0, 0);
-        const entries = normalizeArray(replay.entries)
-            .sort((left, right) => String(left.iso || '').localeCompare(String(right.iso || '')));
-        const totalSourceEntryCount = Math.max(replayEntryCount, entries.length);
+        const entries = normalizeArray(replay.entries);
+        if (!paged) entries.sort((left, right) => String(left.iso || '').localeCompare(String(right.iso || '')));
+        // With bounded pages, the remaining count is a lower bound, not a full
+        // archive count. hasMore is the authoritative continuation signal.
+        const totalSourceEntryCount = Math.max(replayEntryCount, entries.length) + (replay.hasMore ? 1 : 0);
         if (!entries.length) {
+            if (paged) state.scanCursor = replay.nextCursor || state.scanCursor;
+            if (paged) state.scanPending = Boolean(replay.hasMore || replay.awaitingAppend);
             const run = {
                 id: randomUUID(),
                 iso: runIso,
                 runDate,
-                status: 'no_new_raw_memory',
+                status: replay.hasMore || replay.awaitingAppend ? 'partial_completed' : 'no_new_raw_memory',
+                remainingEntryCount: replay.hasMore || replay.awaitingAppend ? 1 : 0,
+                remainingEntryCountExact: !paged || replay.countExact === true,
                 processedEntryCount: 0,
                 lastProcessedIso: state.cursor.lastProcessedIso || ''
             };
-            state.lastRunDate = runDate;
+            if (!replay.hasMore && !replay.awaitingAppend) state.lastRunDate = runDate;
             state.updatedAt = runIso;
             state.runCount = Number(state.runCount || 0) + 1;
             state.lastRun = run;
@@ -1152,7 +1170,7 @@ class AILISUserProfileCurator {
             await appendJsonl(this.runsPath, run);
             return {
                 ok: true,
-                status: 'no_new_raw_memory',
+                status: run.status,
                 runDate,
                 run
             };
@@ -1171,6 +1189,19 @@ class AILISUserProfileCurator {
         const appliedProfileItems = new Set();
         const appliedRelationshipItems = new Set();
         const normalizedBatches = [];
+        const checkpointBatch = async (consumed) => {
+            if (paged) state.scanCursor = consumed === entries.length
+                ? replay.nextCursor : replay.entryCursors[consumed - 1];
+            if (paged) state.scanPending = Boolean(consumed < entries.length || replay.hasMore || replay.awaitingAppend);
+            // Save profiles before advancing the scan position. Extraction failure
+            // must never skip the failing batch on the next invocation.
+            await Promise.all([
+                writeJsonFileAtomic(this.profilePath, userProfile),
+                writeJsonFileAtomic(this.relationshipPath, relationshipProfile),
+                writeJsonFileAtomic(this.affinityPath, affinityState)
+            ]);
+            await writeJsonFileAtomic(this.statePath, state);
+        };
 
         const persistRun = async (run, extra = {}) => {
             userProfile.updatedAt = runIso;
@@ -1213,6 +1244,7 @@ class AILISUserProfileCurator {
                 });
                 offset += batchEntries.length;
                 batchCount += 1;
+                await checkpointBatch(offset);
                 continue;
             }
             const promptPayload = buildPromptPayload({
@@ -1317,6 +1349,7 @@ class AILISUserProfileCurator {
             });
             offset += batchEntries.length;
             batchCount += 1;
+            await checkpointBatch(offset);
         }
 
         if (!processedEntryCount) {
@@ -1345,7 +1378,7 @@ class AILISUserProfileCurator {
             };
         }
 
-        const remainingEntryCount = Math.max(0, totalSourceEntryCount - processedEntryCount);
+        const remainingEntryCount = Math.max(replay.awaitingAppend ? 1 : 0, totalSourceEntryCount - processedEntryCount);
         const runStatus = remainingEntryCount > 0 ? 'partial_completed' : 'completed';
         const run = {
             id: randomUUID(),
@@ -1354,6 +1387,7 @@ class AILISUserProfileCurator {
             status: runStatus,
             processedEntryCount,
             remainingEntryCount,
+            remainingEntryCountExact: !paged || replay.countExact === true,
             batchCount,
             evidenceCount,
             profileUpdateCount,

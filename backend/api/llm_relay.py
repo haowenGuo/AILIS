@@ -3,34 +3,51 @@ from contextlib import AsyncExitStack
 from datetime import datetime, timezone
 
 import httpx
-from fastapi import APIRouter, Header, HTTPException, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
+from backend.api.account import require_ai_api_member, require_model_api_member
 from backend.core.config import get_settings
 from backend.services.hosted_agent_service import (
-    HostedAgentRuntimeClient,
     HostedWebSession,
     HostedWebSessionService,
 )
+from backend.infrastructure.redis_state import create_state_store
+from backend.services.llm_gateway import create_llm_gateway
 from backend.services.llm_relay_service import LlmRelayGuard, LlmRelayLimitError
 
 
 router = APIRouter()
 settings = get_settings()
 session_service = HostedWebSessionService()
-runtime_client = HostedAgentRuntimeClient()
+relay_state_store = create_state_store(
+    backend=settings.AILIS_RELAY_STATE_BACKEND,
+    redis_url=settings.REDIS_URL,
+)
+runtime_client = create_llm_gateway()
 relay_guard = LlmRelayGuard(
     requests_per_minute=settings.AILIS_LLM_RELAY_REQUESTS_PER_MINUTE,
     max_concurrent=settings.AILIS_LLM_RELAY_MAX_CONCURRENT_PER_SESSION,
+    state_store=relay_state_store,
+    namespace="session",
 )
 ip_relay_guard = LlmRelayGuard(
     requests_per_minute=settings.AILIS_LLM_RELAY_IP_REQUESTS_PER_MINUTE,
     max_concurrent=settings.AILIS_LLM_RELAY_GLOBAL_MAX_CONCURRENT,
+    state_store=relay_state_store,
+    namespace="ip",
 )
 global_relay_guard = LlmRelayGuard(
     requests_per_minute=settings.AILIS_LLM_RELAY_GLOBAL_REQUESTS_PER_MINUTE,
     max_concurrent=settings.AILIS_LLM_RELAY_GLOBAL_MAX_CONCURRENT,
+    state_store=relay_state_store,
+    namespace="global",
 )
+
+
+async def close_llm_relay_resources() -> None:
+    await runtime_client.aclose()
+    await relay_state_store.close()
 
 
 def _require_relay_enabled() -> None:
@@ -134,6 +151,7 @@ async def _enter_relay_limits(request: Request, session: HostedWebSession) -> As
 async def llm_relay_session(
     authorization: str | None = Header(default=None),
     x_ailis_web_session: str | None = Header(default=None),
+    _user=Depends(require_ai_api_member),
 ):
     _require_relay_enabled()
     token = _request_token(authorization, x_ailis_web_session)
@@ -153,6 +171,7 @@ async def llm_relay_session(
 async def llm_relay_status(
     authorization: str | None = Header(default=None),
     x_ailis_web_session: str | None = Header(default=None),
+    _user=Depends(require_ai_api_member),
 ):
     session = _resolve_session(_request_token(authorization, x_ailis_web_session))
     try:
@@ -174,6 +193,7 @@ async def llm_relay_chat_completions(
     request: Request,
     authorization: str | None = Header(default=None),
     x_ailis_web_session: str | None = Header(default=None),
+    _user=Depends(require_model_api_member),
 ):
     session = _resolve_session(_request_token(authorization, x_ailis_web_session))
     try:
