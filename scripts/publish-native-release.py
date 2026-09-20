@@ -49,7 +49,9 @@ def main():
         assert len(matches) == 1 and matches[0]['conclusion'] == 'success', target
     # The authenticated maintainer creates this exact draft/tag. Actions can upload
     # attachments here, but cannot create or publish releases in this repository.
-    draft = api(f'releases/tags/{tag}')
+    drafts = [release for release in api('releases?per_page=100') if release['tag_name'] == tag]
+    assert len(drafts) == 1
+    draft = drafts[0]
     assert draft['draft'] and draft['target_commitish'] == commit
     assert api('git/ref/tags/' + tag)['object']['sha'] == commit
     stage = Path('publication-stage')
@@ -111,7 +113,7 @@ def main():
         if file.name in existing:
             continue
         subprocess.run(['gh', 'release', 'upload', tag, str(file), '--repo', REPO], check=True)
-    remote = api(f'releases/tags/{tag}')
+    remote = api(f'releases/{draft["id"]}')
     actual = {a['name']: {'size': a['size'], 'digest': a.get('digest')} for a in remote['assets']}
     assert actual == expected and remote['draft'], 'Asset identity mismatch; keep release draft'
     # The maintainer publishes only after this run succeeds with all digests verified.
