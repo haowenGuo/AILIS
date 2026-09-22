@@ -3,7 +3,7 @@
   <h1>AILIS</h1>
   <p><strong>An open-source desktop AI companion that can see, listen, remember, and get real work done.</strong></p>
   <p>
-    <img alt="Version" src="https://img.shields.io/badge/version-1.4.7-2563eb?style=flat-square">
+    <img alt="Version" src="https://img.shields.io/badge/version-1.4.8-2563eb?style=flat-square">
     <img alt="Desktop" src="https://img.shields.io/badge/desktop-Electron-0f172a?style=flat-square">
     <img alt="License" src="https://img.shields.io/badge/license-MIT-059669?style=flat-square">
   </p>
@@ -110,9 +110,9 @@ Humanlike checkpoints come from 30-day companion scenarios, not a 30-day real-us
 
 ## Quick Start
 
-### v1.4.7 update
+### v1.4.8 update
 
-Windows, Linux and both Mac architectures now ship with bundled offline speech recognition and automatic wake-word support. This release improves task output previews, memory processing and spoken replies, and retains the managed-server configuration fixes. Windows installation checks include a real server conversation from a fresh profile. See the [release notes](docs/releases/v1.4.7.md) and [v1.4.7 downloads](https://github.com/haowenGuo/AILIS/releases/tag/v1.4.7).
+This release fixes managed-cloud image-tool authentication and vision capability detection, and adds redacted model-request diagnostics. Windows, Linux and both Mac architectures retain bundled offline speech recognition and wake-word support. See the [release notes](docs/releases/v1.4.8.md) for verification scope and the [v1.4.8 downloads](https://github.com/haowenGuo/AILIS/releases/tag/v1.4.8) for package hashes and platform acceptance reports.
 
 ### Use AILIS
 

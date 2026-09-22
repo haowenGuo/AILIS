@@ -1,3 +1,4 @@
+const { withProviderDiagnostics, createProviderRequestTrace } = require('./ailis-provider-diagnostics.cjs');
 const AILIS_CLOUD_PROVIDER = 'ailis-cloud';
 const OPENAI_COMPATIBLE_PROVIDER = 'openai-compatible';
 const DEFAULT_PROVIDER = OPENAI_COMPATIBLE_PROVIDER;
@@ -997,6 +998,19 @@ function getModelCapabilityHeuristics(provider, model) {
 function getProviderCapabilities(settings = {}) {
     const provider = normalizeProvider(settings.provider);
     const base = PROVIDER_CAPABILITY_TABLE[provider] || PROVIDER_CAPABILITY_TABLE[DEFAULT_PROVIDER];
+    if (provider === AILIS_CLOUD_PROVIDER) {
+        // The public alias does not identify the server's underlying model.
+        // A missing declaration is unknown, not evidence of no vision support.
+        const session = ailisCloudSessionCache.get(normalizeBaseUrl(settings.baseUrl));
+        const vision = session?.expiresAt > Date.now() + 60_000 && typeof session?.vision === 'boolean'
+            ? session.vision : null;
+        const hints = getModelCapabilityHeuristics(provider, settings.model);
+        return { ...base, provider, model: normalizeString(settings.model), vision,
+            longContext: base.longContext === 'model-dependent' ? hints.longContext : Boolean(base.longContext),
+            lowLatency: base.lowLatency === 'model-dependent' ? hints.lowLatency : Boolean(base.lowLatency),
+            visionRouting: 'server-managed',
+            source: vision === null ? 'managed-server-unconfirmed' : 'managed-server-session' };
+    }
     const modelHints = getModelCapabilityHeuristics(provider, settings.model);
     return {
         ...base,
@@ -1022,6 +1036,7 @@ function getResolvedSettings(settings = {}) {
 }
 
 async function fetchJsonWithTimeout(url, requestOptions, timeoutMs, externalSignal = null) {
+    const trace = createProviderRequestTrace(url, requestOptions, timeoutMs);
     const controller = new AbortController();
     let abortedByExternalSignal = false;
     const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
@@ -1035,21 +1050,29 @@ async function fetchJsonWithTimeout(url, requestOptions, timeoutMs, externalSign
         externalSignal.addEventListener('abort', onExternalAbort, { once: true });
     }
     try {
+        await trace.emit('request_started');
         const response = await fetch(url, {
             ...requestOptions,
             signal: controller.signal
         });
+        await trace.headers(response);
+        trace.setPhase('response_body');
+        await trace.emit('body_read_started');
         if (!response.ok) {
             const errorText = await readErrorBody(response);
             return {
                 ok: false,
                 status: response.status,
-                error: errorText || `模型接口请求失败，状态码：${response.status}`
+                error: errorText || `模型接口请求失败，状态码：${response.status}`,
+                details: await trace.fail(null, 'http_error')
             };
         }
+        const data = await response.json();
+        trace.setPhase('completed');
+        await trace.emit('request_completed');
         return {
             ok: true,
-            data: await response.json()
+            data
         };
     } catch (error) {
         const aborted = error?.name === 'AbortError';
@@ -1062,7 +1085,8 @@ async function fetchJsonWithTimeout(url, requestOptions, timeoutMs, externalSign
                     ? '模型请求已被用户中断。'
                     : `模型请求超时（${timeoutMs}ms）`
                 : failure.error,
-            details: failure?.details
+            details: await trace.fail(error, aborted ? (abortedByExternalSignal ? 'aborted' : 'timeout') : failure.code,
+                controller.signal.aborted ? (abortedByExternalSignal ? 'external' : 'deadline') : '')
         };
     } finally {
         clearTimeout(timeoutId);
@@ -1079,6 +1103,7 @@ async function fetchSseWithTimeout(
     externalSignal = null,
     onData = null
 ) {
+    const trace = createProviderRequestTrace(url, requestOptions, timeoutMs);
     const controller = new AbortController();
     let abortedByExternalSignal = false;
     const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
@@ -1093,16 +1118,21 @@ async function fetchSseWithTimeout(
     }
 
     try {
+        await trace.emit('request_started');
         const response = await fetch(url, {
             ...requestOptions,
             signal: controller.signal
         });
+        await trace.headers(response);
+        trace.setPhase('response_body');
+        await trace.emit('body_read_started');
         if (!response.ok) {
             const errorText = await readErrorBody(response);
             return {
                 ok: false,
                 status: response.status,
-                error: errorText || `模型接口请求失败，状态码：${response.status}`
+                error: errorText || `模型接口请求失败，状态码：${response.status}`,
+                details: await trace.fail(null, 'http_error')
             };
         }
         const contentType = normalizeString(response.headers.get('content-type')).toLowerCase();
@@ -1113,19 +1143,23 @@ async function fetchSseWithTimeout(
                 return {
                     ok: false,
                     code: 'invalid_json_response',
-                    error: '模型接口返回了无法解析的 JSON。'
+                    error: '模型接口返回了无法解析的 JSON。',
+                    details: await trace.fail(null, 'invalid_json_response')
                 };
             }
             if (typeof onData === 'function') {
                 await onData(JSON.stringify(parsedJson));
             }
+            trace.setPhase('completed');
+            await trace.emit('request_completed');
             return { ok: true, compatibilityMode: 'json' };
         }
         if (!response.body) {
             return {
                 ok: false,
                 code: 'stream_unavailable',
-                error: '模型接口没有返回可读取的流。'
+                error: '模型接口没有返回可读取的流。',
+                details: await trace.fail(null, 'stream_unavailable')
             };
         }
 
@@ -1158,10 +1192,16 @@ async function fetchSseWithTimeout(
         };
 
         let finished = false;
+        let firstChunk = true;
         while (!finished) {
             const { done, value } = await reader.read();
             if (done) {
                 break;
+            }
+            trace.addBytes(value.byteLength);
+            if (firstChunk) {
+                firstChunk = false;
+                await trace.emit('first_body_chunk');
             }
             buffer += decoder.decode(value, { stream: true });
             const lines = buffer.split(/\r?\n/);
@@ -1180,6 +1220,8 @@ async function fetchSseWithTimeout(
         if (!finished) {
             await flushEvent();
         }
+        trace.setPhase('completed');
+        await trace.emit('request_completed');
         return { ok: true };
     } catch (error) {
         const aborted = error?.name === 'AbortError';
@@ -1192,7 +1234,8 @@ async function fetchSseWithTimeout(
                     ? '模型请求已被用户中断。'
                     : `模型请求超时（${timeoutMs}ms）`
                 : failure.error,
-            details: failure?.details
+            details: await trace.fail(error, aborted ? (abortedByExternalSignal ? 'aborted' : 'timeout') : failure.code,
+                controller.signal.aborted ? (abortedByExternalSignal ? 'external' : 'deadline') : '')
         };
     } finally {
         clearTimeout(timeoutId);
@@ -1379,7 +1422,8 @@ async function callOpenAiCompatible(settings, payload, messages) {
                 ok: false,
                 code: result.code || 'provider_error',
                 status: result.status,
-                error: result.error
+                error: result.error,
+                details: result.details
             };
         }
         if (streamError) {
@@ -1440,7 +1484,8 @@ async function callOpenAiCompatible(settings, payload, messages) {
             ok: false,
             code: result.code || 'provider_error',
             status: result.status,
-            error: result.error
+            error: result.error,
+            details: result.details
         };
     }
 
@@ -1479,7 +1524,7 @@ async function resolveAilisCloudSession(settings, payload = {}, { forceRefresh =
     const now = Date.now();
     const cached = ailisCloudSessionCache.get(baseUrl);
     if (!forceRefresh && cached?.token && cached.expiresAt > now + 60_000) {
-        return { ok: true, token: cached.token };
+        return { ok: true, token: cached.token, vision: cached.vision };
     }
     if (!forceRefresh && cached?.pending) {
         return cached.pending;
@@ -1501,16 +1546,20 @@ async function resolveAilisCloudSession(settings, payload = {}, { forceRefresh =
                 ok: false,
                 code: result.code || 'cloud_session_unavailable',
                 status: result.status,
-                error: result.error || 'AILIS Cloud 会话暂时不可用。'
+                error: result.error || 'AILIS Cloud 会话暂时不可用。',
+                details: result.details
             };
         }
         const parsedExpiry = Date.parse(result.data?.expiresAt || '');
+        const vision = typeof result.data?.capabilities?.vision === 'boolean'
+            ? result.data.capabilities.vision : null;
         ailisCloudSessionCache.set(baseUrl, {
             token,
+            vision,
             expiresAt: Number.isFinite(parsedExpiry) ? parsedExpiry : Date.now() + 6 * 60 * 60 * 1000,
             pending: null
         });
-        return { ok: true, token };
+        return { ok: true, token, vision };
     })();
 
     ailisCloudSessionCache.set(baseUrl, {
@@ -1530,6 +1579,11 @@ async function callAilisCloud(settings, payload, messages) {
     if (!session.ok) {
         return session;
     }
+    const hasImages = messages.some(message => Array.isArray(message.content) &&
+        message.content.some(part => part?.type === 'image_url'));
+    const unsupportedVision = () => ({ ok: false, code: 'vision_unsupported',
+        error: 'AILIS 服务器声明当前模型不支持图片输入。' });
+    if (hasImages && session.vision === false) return unsupportedVision();
     let result = await callOpenAiCompatible(
         { ...settings, apiKey: session.token },
         payload,
@@ -1540,6 +1594,7 @@ async function callAilisCloud(settings, payload, messages) {
         if (!refreshed.ok) {
             return refreshed;
         }
+        if (hasImages && refreshed.vision === false) return unsupportedVision();
         result = await callOpenAiCompatible(
             { ...settings, apiKey: refreshed.token },
             payload,
@@ -1630,7 +1685,8 @@ async function callOllama(settings, payload, messages) {
             ok: false,
             code: result.code || 'provider_error',
             status: result.status,
-            error: result.error
+            error: result.error,
+            details: result.details
         };
     }
 
@@ -1777,7 +1833,8 @@ async function callOpenAiResponses(settings, payload, messages) {
             ok: false,
             code: result.code || 'provider_error',
             status: result.status,
-            error: result.error
+            error: result.error,
+            details: result.details
         };
     }
 
@@ -1842,7 +1899,8 @@ async function compactOpenAiResponses(settings, payload = {}) {
             ok: false,
             code: result.code || 'provider_compaction_error',
             status: result.status,
-            error: result.error
+            error: result.error,
+            details: result.details
         };
     }
     const outputItems = Array.isArray(result.data?.output) ? result.data.output : [];
@@ -1995,7 +2053,8 @@ async function callAnthropic(settings, payload, messages) {
             ok: false,
             code: result.code || 'provider_error',
             status: result.status,
-            error: result.error
+            error: result.error,
+            details: result.details
         };
     }
 
@@ -2146,7 +2205,8 @@ async function callGemini(settings, payload, messages) {
             ok: false,
             code: result.code || 'provider_error',
             status: result.status,
-            error: result.error
+            error: result.error,
+            details: result.details
         };
     }
 
@@ -2162,6 +2222,10 @@ async function callGemini(settings, payload, messages) {
 }
 
 async function callDesktopLlmProvider(settings = {}, payload = {}) {
+    return withProviderDiagnostics(payload, () => callDesktopLlmProviderInternal(settings, payload));
+}
+
+async function callDesktopLlmProviderInternal(settings = {}, payload = {}) {
     const resolvedSettings = getResolvedSettings(settings);
     const responseInputMessages = Array.isArray(payload.input) &&
         resolvedSettings.provider !== CODEX_MODEL_BRIDGE_PROVIDER
@@ -2494,7 +2558,8 @@ async function checkDesktopLlmProvider(settings = {}, options = {}) {
         });
     }
 
-    if (options.includeVision !== false && (capabilities.vision || options.forceVision === true)) {
+    if (options.includeVision !== false && (capabilities.vision ||
+        (capabilities.visionRouting === 'server-managed' && capabilities.vision === null) || options.forceVision === true)) {
         result.checks.vision = await runHealthCheckStep(resolvedSettings, {
             timeoutMs,
             temperature: 0,

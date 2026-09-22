@@ -206,7 +206,9 @@ function readDesktopLlmSettings() {
         temperature: 0,
         timeoutMs: 120000
     };
-    const keylessProvider = ['codex-model-bridge', 'ollama', 'vllm'].includes(provider.toLowerCase());
+    // Managed relay authenticates through /llm/session, never a personal API key.
+    if (provider.toLowerCase() === 'ailis-cloud') settings.apiKey = '';
+    const keylessProvider = ['ailis-cloud', 'codex-model-bridge', 'ollama', 'vllm'].includes(provider.toLowerCase());
     return settings.baseUrl && settings.model && (keylessProvider || settings.apiKey) ? settings : null;
 }
 
@@ -12948,7 +12950,7 @@ async function describeImage(args = {}) {
     }
     const settings = readDesktopLlmSettings();
     if (!settings) {
-        return errorResult('describe_image requires local LLM settings with vision support', { path: filePath });
+        return errorResult('describe_image model connection is not configured; check provider, base URL, model and the selected provider authentication', { path: filePath });
     }
     const question = normalizeString(args.question || args.prompt, 'Describe the image and answer any visible question.');
     const maxChars = clampNumber(args.maxChars || args.max_chars, 4000, 500, 12000);

@@ -2510,6 +2510,9 @@ function getPersistedVisionLlmSettings() {
 }
 
 function getResolvedVisionLlmSettings() {
+    // Managed-server mode hides auxiliary settings in the UI. Do not silently
+    // send images to an old personal/local provider retained in preferences.
+    if (getResolvedLlmSettings().provider === 'ailis-cloud') return null;
     const persisted = getPersistedVisionLlmSettings();
     const envProvider = String(process.env.AILIS_VISION_PROVIDER || '').trim();
     const envBaseUrl = String(process.env.AILIS_VISION_BASE_URL || '').trim();

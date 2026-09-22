@@ -3,7 +3,7 @@
   <h1>AILIS</h1>
   <p><strong>能看、能听、能记住，也能真正把事情做完的开源桌面 AI 伙伴。</strong></p>
   <p>
-    <img alt="Version" src="https://img.shields.io/badge/version-1.4.7-2563eb?style=flat-square">
+    <img alt="Version" src="https://img.shields.io/badge/version-1.4.8-2563eb?style=flat-square">
     <img alt="Desktop" src="https://img.shields.io/badge/desktop-Electron-0f172a?style=flat-square">
     <img alt="License" src="https://img.shields.io/badge/license-MIT-059669?style=flat-square">
   </p>
@@ -110,9 +110,9 @@ Humanlike 检查点来自 30 天陪伴场景，不代表真实用户连续使用
 
 ## 快速开始
 
-### v1.4.7 更新
+### v1.4.8 更新
 
-Windows、Linux 与两种 Mac 架构均提供自带离线语音识别的安装包，支持自动 ASR 唤醒词。本版改进任务文件预览、记忆整理与口语回复，并保留 AILIS 服务器配置修复；Windows 安装验收包含全新用户环境中的真实服务器对话。详见[版本说明](docs/releases/v1.4.7.md)与 [v1.4.7 下载](https://github.com/haowenGuo/AILIS/releases/tag/v1.4.7)。
+本版修复托管图片工具认证与视觉能力判断，补齐脱敏后的模型请求诊断。Windows、Linux 与两种 Mac 架构继续提供完整离线语音识别和唤醒词支持。[版本说明](docs/releases/v1.4.8.md)列明验证范围；[v1.4.8 下载](https://github.com/haowenGuo/AILIS/releases/tag/v1.4.8)附安装包哈希和逐平台验收报告。
 
 ### 直接使用
 

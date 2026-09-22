@@ -2711,7 +2711,7 @@ function waitForCodexBridgeRetry(settings = {}, payload = {}, failedAttempt = 1)
             resolve();
         };
         timer = setTimeout(finish, delayMs);
-        timer.unref?.();
+        // An awaited retry must keep standalone harness processes alive.
         signal?.addEventListener?.('abort', finish, { once: true });
     });
 }

@@ -28,7 +28,10 @@ async function build() {
         'electron/ailis-platform-adapter.cjs','electron/ailis-local-patch.cjs','electron/local-asr-manager.cjs',
         'electron/voice-runtime-bootstrap.cjs','electron/desktop_asr_worker.py',
         'electron/preload.cjs','electron/ailis-task-interaction.cjs','electron/ailis-task-file-diff.cjs',
-        'electron/codex-native-instructions.cjs','electron/prompts/codex-gpt-5.6.instructions.md'];
+        'electron/codex-native-instructions.cjs','electron/prompts/codex-gpt-5.6.instructions.md',
+        'electron/desktop-llm-provider.cjs','electron/ailis-provider-diagnostics.cjs',
+        'electron/ailis-vision-model-router.cjs','electron/codex-model-bridge.cjs',
+        'scripts/mcp-ailis-research-server.cjs'];
     for(const file of required)identity.files.push({file,sha256:await sha(path.join(root,file))});
     await fs.mkdir(release,{recursive:true});
     await fs.writeFile(path.join(release,`source-identity-${key}.json`),JSON.stringify(identity,null,2));

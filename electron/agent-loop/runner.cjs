@@ -8,6 +8,7 @@ const {
     getDefaultProviderBaseUrl,
     getDefaultProviderModel
 } = require('../desktop-llm-provider.cjs');
+const { sanitizeProviderDetails } = require('../ailis-provider-diagnostics.cjs');
 const { VISION_TOOL_ID } = require('../ailis-vision-tool.cjs');
 const {
     buildAILISSkillContextText
@@ -7387,7 +7388,8 @@ async function callLlmAgentDirectToolDecision(settings, payload, {
             status: failureDecision.status,
             providerFailure: true,
             httpStatus: failureDecision.httpStatus,
-            error: failureDecision.error
+            error: failureDecision.error,
+            details: sanitizeProviderDetails(response.details, [settings.apiKey])
         };
     }
     let repairMetadata = toolChoiceFallback
@@ -9638,6 +9640,14 @@ class AILISAgentRunner {
             const llmCallId = `${runId}:agent_decision:${iteration}`;
             const decisionPayload = buildAgentDecisionLowLatencyPayload({
                 timeoutMs: decisionTimeoutMs,
+                onProviderRequestEvent: async (diagnostic) => {
+                    // Audit-only: never append transport state to model input/history.
+                    const payload = { runId, sessionId, iteration, callId: llmCallId,
+                        phase: 'agent_decision', diagnostic };
+                    try { this.gateway.emitGatewayEvent?.('agent.llm_request', payload); } catch {}
+                    await appendRuntimeItem({ type: 'agent.llm_request',
+                        status: diagnostic.event === 'failed' ? 'failed' : 'observed', payload });
+                },
                 messages: decisionMessages,
                 abortSignal,
                 onTextDelta: taskRoutePending
@@ -9777,6 +9787,7 @@ class AILISAgentRunner {
                 provider: decision.provider || decisionSettings.provider || '',
                 model: decision.model || decisionSettings.model || '',
                 usage: usageSummary,
+                ...(decision.details ? { details: decision.details } : {}),
                 repaired: decision.repaired === true,
                 repairAttempted: decision.repairAttempted === true
             });
@@ -9794,6 +9805,7 @@ class AILISAgentRunner {
                     provider: decision.provider || decisionSettings.provider || '',
                     model: decision.model || decisionSettings.model || '',
                     usage: usageSummary,
+                    ...(decision.details ? { details: decision.details } : {}),
                     repaired: decision.repaired === true,
                     repairAttempted: decision.repairAttempted === true
                 }

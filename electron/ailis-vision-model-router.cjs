@@ -39,7 +39,8 @@ function resolveVisionModelRoute({ mainSettings = {}, auxiliarySettings = null }
     }
 
     const mainModel = describeSettings(mainSettings);
-    if (mainModel.capabilities.vision === true) {
+    if (mainModel.capabilities.vision === true ||
+        (mainModel.capabilities.visionRouting === 'server-managed' && mainModel.capabilities.vision === null)) {
         return {
             ok: true,
             source: 'main',
