@@ -125,6 +125,7 @@ const EXTERNAL_SIDE_EFFECT_TOOL_IDS = new Set([
 const PLUGIN_OR_TRIGGER_TOOL_IDS = new Set(['code_execution', 'x_search', 'heartbeat_respond']);
 const FILE_TOOL_IDS = new Set(['read', 'write', 'edit']);
 const LOCAL_CORE_TOOL_IDS = new Set([
+    'view_image',
     'read',
     'write',
     'exec',
@@ -160,6 +161,7 @@ const LOSSLESS_EVENT_TYPES = new Set([
 ]);
 const LOSSLESS_EVENT_PREFIXES = ['approval.', 'subagent.', 'mcp.', 'agent.', 'ember.'];
 const CODEX_STYLE_DIRECT_LOCAL_TOOL_IDS = new Set([
+    'view_image',
     'exec_command',
     'write_stdin',
     'apply_patch',
@@ -698,6 +700,7 @@ function createTimeoutError(ms) {
 }
 
 async function withTimeout(ms, action) {
+    if (!(ms > 0)) return await action();
     let timer = null;
     try {
         return await Promise.race([
@@ -1391,12 +1394,14 @@ class AILISGateway extends EventEmitter {
                     ? TOOL_EXPOSURE.DIRECT
                     : EXTENDED_LOCAL_TOOL_EXPOSURE
             })),
-            ...['read', 'write', 'exec', 'exec_wait', 'exec_command', 'write_stdin', 'apply_patch'].map((id) => {
+            ...['read', 'write', 'exec', 'exec_wait', 'exec_command', 'write_stdin', 'apply_patch', 'view_image'].map((id) => {
                 const toolSurfaceDefinition = OPENCLAW_CORE_TOOL_DEFINITIONS.find((tool) => tool.id === id) || {};
                 const codexDescription = id === 'exec_command'
                     ? CODEX_EXEC_COMMAND_DESCRIPTION
                     : id === 'write_stdin'
                     ? 'Writes characters to an existing unified exec session and returns recent output.'
+                    : id === 'view_image'
+                    ? 'View an image file in the current tool environment. Returns image pixels for the Agent model, not a textual description. In exec, use image(await tools.view_image(args)).'
                     : '';
                 return {
                     id,
@@ -1600,6 +1605,7 @@ class AILISGateway extends EventEmitter {
 
     async stop() {
         this.stopProfileCurationScheduler();
+        this.codeModeRuntime?.shutdown();
         for (const client of this.sseClients) {
             try {
                 client.res?.end?.();
@@ -2793,7 +2799,10 @@ class AILISGateway extends EventEmitter {
                 });
             }
             const result = await withTimeout(
-                Number(request.timeoutMs || context.timeoutMs || TOOL_CALL_TIMEOUT_MS),
+                (['exec', 'exec_wait', 'exec_command', 'write_stdin', 'apply_patch'].includes(toolId) ||
+                    (toolId === COMPUTER_TOOL_ID && ['exec', 'run', 'exec_command', 'write_stdin'].includes(args.action)))
+                    ? 0
+                    : Number(request.timeoutMs || context.timeoutMs || TOOL_CALL_TIMEOUT_MS),
                 () => this.taskInteraction
                     ? this.taskInteraction.trackTool(context, () => this.callAgentRuntimeTool({ callId, toolId, args, context, workspaceDir }))
                     : this.callAgentRuntimeTool({ callId, toolId, args, context, workspaceDir })
@@ -5112,6 +5121,14 @@ class AILISGateway extends EventEmitter {
 
         if (toolId === 'apply_patch') {
             return await this.executeLocalApplyPatch(args.input || args.patch, workspaceDir, context);
+        }
+
+        if (toolId === 'view_image') {
+            return await this.computerTool.execute({
+                ...args, action: 'view_image',
+                path: this.resolveToolPath(args.path, workspaceDir, 'path', context)
+            }, context, { workspaceDir, workspaceRoot: this.workspaceRoot, projectRoot: this.projectRoot,
+                platformAdapter: this.platformAdapter });
         }
 
         if (toolId === 'exec_command') {

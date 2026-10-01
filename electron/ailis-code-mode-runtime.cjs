@@ -16,7 +16,6 @@ const {
 } = require('./codex-code-mode-protocol.cjs');
 
 const MAX_LIVE_CELLS = 16;
-const MAX_CELL_LIFETIME_MS = 30 * 60 * 1000;
 
 function resolveCodeModeWorkerLaunch({ moduleDir = __dirname, electron = process.versions.electron, env = process.env } = {}) {
     // ASAR directories are virtual: neither OS cwd nor the isolated Node
@@ -81,6 +80,21 @@ function outputText(item = {}) {
     if (item.kind === 'audio') return '[audio output]';
     if (item.kind === 'generated_image') return '[generated image output]';
     return String(item.value ?? '');
+}
+
+function outputImage(item = {}) {
+    const value = item.value;
+    const detail = item.options?.detail ?? item.detail ?? value?.detail ?? value?._meta?.['codex/imageDetail'];
+    const url = typeof value === 'string' ? value : value?.image_url;
+    if (typeof url === 'string' && /^data:image\/[\w.+-]+;base64,/.test(url)) {
+        const comma = url.indexOf(',');
+        return { type: 'image', mimeType: url.slice(5, url.indexOf(';')), data: url.slice(comma + 1),
+            ...(detail ? { _meta: { 'codex/imageDetail': detail } } : {}) };
+    }
+    if (value?.type === 'image' && typeof value.data === 'string' && /^image\//.test(value.mimeType || '')) {
+        return { ...value, ...(detail ? { _meta: { ...value._meta, 'codex/imageDetail': detail } } : {}) };
+    }
+    throw new TypeError('image() requires an inline image data URL or an MCP ImageContent block');
 }
 
 function truncateText(text = '', maxTokens = DEFAULT_MAX_OUTPUT_TOKENS_PER_EXEC_CALL) {
@@ -228,22 +242,12 @@ class AILISCodeModeRuntime {
             ));
         }
         if (toolName === 'apply_patch') return textFromToolResult(result) || result?.structuredContent || result?.details || result;
+        if (toolName === 'view_image') return result?.structuredContent || result;
         if (toolName === 'update_plan') return result?.structuredContent || result?.details || textFromToolResult(result) || result;
         return result;
     }
 
-    reapExpiredCells() {
-        const now = Date.now();
-        for (const [cellId, cell] of this.cells) {
-            if (now - cell.createdAt > MAX_CELL_LIFETIME_MS) {
-                cell.child.kill();
-                this.cells.delete(cellId);
-            }
-        }
-    }
-
     spawnCell({ code, profileId, context = {}, maxOutputTokens }) {
-        this.reapExpiredCells();
         if (this.cells.size >= MAX_LIVE_CELLS) throw new Error(`exec live-cell limit reached (${MAX_LIVE_CELLS})`);
         const specs = getCodeModeProfile(profileId);
         if (!specs.length) throw new Error('exec nested-tool profile is missing or expired');
@@ -316,6 +320,10 @@ class AILISCodeModeRuntime {
         if (!message || typeof message !== 'object') return;
         if (cell.completed || cell.terminated) return;
         if (message.type === 'output' && message.item) {
+            if (message.item.kind === 'image' || message.item.kind === 'generated_image') {
+                try { message.item.content = outputImage(message.item); }
+                catch (error) { this.failCell(cell, error, 'image output'); return; }
+            }
             cell.outputs.push(cloneJson(message.item) || message.item);
             return;
         }
@@ -394,7 +402,7 @@ class AILISCodeModeRuntime {
     formatResponse(cell, { maxTokens, wallTimeMs, closeCompleted = true } = {}) {
         const fresh = cell.outputs.slice(cell.delivered);
         cell.delivered = cell.outputs.length;
-        const body = fresh.map(outputText).filter(Boolean).join('\n');
+        const body = fresh.filter((item) => !item.content).map(outputText).filter(Boolean).join('\n');
         const status = cell.terminated
             ? 'Script terminated'
             : cell.completed
@@ -410,6 +418,10 @@ class AILISCodeModeRuntime {
             ok: !cell.error,
             status: cell.error ? 'failed' : cell.terminated ? 'terminated' : cell.completed ? 'completed' : 'running',
             text: output,
+            content: [
+                { type: 'text', text: output },
+                ...fresh.filter((item) => item.content).map((item) => item.content)
+            ],
             details: {
                 cell_id: cell.id,
                 running: !cell.completed && !cell.terminated,
@@ -455,6 +467,17 @@ class AILISCodeModeRuntime {
             await this.waitForSignal(cell, yieldTimeMs);
         }
         return this.formatResponse(cell, { maxTokens, wallTimeMs: Date.now() - startedAt });
+    }
+
+    shutdown() {
+        for (const cell of this.cells.values()) {
+            cell.terminated = true;
+            cell.child.kill();
+            this.signal(cell, 'terminated');
+        }
+        this.cells.clear();
+        this.stores.clear();
+        this.unifiedExecSessions.clear();
     }
 }
 

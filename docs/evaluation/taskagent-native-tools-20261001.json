@@ -1,0 +1,212 @@
+{
+  "baselineId": "taskagent-native-tools-20261001",
+  "status": "accepted_by_user",
+  "acceptedDate": "2026-10-01",
+  "reason": "User accepted the narrow tool-lifetime and native-image candidate as the next development baseline.",
+  "acceptedChanges": [
+    "remove_default_tool_lifetime_limits",
+    "native_image_tool_output"
+  ],
+  "unchangedInThisPromotion": [
+    "model",
+    "prompt",
+    "search_discovery",
+    "context_compaction",
+    "final_answer_policy"
+  ],
+  "evaluationSnapshot": {
+    "job": "longrun/jobs/ale-minimal-tools-focused3-20261001",
+    "headBeforePromotion": "92f73b8f9597f36066d8c0725d35f876546b1224",
+    "workingTreeWasDirty": true,
+    "sourceLockSha256": "bc3d8bf6d5f076e2066b3fba9ac7cc0dfa6056d822007d0d27b1bc201098e314",
+    "summarySha256": "eb2a2cd4af55080f404f717688bfeac0a9503b34406319f27c4c361ace6946ea",
+    "protocolSha256": "52971686e2cfc201e17ec556759cad7e82cdccf6609e4402a6f045b5884c7b14",
+    "frozenFiles": 155,
+    "externalFrozenFiles": 15,
+    "dockerImageDigest": "sha256:78ec11afeb0008ed8bc2b59cf9c90c05e63d1ac66b9d3e7cb0fada10695fca6f",
+    "sourceFiles": [
+      {
+        "path": "electron/ailis-agent-object-model.cjs",
+        "snapshotSha256": "5532373664f41335916d2982faffe45fd5f9d6e2601a8295ac6735a3acb99ed1"
+      },
+      {
+        "path": "electron/ailis-code-mode-runtime.cjs",
+        "snapshotSha256": "9f4f0b437bf3fc8d8220f691496ddda73f5651fbd997047dcf44bf2aa29b4d68"
+      },
+      {
+        "path": "electron/ailis-computer-tool.cjs",
+        "snapshotSha256": "7ae6a93407f8dbc061c55676a7a1ae2264b5abcc4eef2cf524a5db556ead828f"
+      },
+      {
+        "path": "electron/ailis-gateway.cjs",
+        "snapshotSha256": "2ebdf34e4126ab644fe3929d57f1b16135e3603f8a1c277995c6d6bfe0cbb9be"
+      },
+      {
+        "path": "electron/ailis-tool-contracts.cjs",
+        "snapshotSha256": "92023e895d568e9971bc6edccb1661e9752bd3077a85f8aa4a9a863e1274da86"
+      },
+      {
+        "path": "electron/ailis-image-content.cjs",
+        "snapshotSha256": "134d9644ff6fe3656d71472fb44930b1869dbcf98d1c145137174f71e2e5e1ef"
+      },
+      {
+        "path": "scripts/ale/ailis-ale-entry.cjs",
+        "snapshotSha256": "558a218b6e79f76987e08bd7327c6afb87409eecdf5af949f5a818e018c4cee5"
+      },
+      {
+        "path": "scripts/ale/ailis-ale-vm-tools.cjs",
+        "snapshotSha256": "b2e6139842c32804b7a6510840a905848df827d18bffabe012ac19e059546951"
+      }
+    ]
+  },
+  "protocol": {
+    "benchmark": "ALE",
+    "scope": "fixed_focused_3_not_full_benchmark",
+    "model": "gpt-6-luna",
+    "reasoningEffort": "xhigh",
+    "concurrency": 3,
+    "attemptsPerTask": 1,
+    "taskBudgetSeconds": 9000
+  },
+  "results": [
+    {
+      "taskId": "life_sciences/tms_marrow_cell_type_annotation_instance_1",
+      "classification": "completed_capability_failure",
+      "current": {
+        "score": 0.0,
+        "status": "completed",
+        "totalSeconds": 4083.03,
+        "modelCalls": 186,
+        "responseCount": 186,
+        "inputTokens": 5454228.0,
+        "cachedTokens": 5102592.0,
+        "uncachedTokens": 351636.0,
+        "outputTokens": 109681.0,
+        "cachePct": 93.55296478255035,
+        "peakRequestTokens": 58771.0
+      },
+      "previousAilis": {
+        "score": 0.0,
+        "status": "completed",
+        "totalSeconds": 3570.78,
+        "modelCalls": 119,
+        "responseCount": 119,
+        "inputTokens": 3153003.0,
+        "cachedTokens": 2952704.0,
+        "uncachedTokens": 200299.0,
+        "outputTokens": 65084.0,
+        "cachePct": 93.64735777289143,
+        "peakRequestTokens": 67725.0
+      },
+      "historicalCodex": {
+        "score": 1.0,
+        "status": "completed",
+        "totalSeconds": 1547.42,
+        "modelCalls": null,
+        "responseCount": 26,
+        "inputTokens": 781546.0,
+        "cachedTokens": 723968.0,
+        "uncachedTokens": 57578.0,
+        "outputTokens": 8312.0,
+        "cachePct": 92.63280728197701,
+        "peakRequestTokens": null
+      }
+    },
+    {
+      "taskId": "physical_sciences/gillespie_gene_regulatory_network",
+      "classification": "transport_aborted",
+      "current": {
+        "score": 0.0,
+        "status": "failed",
+        "totalSeconds": 1522.67,
+        "modelCalls": 19,
+        "responseCount": 18,
+        "inputTokens": 269306.0,
+        "cachedTokens": 238080.0,
+        "uncachedTokens": 31226.0,
+        "outputTokens": 9894.0,
+        "cachePct": 88.40501139967175,
+        "peakRequestTokens": 23550.0
+      },
+      "previousAilis": {
+        "score": 0.59,
+        "status": "completed",
+        "totalSeconds": 5422.81,
+        "modelCalls": 153,
+        "responseCount": 153,
+        "inputTokens": 4474538.0,
+        "cachedTokens": 4250112.0,
+        "uncachedTokens": 224426.0,
+        "outputTokens": 86064.0,
+        "cachePct": 94.98437604061023,
+        "peakRequestTokens": 43672.0
+      },
+      "historicalCodex": {
+        "score": 0.8400000000000001,
+        "status": "completed",
+        "totalSeconds": 1889.77,
+        "modelCalls": null,
+        "responseCount": 51,
+        "inputTokens": 2266941.0,
+        "cachedTokens": 2181632.0,
+        "uncachedTokens": 85309.0,
+        "outputTokens": 36539.0,
+        "cachePct": 96.23682310214514,
+        "peakRequestTokens": null
+      }
+    },
+    {
+      "taskId": "physical_sciences/silicon_bse_absorption",
+      "classification": "completed_task_pass",
+      "current": {
+        "score": 0.89884,
+        "status": "completed",
+        "totalSeconds": 5048.23,
+        "modelCalls": 271,
+        "responseCount": 271,
+        "inputTokens": 10857784.0,
+        "cachedTokens": 10205440.0,
+        "uncachedTokens": 652344.0,
+        "outputTokens": 129144.0,
+        "cachePct": 93.99192321379759,
+        "peakRequestTokens": 76858.0
+      },
+      "previousAilis": {
+        "score": 0.0,
+        "status": "timeout",
+        "totalSeconds": 9041.44,
+        "modelCalls": 491,
+        "responseCount": 491,
+        "inputTokens": 18923599.0,
+        "cachedTokens": 17901568.0,
+        "uncachedTokens": 1022031.0,
+        "outputTokens": 211941.0,
+        "cachePct": 94.59917217649772,
+        "peakRequestTokens": 86291.0
+      },
+      "historicalCodex": {
+        "score": 0.741614,
+        "status": "completed",
+        "totalSeconds": 5451.84,
+        "modelCalls": null,
+        "responseCount": 268,
+        "inputTokens": 31733108.0,
+        "cachedTokens": 31233024.0,
+        "uncachedTokens": 500084.0,
+        "outputTokens": 121897.0,
+        "cachePct": 98.42409385175887,
+        "peakRequestTokens": null
+      }
+    }
+  ],
+  "originalScoresPreserved": true,
+  "validVerifiers": 3,
+  "completedSubmissions": 2,
+  "taskPassed": 1,
+  "capabilityFailures": 1,
+  "transportAborted": 1,
+  "taskTimeouts": 0,
+  "historicalBenchmarkScoresReassigned": false,
+  "correctSideControlPerformed": false,
+  "fullBenchmarkPromotionGatePerformed": false
+}

@@ -799,6 +799,20 @@ const TOOL_CONTRACTS = Object.freeze({
             return normalizeString(args.cell_id) ? [] : ['exec_wait requires cell_id'];
         }
     }),
+    view_image: Object.freeze({
+        id: 'view_image', version: CONTRACT_VERSION,
+        mutates: false, risk: 'low', approval: 'never',
+        experience: TOOL_EXPERIENCE.read,
+        returns: defaultReturns(), errors: defaultErrors(['not_found', 'invalid_image']),
+        schema: makeObjectSchema({
+            required: ['path'],
+            properties: {
+                path: stringSchema({ minLength: 1, description: 'Path to an image file in the current tool environment.' }),
+                detail: stringSchema({ enum: ['high', 'original'], description: 'Image detail. Defaults to high.' })
+            },
+            additionalProperties: false
+        })
+    }),
     exec_command: Object.freeze({
         id: 'exec_command',
         version: CONTRACT_VERSION,

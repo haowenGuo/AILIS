@@ -10,6 +10,7 @@ const { randomUUID } = require('crypto');
 const { createAILISPlatformAdapter, getDefaultPlatformAdapter } = require('./ailis-platform-adapter.cjs');
 const { extractPdfDocument } = require('./ailis-pdf-document-engine.cjs');
 const { buildTextPreview } = require('./ailis-output-store.cjs');
+const { MAX_IMAGE_BYTES, imageToolResult } = require('./ailis-image-content.cjs');
 
 const COMPUTER_TOOL_ID = 'computer';
 const DEFAULT_MAX_BYTES = 128 * 1024;
@@ -17,8 +18,6 @@ const DEFAULT_MAX_ARTIFACT_SOURCE_BYTES = 50 * 1024 * 1024;
 const DEFAULT_SEARCH_LIMIT = 200;
 const DEFAULT_TREE_LIMIT = 500;
 const DEFAULT_PROCESS_BUFFER_BYTES = 256 * 1024;
-const DEFAULT_EXEC_TIMEOUT_MS = 30000;
-const DEFAULT_SESSION_TIMEOUT_MS = 12 * 60 * 60 * 1000;
 const DEFAULT_BINARY_CHUNK_BYTES = 256 * 1024;
 const DEFAULT_WATCH_BUFFER_EVENTS = 500;
 const DEFAULT_ROLLBACK_LIMIT = 200;
@@ -143,6 +142,12 @@ function normalizeNumber(value, fallback, min, max) {
         return fallback;
     }
     return Math.min(Math.max(parsed, min), max);
+}
+
+function processTimeoutMs(args) {
+    const value = args.timeoutMs ?? args.timeout;
+    if (value == null || Number(value) === 0) return 0;
+    return normalizeNumber(value, 0, 1000, 24 * 60 * 60 * 1000);
 }
 
 function getRuntimePlatform(runtime = {}) {
@@ -1480,6 +1485,18 @@ async function actionReadBinary(args, context, runtime) {
     }
 }
 
+async function actionViewImage(args, context, runtime) {
+    const target = resolveTargetPath(args.path, runtime);
+    const guard = guardPath(target, 'read_binary', context, runtime);
+    if (guard) return guard;
+    const handle = await fsp.open(target, 'r');
+    try {
+        const stat = await handle.stat();
+        if (!stat.isFile() || stat.size > MAX_IMAGE_BYTES) throw new TypeError('view_image requires an image file of at most 20 MiB');
+        return imageToolResult(await handle.readFile(), { detail: args.detail ?? 'high' });
+    } finally { await handle.close(); }
+}
+
 function approvalRequired(action, args, context) {
     if (!WRITE_ACTIONS.has(action)) {
         return null;
@@ -2481,7 +2498,9 @@ class ComputerRuntime {
                 }
             }).catch(() => {});
         });
-        record.timeout = setTimeout(() => {
+        // A yield/read deadline returns control; it must not kill the process.
+        // Only an explicitly requested process timeout installs a kill timer.
+        if (timeoutMs > 0) record.timeout = setTimeout(() => {
             if (record.status === 'running') {
                 record.status = 'timeout';
                 child.kill('SIGTERM');
@@ -2844,7 +2863,7 @@ class ComputerRuntime {
             });
         }
         validateWorkingDirectory(workdir);
-        const timeoutMs = normalizeNumber(args.timeoutMs || args.timeout, DEFAULT_EXEC_TIMEOUT_MS, 1000, 10 * 60 * 1000);
+        const timeoutMs = processTimeoutMs(args);
         const maxOutputTokens = normalizeNumber(args.max_output_tokens || args.maxOutputTokens, DEFAULT_EXEC_MAX_OUTPUT_TOKENS, 256, 100000);
         const startedAt = Date.now();
         const platformAdapter = getRuntimePlatform(runtime);
@@ -2941,7 +2960,7 @@ class ComputerRuntime {
                     details
                 });
             };
-            timer = setTimeout(() => {
+            if (timeoutMs > 0) timer = setTimeout(() => {
                 timedOut = true;
                 platformAdapter.killProcessTree(child, 'SIGTERM').finally(() => {
                     finish({
@@ -3028,7 +3047,7 @@ class ComputerRuntime {
             return createTextResult(details.output || JSON.stringify(details, null, 2), details);
         }
         validateWorkingDirectory(workdir);
-        const timeoutMs = normalizeNumber(args.timeoutMs || args.timeout, DEFAULT_SESSION_TIMEOUT_MS, 1000, 24 * 60 * 60 * 1000);
+        const timeoutMs = processTimeoutMs(args);
         const platformAdapter = getRuntimePlatform(runtime);
         const spawnSpec = explicitShellSpawnSpec(args.shell, command, {
             cwd: workdir,
@@ -3119,7 +3138,7 @@ class ComputerRuntime {
             });
         }
         validateWorkingDirectory(workdir);
-        const timeoutMs = normalizeNumber(args.timeoutMs || args.timeout, DEFAULT_SESSION_TIMEOUT_MS, 1000, 24 * 60 * 60 * 1000);
+        const timeoutMs = processTimeoutMs(args);
         const platformAdapter = getRuntimePlatform(runtime);
         const spawnSpec = platformAdapter.commandSpawnSpec
             ? platformAdapter.commandSpawnSpec(command, { args: commandArgs, cwd: workdir, env: args.env })
@@ -3467,6 +3486,9 @@ class AILISComputerTool {
         }
         if (action === 'read_binary') {
             return await actionReadBinary(args, context, effectiveRuntime);
+        }
+        if (action === 'view_image') {
+            return await actionViewImage(args, context, effectiveRuntime);
         }
         if (action === 'write') {
             return await actionWrite(args, context, effectiveRuntime, false);

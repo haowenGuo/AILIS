@@ -227,6 +227,13 @@ function normalizeToolOutput(input = {}, index = 0, options = {}) {
         status: normalizeText(response.status || input.status || (ok ? 'completed' : 'failed')),
         ok,
         outputText,
+        // Preserve bytes as typed content, never as a JSON/text preview.
+        outputImages: (Array.isArray(result?.content) ? result.content : [])
+            .filter((part) => part?.type === 'image' && typeof part.data === 'string' && /^image\//.test(part.mimeType || ''))
+            .map((part) => ContentItem.inputImage({
+                image_url: `data:${part.mimeType};base64,${part.data}`,
+                detail: part._meta?.['codex/imageDetail'] || 'high'
+            })),
         outputPreview: summarizeForModel(outputText, options.previewChars || DEFAULT_THREAD_ITEM_PREVIEW_CHARS),
         errorSummary,
         providerMetadata: normalizeProviderMetadata(input),
@@ -855,7 +862,9 @@ function toolOutputToResponseItems(toolOutput = {}, options = {}) {
             ResponseItem.customToolCallOutput({
                 call_id: callId,
                 name: toolName,
-                output,
+                output: toolOutput.outputImages?.length
+                    ? FunctionCallOutputPayload.fromContentItems([ContentItem.inputText(output), ...toolOutput.outputImages])
+                    : output,
                 success: toolOutput.ok === true ? true : toolOutput.ok === false ? false : null
             })
         ];
@@ -928,13 +937,14 @@ function toolOutputToResponseItems(toolOutput = {}, options = {}) {
         modelImage?.url ||
         modelImage?.path
     );
-    const outputPayload = modelImageUrl
+    const outputImages = [...(toolOutput.outputImages || [])];
+    if (modelImageUrl && !outputImages.some((part) => part.image_url === modelImageUrl)) {
+        outputImages.push(ContentItem.inputImage({ image_url: modelImageUrl, detail: normalizeText(modelImage?.detail) || 'original' }));
+    }
+    const outputPayload = outputImages.length
         ? FunctionCallOutputPayload.fromContentItems([
               ContentItem.inputText(output),
-              ContentItem.inputImage({
-                  image_url: modelImageUrl,
-                  detail: normalizeText(modelImage?.detail) || 'original'
-              })
+              ...outputImages
           ], {
               success: toolOutput.ok === true ? true : toolOutput.ok === false ? false : null
           })
