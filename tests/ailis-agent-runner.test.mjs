@@ -192,12 +192,40 @@ test('Luna uses the A7 context profile without benchmark adapter configuration',
     const previous = Object.fromEntries(names.map((name) => [name, process.env[name]]));
     try {
         for (const name of names) delete process.env[name];
-        const config = buildAgentContextBudgetConfig({ model: 'gpt-5.6-luna' }, {}, null);
-        assert.equal(config.inputLimitTokens, 272000);
-        assert.equal(config.softTokenLimit, 220000);
-        assert.equal(config.hardTokenLimit, 244800);
-        assert.equal(config.stopTokenLimit, 258400);
-        assert.equal(config.contextWindowSource, 'builtin_model_profile:gpt-5.6-luna');
+        const { buildContextBudgetReport } = require('../electron/ailis-runtime-budget.cjs');
+        for (const model of ['gpt-5.6-luna', 'gpt-6-luna']) {
+            const config = buildAgentContextBudgetConfig({ model }, {}, null);
+            assert.equal(config.inputLimitTokens, 272000, model);
+            assert.equal(config.softTokenLimit, 220000, model);
+            assert.equal(config.hardTokenLimit, 244800, model);
+            assert.equal(config.stopTokenLimit, 258400, model);
+            assert.equal(config.contextWindowSource, `builtin_model_profile:${model}`);
+            for (const [tokens, shouldCompact, mustStop] of [
+                [128000, false, false], [220000, false, false],
+                [244799, false, false], [244800, true, false], [258400, true, true]
+            ]) {
+                const report = buildContextBudgetReport({ tokenInfo: { promptTokens: tokens } }, config);
+                assert.equal(report.shouldCompact, shouldCompact, `${model} at ${tokens}`);
+                assert.equal(report.mustStopAndCheckpoint, mustStop, `${model} at ${tokens}`);
+            }
+        }
+        const requested = buildAgentContextBudgetConfig(
+            { model: 'unknown-model' }, { model: 'gpt-6-luna' }, null
+        );
+        assert.equal(requested.contextWindowSource, 'builtin_model_profile:gpt-6-luna');
+        assert.equal(requested.inputLimitTokens, 272000);
+        const unknown = buildAgentContextBudgetConfig(
+            { model: 'gpt-6-luna' }, { model: 'unknown-model' }, null
+        );
+        assert.equal(unknown.contextWindowSource, 'conservative_runtime_fallback');
+        assert.equal(unknown.inputLimitTokens, 256000);
+        const unspecified = buildAgentContextBudgetConfig({}, {}, null);
+        assert.equal(unspecified.inputLimitTokens, 256000);
+        const smallerCapability = buildAgentContextBudgetConfig({
+            model: 'unknown-model', capabilities: { contextWindowTokens: 64000 }
+        }, {}, null);
+        assert.equal(smallerCapability.inputLimitTokens, 64000);
+        assert.equal(smallerCapability.contextWindowSource, 'provider_or_model_configuration');
     } finally {
         for (const name of names) {
             if (previous[name] === undefined) delete process.env[name];
@@ -207,29 +235,33 @@ test('Luna uses the A7 context profile without benchmark adapter configuration',
 });
 
 test('explicit Luna context settings override the built-in A7 profile', () => {
-    const config = buildAgentContextBudgetConfig({
-        model: 'gpt-5.6-luna',
-        contextWindowTokens: 300000,
-        contextSoftTokenLimit: 230000,
-        contextHardTokenLimit: 260000,
-        contextStopTokenLimit: 280000
-    }, {}, null);
-    assert.equal(config.inputLimitTokens, 300000);
-    assert.equal(config.softTokenLimit, 230000);
-    assert.equal(config.hardTokenLimit, 260000);
-    assert.equal(config.stopTokenLimit, 280000);
-    assert.equal(config.contextWindowSource, 'provider_or_model_configuration');
+    for (const model of ['gpt-5.6-luna', 'gpt-6-luna']) {
+        const config = buildAgentContextBudgetConfig({
+            model,
+            contextWindowTokens: 300000,
+            contextSoftTokenLimit: 230000,
+            contextHardTokenLimit: 260000,
+            contextStopTokenLimit: 280000
+        }, {}, null);
+        assert.equal(config.inputLimitTokens, 300000);
+        assert.equal(config.softTokenLimit, 230000);
+        assert.equal(config.hardTokenLimit, 260000);
+        assert.equal(config.stopTokenLimit, 280000);
+        assert.equal(config.contextWindowSource, 'provider_or_model_configuration');
+    }
 });
 
 test('a smaller explicit Luna window keeps ratio thresholds instead of collapsing A7 limits', () => {
-    const config = buildAgentContextBudgetConfig({
-        model: 'gpt-5.6-luna',
-        contextWindowTokens: 128000
-    }, {}, null);
-    assert.equal(config.inputLimitTokens, 128000);
-    assert.equal(config.softTokenLimit, 0);
-    assert.equal(config.hardTokenLimit, 0);
-    assert.equal(config.stopTokenLimit, 0);
+    for (const model of ['gpt-5.6-luna', 'gpt-6-luna']) {
+        const config = buildAgentContextBudgetConfig({
+            model,
+            contextWindowTokens: 128000
+        }, {}, null);
+        assert.equal(config.inputLimitTokens, 128000);
+        assert.equal(config.softTokenLimit, 0);
+        assert.equal(config.hardTokenLimit, 0);
+        assert.equal(config.stopTokenLimit, 0);
+    }
 });
 
 test('DeepSeek first route disables thinking while preserving native model routing', () => {

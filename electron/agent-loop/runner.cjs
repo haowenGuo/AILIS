@@ -1302,10 +1302,11 @@ function resolveBuiltInContextBudgetProfile(settings = {}, requestContext = {}) 
         settings.modelId ||
         settings.model_id
     ).toLowerCase();
-    if (model === 'gpt-5.6-luna') {
+    // Codex's gpt-6-luna catalog also defaults to 272k, with compaction at 90%.
+    if (model === 'gpt-5.6-luna' || model === 'gpt-6-luna') {
         return {
             ...A7_LUNA_CONTEXT_PROFILE,
-            source: 'builtin_model_profile:gpt-5.6-luna'
+            source: `builtin_model_profile:${model}`
         };
     }
     return null;

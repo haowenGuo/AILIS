@@ -12,6 +12,15 @@ const {
 const { normalizeAilisToolOutput } = toolResultRuntime;
 const { ContextManager } = contextRuntime;
 
+test('context budget defaults to 256k without overriding an explicit smaller window', () => {
+    const fallback = buildContextBudgetReport();
+    assert.equal(fallback.inputLimitTokens, 256000);
+    assert.equal(fallback.effectiveInputLimitTokens, 256000 - 4096 - 8192);
+    const explicit = buildContextBudgetReport({}, { inputLimitTokens: 64000 });
+    assert.equal(explicit.inputLimitTokens, 64000);
+    assert.equal(explicit.effectiveInputLimitTokens, 64000 - 4096 - 8192);
+});
+
 test('makeHeadTailPreview keeps head and tail while marking omitted middle text', () => {
     const source = `HEAD-${'a'.repeat(1000)}-TAIL`;
     const preview = makeHeadTailPreview(source, 220);
