@@ -1,5 +1,7 @@
 # AILIS Evaluation Scorecard
 
+**October 12 update:** [ALE same-model comparison](evaluation-ale-20261012.md): AILIS **49.35%**, Codex **48.53%**, GPT-6 Luna / xhigh, 98 valid matched tasks from the 99-task Docker manifest. The September results below retain their original protocols.
+
 [Manual](README.md) · [简体中文](evaluation.zh-CN.md) · [Per-task index and exact statistics](evaluation/20260907-snapshot.json)
 
 Updated **2026-09-07**. Results are grouped by capability. In the task-execution comparison, columns identify systems and model settings, AILIS is highlighted, and bold marks the highest reported score per row; Luna means gpt-5.6-luna. Memory and companion results retain their own historical configurations. These are existing frozen-run results—**not an equal-budget ranking or certification of the current GitHub source or installer**.

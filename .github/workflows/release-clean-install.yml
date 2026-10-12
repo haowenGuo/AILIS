@@ -148,6 +148,9 @@ jobs:
           tests/ailis-vision-model-router.test.mjs
           tests/desktop-llm-provider.test.mjs
           tests/ailis-provider-diagnostics.test.mjs
+          tests/ailis-agent-runner.test.mjs
+          tests/ailis-context-budget.test.mjs
+          tests/ailis-unified-compaction.test.mjs
       - name: Fresh-profile system-only-PATH source execution
         id: cold
         run: node scripts/test-clean-runtime.mjs --output release/evidence/${{ matrix.target }}/source-cold-runtime.json
@@ -168,14 +171,14 @@ jobs:
         run: >-
           ./scripts/validate-clean-install.ps1
           -ArtifactRoot "${{ github.workspace }}\release"
-          -ExpectedVersion "1.4.8"
+          -ExpectedVersion "1.4.9"
           -ReportRoot "${{ github.workspace }}\release\evidence\win32-x64\nsis"
           -VerifyBundledRuntime
       - name: Upload native packages and evidence even on failure
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ailis-v1.4.8-${{ matrix.target }}-${{ github.sha }}
+          name: ailis-v1.4.9-${{ matrix.target }}-${{ github.sha }}
           compression-level: 0
           retention-days: 7
           path: |

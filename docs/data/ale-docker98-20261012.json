@@ -1,0 +1,703 @@
+{
+  "schema": "ailis.ale-public-scorecard.v1",
+  "updatedAt": "2026-10-12",
+  "evaluatedAt": "2026-10-10T18:47:46.629Z",
+  "sourceSha256": "222f487e09e733e53073fb84dcdfdd21f1b8f464d8073f3b1d5045ae54e7c0ee",
+  "selection": {
+    "dockerManifestTasks": 99,
+    "acceptedPairedTasks": 98,
+    "excludedBoth": 1,
+    "reason": "Official verifier requires unavailable OpenAI API credentials"
+  },
+  "protocol": {
+    "model": "gpt-6-luna",
+    "reasoningEffort": "xhigh",
+    "taskBudgetSeconds": 9000,
+    "trialsPerTask": 1,
+    "score": "mean verifier reward; partial credit included",
+    "runtime": "frozen October 1 evaluation snapshot; predates v1.4.9 context-window fix"
+  },
+  "scores": {
+    "count": 98,
+    "oldAilis": {
+      "meanRewardPercent": 42.633165032005486,
+      "full": 20,
+      "partial": 37,
+      "zero": 41
+    },
+    "currentAilis": {
+      "meanRewardPercent": 49.346650247139365,
+      "full": 23,
+      "partial": 43,
+      "zero": 32
+    },
+    "codex": {
+      "meanRewardPercent": 48.52638619505762,
+      "full": 24,
+      "partial": 40,
+      "zero": 34
+    },
+    "improvedVsOld": 17,
+    "regressedVsOld": 16,
+    "equalVsOld": 65
+  },
+  "resourcesIncludingCompaction": {
+    "oldAilis": {
+      "input": 270987899,
+      "cached": 254224896,
+      "uncached": 16763003,
+      "cachePercent": 93.81411381768011,
+      "output": 4522295,
+      "responses": 8331,
+      "coverage": 98
+    },
+    "currentAilis": {
+      "input": 208489114,
+      "cached": 179765888,
+      "uncached": 28723226,
+      "cachePercent": 86.22315311868033,
+      "output": 4271848,
+      "responses": 7074,
+      "coverage": 98
+    },
+    "codex": {
+      "input": 488248646,
+      "cached": 475995904,
+      "uncached": 12252742,
+      "cachePercent": 97.49047086963145,
+      "output": 3342455,
+      "responses": 5915,
+      "coverage": 98
+    }
+  },
+  "timing": {
+    "count": 93,
+    "boundary": "ALE execution window before verifier; includes setup/model/transport; excludes queue and verifier. HG002 interrupted gather has no complete execution duration and is omitted from matched timing.",
+    "oldAilis": {
+      "totalSeconds": 208077.76,
+      "meanSeconds": 2237.3952688172044,
+      "p50Seconds": 1061.59,
+      "p95Seconds": 9038.806
+    },
+    "currentAilis": {
+      "totalSeconds": 141164.81000000003,
+      "meanSeconds": 1517.9011827956992,
+      "p50Seconds": 646.42,
+      "p95Seconds": 5615.551999999994
+    },
+    "codex": {
+      "totalSeconds": 157599.28000000003,
+      "meanSeconds": 1694.615913978495,
+      "p50Seconds": 889.41,
+      "p95Seconds": 5326.979999999998
+    }
+  },
+  "uncertainty": {
+    "iterations": 100000,
+    "seed": 20261010,
+    "method": "paired task bootstrap percentile 95% CI; paired sign-flip two-sided Monte Carlo; exact sign/McNemar binomial tests",
+    "observedDeltaPp": 0.8202640520817415,
+    "bootstrap95Pp": [
+      -4.0892365048599695,
+      5.83271953558835
+    ],
+    "permutationP": 0.7548724512754873,
+    "signTestP": 0.39152830513194203,
+    "fullPass": {
+      "ailisOnly": 4,
+      "codexOnly": 5,
+      "mcnemarExactP": 1
+    },
+    "limitation": "Single accepted trial per task/system. These statistics do NOT estimate same-task run-to-run variance, prove equivalence, or prove causality of a Harness change."
+  },
+  "taskScores": [
+    {
+      "taskId": "business_finance/american_option_pricing_ls",
+      "oldAilis": 0,
+      "currentAilis": 0.5,
+      "codex": 1
+    },
+    {
+      "taskId": "business_finance/sec_10k_financial_parsing",
+      "oldAilis": 0,
+      "currentAilis": 0.9245,
+      "codex": 0.9097
+    },
+    {
+      "taskId": "computing_math/cost_optimization_1",
+      "oldAilis": 0,
+      "currentAilis": 0.674799,
+      "codex": 0.660928
+    },
+    {
+      "taskId": "computing_math/particle_filter_nonlinear_tracking",
+      "oldAilis": 0,
+      "currentAilis": 0.5,
+      "codex": 0
+    },
+    {
+      "taskId": "engineering/humanoid_wbc_policy_evaluation",
+      "oldAilis": 0,
+      "currentAilis": 0,
+      "codex": 0.4625
+    },
+    {
+      "taskId": "health_medicine/crf_sdtm_mapping_1",
+      "oldAilis": 0,
+      "currentAilis": 0,
+      "codex": 0
+    },
+    {
+      "taskId": "health_medicine/limited_angle_ct_dps_reconstruction",
+      "oldAilis": 0,
+      "currentAilis": 0,
+      "codex": 0
+    },
+    {
+      "taskId": "health_medicine/obermeyer_bias_reproduction",
+      "oldAilis": 0,
+      "currentAilis": 0.733067,
+      "codex": 0.737056
+    },
+    {
+      "taskId": "health_medicine/wsi_tumor_localization_1",
+      "oldAilis": 0,
+      "currentAilis": 0,
+      "codex": 0
+    },
+    {
+      "taskId": "life_sciences/cell_translocation_analysis",
+      "oldAilis": 0,
+      "currentAilis": 0,
+      "codex": 0
+    },
+    {
+      "taskId": "life_sciences/yeast_colony_detection",
+      "oldAilis": 0,
+      "currentAilis": 0,
+      "codex": 0
+    },
+    {
+      "taskId": "physical_sciences/exact_diag_heisenberg_j1j2",
+      "oldAilis": 0,
+      "currentAilis": 1,
+      "codex": 1
+    },
+    {
+      "taskId": "business_finance/ff5_public_reconstruction",
+      "oldAilis": 0,
+      "currentAilis": 0,
+      "codex": 0
+    },
+    {
+      "taskId": "business_finance/sse_northbound_programmatic_trading_01",
+      "oldAilis": 0,
+      "currentAilis": 0,
+      "codex": 1
+    },
+    {
+      "taskId": "computing_math/dit_pipeline_cfg_alignment_fid_256_001",
+      "oldAilis": 0,
+      "currentAilis": 0,
+      "codex": 0
+    },
+    {
+      "taskId": "engineering/mpc_control_building_v1",
+      "oldAilis": 0,
+      "currentAilis": 0,
+      "codex": 0
+    },
+    {
+      "taskId": "health_medicine/ct_geometry_calibration_catphan",
+      "oldAilis": 0,
+      "currentAilis": 1,
+      "codex": 0
+    },
+    {
+      "taskId": "health_medicine/ltmle_targeted_bootstrap_simulation_study",
+      "oldAilis": 0,
+      "currentAilis": 0,
+      "codex": 0
+    },
+    {
+      "taskId": "health_medicine/prostate_imrt_matrad_reproduction",
+      "oldAilis": 0,
+      "currentAilis": 0,
+      "codex": 0
+    },
+    {
+      "taskId": "life_sciences/amber_minimization_script_prep_instance_1",
+      "oldAilis": 0,
+      "currentAilis": 0,
+      "codex": 0
+    },
+    {
+      "taskId": "physical_sciences/glm_lake_calibration",
+      "oldAilis": 0,
+      "currentAilis": 1,
+      "codex": 1
+    },
+    {
+      "taskId": "physical_sciences/phonon_dispersion_thermodynamics",
+      "oldAilis": 0,
+      "currentAilis": 0,
+      "codex": 0
+    },
+    {
+      "taskId": "business_finance/legal_ma_consistency_audit_01",
+      "oldAilis": 0,
+      "currentAilis": 0,
+      "codex": 0
+    },
+    {
+      "taskId": "computing_math/clustered_cyclic_code_circuit_level_simulation",
+      "oldAilis": 0,
+      "currentAilis": 0,
+      "codex": 0
+    },
+    {
+      "taskId": "computing_math/go_game_reconstruction_1",
+      "oldAilis": 0,
+      "currentAilis": 0,
+      "codex": 0
+    },
+    {
+      "taskId": "engineering/aerospace_low_thrust_trajectory",
+      "oldAilis": 0,
+      "currentAilis": 0,
+      "codex": 0
+    },
+    {
+      "taskId": "health_medicine/healthcare_bias_audit_27a_public_replication_v1",
+      "oldAilis": 0,
+      "currentAilis": 0,
+      "codex": 0
+    },
+    {
+      "taskId": "health_medicine/nsclc_radiomics_cox_signature_v1",
+      "oldAilis": 0,
+      "currentAilis": 0,
+      "codex": 0
+    },
+    {
+      "taskId": "physical_sciences/hst_acs_wfc_visit_reduction",
+      "oldAilis": 0,
+      "currentAilis": 0,
+      "codex": 0
+    },
+    {
+      "taskId": "transport_safety/abm_hangzhou_metro",
+      "oldAilis": 0,
+      "currentAilis": 0,
+      "codex": 0
+    },
+    {
+      "taskId": "business_finance/basel_operational_risk_bia_cn",
+      "oldAilis": 1,
+      "currentAilis": 0,
+      "codex": 0
+    },
+    {
+      "taskId": "business_finance/llm_ecosystem_privacy_audit_realdata_1",
+      "oldAilis": 0.5,
+      "currentAilis": 0.5,
+      "codex": 0.5
+    },
+    {
+      "taskId": "computing_math/ising_post_measurement_1",
+      "oldAilis": 1,
+      "currentAilis": 1,
+      "codex": 1
+    },
+    {
+      "taskId": "computing_math/paper_reproduction_instance_1",
+      "oldAilis": 0.8,
+      "currentAilis": 0.8,
+      "codex": 0.8
+    },
+    {
+      "taskId": "education_info/marc_remediation_folio_overlay",
+      "oldAilis": 0.1,
+      "currentAilis": 0.1,
+      "codex": 0.1
+    },
+    {
+      "taskId": "engineering/sumo_urban_am_peak_calibration",
+      "oldAilis": 0,
+      "currentAilis": 0,
+      "codex": 0
+    },
+    {
+      "taskId": "health_medicine/flusight_offline_hosp_forecast_2024_12_14",
+      "oldAilis": 0.6867409152390467,
+      "currentAilis": 0.6822119989968631,
+      "codex": 0.6869964273527465
+    },
+    {
+      "taskId": "life_sciences/gene_expression_differential_analysis_functional_enrichment_analysis_1",
+      "oldAilis": 0.999347238458,
+      "currentAilis": 0.999347238458,
+      "codex": 0.999347238458
+    },
+    {
+      "taskId": "life_sciences/rgi_mcr1_colistin_v2",
+      "oldAilis": 1,
+      "currentAilis": 1,
+      "codex": 1
+    },
+    {
+      "taskId": "life_sciences/WGS_Variant_Calling",
+      "oldAilis": 0.9999999999999999,
+      "currentAilis": 0.9999999999999999,
+      "codex": 0.9999999999999999
+    },
+    {
+      "taskId": "physical_sciences/molecular_structure_plausibility",
+      "oldAilis": 0.5,
+      "currentAilis": 0.42857142857142855,
+      "codex": 0.42857142857142855
+    },
+    {
+      "taskId": "transport_safety/fds_single_compartment_detector_reconstruction",
+      "oldAilis": 0.75859,
+      "currentAilis": 0.76806,
+      "codex": 0.75104
+    },
+    {
+      "taskId": "business_finance/digital_marketing_ab_test_analysis_1",
+      "oldAilis": 0.8,
+      "currentAilis": 0.8,
+      "codex": 0.8
+    },
+    {
+      "taskId": "computing_math/branch_bound_atsp",
+      "oldAilis": 1,
+      "currentAilis": 1,
+      "codex": 0.825
+    },
+    {
+      "taskId": "computing_math/k3_abelian_extensions",
+      "oldAilis": 1,
+      "currentAilis": 1,
+      "codex": 0
+    },
+    {
+      "taskId": "computing_math/ranking_node_feature_parity_recovery_instance_1",
+      "oldAilis": 0,
+      "currentAilis": 0,
+      "codex": 0
+    },
+    {
+      "taskId": "education_info/moodle_gradebook_closeout_reconciliation",
+      "oldAilis": 0.8170000000000001,
+      "currentAilis": 0.8170000000000001,
+      "codex": 0
+    },
+    {
+      "taskId": "health_medicine/causal_ihdp_ite_estimation_6a_v1",
+      "oldAilis": 0.16108639210560627,
+      "currentAilis": 0.16108634295941193,
+      "codex": 0
+    },
+    {
+      "taskId": "health_medicine/healthcare_sap_group_sequential_nsclc",
+      "oldAilis": 0.35,
+      "currentAilis": 0.25,
+      "codex": 0.2
+    },
+    {
+      "taskId": "health_medicine/replicate_paper_1",
+      "oldAilis": 1,
+      "currentAilis": 1,
+      "codex": 1
+    },
+    {
+      "taskId": "life_sciences/genomic_interval_processing_1",
+      "oldAilis": 0.25,
+      "currentAilis": 0.25,
+      "codex": 0.25
+    },
+    {
+      "taskId": "life_sciences/spatial_transcriptomics_spatial_domain_identification",
+      "oldAilis": 0.509683050491851,
+      "currentAilis": 0,
+      "codex": 1
+    },
+    {
+      "taskId": "life_sciences/zdock_hiv_dimer_interface_scoring_v1",
+      "oldAilis": 1,
+      "currentAilis": 1,
+      "codex": 1
+    },
+    {
+      "taskId": "physical_sciences/silicon_bse_absorption",
+      "oldAilis": 0,
+      "currentAilis": 0.844292,
+      "codex": 0.741614
+    },
+    {
+      "taskId": "business_finance/digital_marketing_audience_segmentation_1",
+      "oldAilis": 0.9083,
+      "currentAilis": 0.8708,
+      "codex": 0.6912
+    },
+    {
+      "taskId": "computing_math/cfr_game_theory_equilibrium",
+      "oldAilis": 1,
+      "currentAilis": 1,
+      "codex": 1
+    },
+    {
+      "taskId": "computing_math/k8s_payment_api_root_cause_analysis",
+      "oldAilis": 0.697727,
+      "currentAilis": 0.697727,
+      "codex": 0.797727
+    },
+    {
+      "taskId": "computing_math/recsys_cold_start_instance_1",
+      "oldAilis": 0.3333333333333333,
+      "currentAilis": 0.5,
+      "codex": 0.5
+    },
+    {
+      "taskId": "engineering/abb_irb6700_asset_to_urdf_instance_1",
+      "oldAilis": 1,
+      "currentAilis": 0.8735,
+      "codex": 1
+    },
+    {
+      "taskId": "health_medicine/Clinical_Variant_Annotation",
+      "oldAilis": 0.8,
+      "currentAilis": 0.8,
+      "codex": 0.8
+    },
+    {
+      "taskId": "health_medicine/healthcare_tcga_luad_survival_kras",
+      "oldAilis": 0.84,
+      "currentAilis": 0.84,
+      "codex": 0.84
+    },
+    {
+      "taskId": "legal/agora_governance_classify_instance_1",
+      "oldAilis": 0.48391534391534397,
+      "currentAilis": 0.30074074074074075,
+      "codex": 0.2718518518518519
+    },
+    {
+      "taskId": "business_finance/financial_stmt_reconstruction_aapl_fy2024",
+      "oldAilis": 1,
+      "currentAilis": 1,
+      "codex": 1
+    },
+    {
+      "taskId": "computing_math/cp_test_gen_1",
+      "oldAilis": 0.8,
+      "currentAilis": 0.7,
+      "codex": 0.1
+    },
+    {
+      "taskId": "computing_math/mp_checkpoint_consolidation_v2",
+      "oldAilis": 1,
+      "currentAilis": 1,
+      "codex": 1
+    },
+    {
+      "taskId": "computing_math/synthetic_causal_structure_inference",
+      "oldAilis": 0.35077199949340204,
+      "currentAilis": 0.2993736156378492,
+      "codex": 0.2932581083377946
+    },
+    {
+      "taskId": "engineering/chisel_verilog_alignment_seq_1",
+      "oldAilis": 0.2,
+      "currentAilis": 0.2,
+      "codex": 0.2
+    },
+    {
+      "taskId": "health_medicine/crf_sdtm_mapping_4",
+      "oldAilis": 0.6005,
+      "currentAilis": 0.5789,
+      "codex": 0.6172
+    },
+    {
+      "taskId": "health_medicine/healthcare_variant_annotation_pipeline",
+      "oldAilis": 0.794,
+      "currentAilis": 0.794,
+      "codex": 0.7930000000000001
+    },
+    {
+      "taskId": "legal/legal_dr_fees_01",
+      "oldAilis": 1,
+      "currentAilis": 1,
+      "codex": 1
+    },
+    {
+      "taskId": "life_sciences/merfish_image_decoding_segmentation_1",
+      "oldAilis": 0.3,
+      "currentAilis": 0.2,
+      "codex": 0.31
+    },
+    {
+      "taskId": "life_sciences/tms_marrow_cell_type_annotation_instance_1",
+      "oldAilis": 0,
+      "currentAilis": 1,
+      "codex": 1
+    },
+    {
+      "taskId": "physical_sciences/climate_prediction",
+      "oldAilis": 0.7932,
+      "currentAilis": 0.7911,
+      "codex": 0.7888
+    },
+    {
+      "taskId": "computing_math/data_pipeline_etl_instance_1",
+      "oldAilis": 0.8333333333333334,
+      "currentAilis": 0.8333333333333334,
+      "codex": 0.8333333333333334
+    },
+    {
+      "taskId": "computing_math/os_log_permission_guard_v1",
+      "oldAilis": 1,
+      "currentAilis": 1,
+      "codex": 1
+    },
+    {
+      "taskId": "education_info/homework_grading_numerical_pdes_instance_02",
+      "oldAilis": 0.6147878787878789,
+      "currentAilis": 0.6074545454545455,
+      "codex": 0.5824242424242424
+    },
+    {
+      "taskId": "health_medicine/epidemiology_forecast",
+      "oldAilis": 1,
+      "currentAilis": 1,
+      "codex": 1
+    },
+    {
+      "taskId": "health_medicine/nhanes_confounder_sensitivity_analysis",
+      "oldAilis": 0.975,
+      "currentAilis": 0.571875,
+      "codex": 1
+    },
+    {
+      "taskId": "life_sciences/protein_function_annotation_instance_1",
+      "oldAilis": 1,
+      "currentAilis": 1,
+      "codex": 1
+    },
+    {
+      "taskId": "life_sciences/tp53_locus_variant_histone_browser_svg",
+      "oldAilis": 1,
+      "currentAilis": 1,
+      "codex": 0.8
+    },
+    {
+      "taskId": "physical_sciences/gillespie_gene_regulatory_network",
+      "oldAilis": 0.59,
+      "currentAilis": 0.65,
+      "codex": 0.8400000000000001
+    },
+    {
+      "taskId": "transport_safety/capacitated_vehicle_routing_problems",
+      "oldAilis": 0.67,
+      "currentAilis": 0.67,
+      "codex": 0.67
+    },
+    {
+      "taskId": "life_sciences/tcga_brca_deg_analysis",
+      "oldAilis": 1,
+      "currentAilis": 1,
+      "codex": 1
+    },
+    {
+      "taskId": "physical_sciences/adapt_vqe_molecular_energy",
+      "oldAilis": 1,
+      "currentAilis": 1,
+      "codex": 1
+    },
+    {
+      "taskId": "psychology_neuro/celegans_neuron_tracking",
+      "oldAilis": 0.07046091287423759,
+      "currentAilis": 0.07679966471106475,
+      "codex": 0.06977650749373364
+    },
+    {
+      "taskId": "life_sciences/hg002_chr22_germline_variant_pipeline",
+      "oldAilis": 0.55,
+      "currentAilis": 0.65,
+      "codex": 0.65
+    },
+    {
+      "taskId": "business_finance/internal_employee_agent_instance_1",
+      "oldAilis": 1,
+      "currentAilis": 1,
+      "codex": 1
+    },
+    {
+      "taskId": "health_medicine/public_health_mask_mandate_ratio",
+      "oldAilis": 0.3333333333333333,
+      "currentAilis": 0.3333333333333333,
+      "codex": 0.3333333333333333
+    },
+    {
+      "taskId": "life_sciences/amber_three_stage_mmgbsa_workflow_instance_1",
+      "oldAilis": 0,
+      "currentAilis": 0,
+      "codex": 0
+    },
+    {
+      "taskId": "health_medicine/simglucose_safe_basal_control_instance_1",
+      "oldAilis": 0,
+      "currentAilis": 0,
+      "codex": 0
+    },
+    {
+      "taskId": "physical_sciences/mose2_bse_absorption_soc",
+      "oldAilis": 0,
+      "currentAilis": 0,
+      "codex": 0
+    },
+    {
+      "taskId": "social_sciences/atwood_2022_measles_vaccine_reproduction",
+      "oldAilis": 1,
+      "currentAilis": 1,
+      "codex": 1
+    },
+    {
+      "taskId": "engineering/power_10kv_feeder_reliability_001",
+      "oldAilis": 0.032658,
+      "currentAilis": 0.035507,
+      "codex": 0.036434
+    },
+    {
+      "taskId": "life_sciences/cell_tracking_instance_1",
+      "oldAilis": 0.976733,
+      "currentAilis": 0.752338,
+      "codex": 0.884767
+    },
+    {
+      "taskId": "life_sciences/idp_ensemble_scoring",
+      "oldAilis": 0,
+      "currentAilis": 0,
+      "codex": 0
+    },
+    {
+      "taskId": "physical_sciences/computational_materials_science",
+      "oldAilis": 0,
+      "currentAilis": 1,
+      "codex": 1
+    },
+    {
+      "taskId": "other/aerobics_wc2026_portugal_trio_difficulty_scoring",
+      "oldAilis": 0,
+      "currentAilis": 0,
+      "codex": 0
+    },
+    {
+      "taskId": "life_sciences/pseudotime_de",
+      "oldAilis": 0,
+      "currentAilis": 0,
+      "codex": 0
+    }
+  ]
+}

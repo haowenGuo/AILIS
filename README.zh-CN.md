@@ -3,7 +3,7 @@
   <h1>AILIS</h1>
   <p><strong>能看、能听、能记住，也能真正把事情做完的开源桌面 AI 伙伴。</strong></p>
   <p>
-    <img alt="Version" src="https://img.shields.io/badge/version-1.4.8-2563eb?style=flat-square">
+    <img alt="Version" src="https://img.shields.io/badge/version-1.4.9-2563eb?style=flat-square">
     <img alt="Desktop" src="https://img.shields.io/badge/desktop-Electron-0f172a?style=flat-square">
     <img alt="License" src="https://img.shields.io/badge/license-MIT-059669?style=flat-square">
   </p>
@@ -51,6 +51,26 @@ AILIS 希望成为真正生活在桌面上的个人 AI。她有可见的 3D 角�
 | 用自然语言描述目标 | 读取获准的屏幕与文件 | 搜索、代码、文件与电脑操作 | 保存有价值的偏好与项目背景 |
 
 ## 评测成绩
+
+### Agents' Last Exam · 同模型对照
+
+**GPT-6 Luna · xhigh · 98 道同题对照 · 2026 年 10 月**
+
+| ALE 指标 | AILIS 旧版 | AILIS 本轮冻结版本 | Codex |
+| :--- | ---: | ---: | ---: |
+| **平均任务得分** | 42.63% | **49.35%** | 48.53% |
+| 满分 / 部分得分 / 零分 | 20 / 37 / 41 | 23 / 43 / 32 | 24 / 40 / 34 |
+| 逻辑输入 Token | 270.99M | **208.49M** | 488.25M |
+| 未缓存输入 Token | 16.76M | 28.72M | **12.25M** |
+| 输出 Token | 4.52M | 4.27M | **3.34M** |
+| 输入缓存率 | 93.81% | 86.22% | **97.49%** |
+| 平均任务时长 | 2,237.4s | **1,517.9s** | 1,694.6s |
+
+Docker 清单 99 题中，98 题形成有效同题对照，另 1 题因评判器所需 API 不可用从双方排除。得分包含部分分；时间使用记录完整的 93 道同题，包含网络及环境准备。采用本地 **9,000 秒预算**，非官方 900 秒排行榜协议。领先 Codex 的 0.82 个百分点是单轮观测值。[完整口径、逐题成绩与开销](docs/evaluation-ale-20261012.md)。
+
+本轮冻结评测早于 v1.4.9 的窗口修正，本次发布没有启动新的评测。
+
+### 历史终端与通用任务成绩
 
 端到端 Agent 评测 · **2026-09-07** · 成绩单位 %。浅色突出 AILIS；每列明确标注系统、模型与推理档位。
 
@@ -110,9 +130,9 @@ Humanlike 检查点来自 30 天陪伴场景，不代表真实用户连续使用
 
 ## 快速开始
 
-### v1.4.8 更新
+### v1.4.9 更新
 
-本版修复托管图片工具认证与视觉能力判断，补齐脱敏后的模型请求诊断。Windows、Linux 与两种 Mac 架构继续提供完整离线语音识别和唤醒词支持。[版本说明](docs/releases/v1.4.8.md)列明验证范围；[v1.4.8 下载](https://github.com/haowenGuo/AILIS/releases/tag/v1.4.8)附安装包哈希和逐平台验收报告。
+GPT-6 Luna 使用 272k 上下文窗口、244.8k 压缩点；未识别模型在无明确配置时使用 256k 兜底。提示词、工具和压缩算法保持不变。Windows、Linux 与两种 Mac 架构继续提供完整离线语音识别和唤醒词支持。[版本说明](docs/releases/v1.4.9.md)与 [v1.4.9 下载](https://github.com/haowenGuo/AILIS/releases/tag/v1.4.9)提供发布信息，v1.4.8 保留供回退。
 
 ### 直接使用
 

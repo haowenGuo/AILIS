@@ -1,5 +1,7 @@
 # AILIS 评测成绩
 
+**10 月 12 日新增：**[ALE 同模型对照](evaluation-ale-20261012.md)，AILIS **49.35%**、Codex **48.53%**，GPT-6 Luna / xhigh，99 题 Docker 清单中的 98 道有效同题。下方 9 月历史成绩保留原口径。
+
 [文档中心](README.md) · [English](evaluation.md) · [逐题索引与原始统计数](evaluation/20260907-snapshot.json)
 
 更新于 **2026-09-07**。成绩按能力组织；任务执行表按系统与模型横向对照，浅色突出 AILIS，粗体表示本行最高观测值，其中 Luna 指 gpt-5.6-luna。记忆与陪伴评测保留各自历史配置。成绩来自已有冻结运行，**不是等预算排名，也不自动属于当前 GitHub 源码或安装包**。

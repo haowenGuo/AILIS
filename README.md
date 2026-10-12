@@ -3,7 +3,7 @@
   <h1>AILIS</h1>
   <p><strong>An open-source desktop AI companion that can see, listen, remember, and get real work done.</strong></p>
   <p>
-    <img alt="Version" src="https://img.shields.io/badge/version-1.4.8-2563eb?style=flat-square">
+    <img alt="Version" src="https://img.shields.io/badge/version-1.4.9-2563eb?style=flat-square">
     <img alt="Desktop" src="https://img.shields.io/badge/desktop-Electron-0f172a?style=flat-square">
     <img alt="License" src="https://img.shields.io/badge/license-MIT-059669?style=flat-square">
   </p>
@@ -51,6 +51,26 @@ Talk to AILIS naturally, like a companion. When there is work to do, she can und
 | Explain the goal naturally | Read approved screen and file context | Use search, code, file, and computer tools | Keep useful preferences and project background |
 
 ## Evaluation Results
+
+### Agents' Last Exam · Same-Model Comparison
+
+**GPT-6 Luna · xhigh · 98 matched tasks · October 2026**
+
+| ALE metric | AILIS · previous | AILIS · evaluated candidate | Codex |
+| :--- | ---: | ---: | ---: |
+| **Mean task score** | 42.63% | **49.35%** | 48.53% |
+| Full / partial / zero credit | 20 / 37 / 41 | 23 / 43 / 32 | 24 / 40 / 34 |
+| Logical input tokens | 270.99M | **208.49M** | 488.25M |
+| Uncached input tokens | 16.76M | 28.72M | **12.25M** |
+| Output tokens | 4.52M | 4.27M | **3.34M** |
+| Input cache rate | 93.81% | 86.22% | **97.49%** |
+| Mean task time | 2,237.4s | **1,517.9s** | 1,694.6s |
+
+The Docker manifest contains 99 tasks; 98 have valid paired results. One unavailable API-dependent verifier is excluded from both systems. Scores include partial credit; timing uses 93 tasks with matched records, including network/setup time. These are local **9,000s-budget** runs, not the official 900s leaderboard protocol. The +0.82 pp lead over Codex is a single-run observation. [Protocol, per-task scores and resource accounting](docs/evaluation-ale-20261012.md).
+
+The evaluated snapshot predates v1.4.9's context-window correction; no new evaluation was launched for this release.
+
+### Earlier Terminal & General-Agent Results
 
 End-to-end Agent evaluation · **2026-09-07** · scores in %. AILIS is highlighted; columns identify both the system and its model / reasoning setting.
 
@@ -110,9 +130,9 @@ Humanlike checkpoints come from 30-day companion scenarios, not a 30-day real-us
 
 ## Quick Start
 
-### v1.4.8 update
+### v1.4.9 update
 
-This release fixes managed-cloud image-tool authentication and vision capability detection, and adds redacted model-request diagnostics. Windows, Linux and both Mac architectures retain bundled offline speech recognition and wake-word support. See the [release notes](docs/releases/v1.4.8.md) for verification scope and the [v1.4.8 downloads](https://github.com/haowenGuo/AILIS/releases/tag/v1.4.8) for package hashes and platform acceptance reports.
+GPT-6 Luna now uses a 272k context window with compaction at 244.8k; unrecognized models default to 256k unless a window is explicitly configured. Existing prompts, tools and compaction algorithms are unchanged. Windows, Linux and both Mac architectures retain bundled offline speech recognition and wake-word support. See the [release notes](docs/releases/v1.4.9.md) and [v1.4.9 downloads](https://github.com/haowenGuo/AILIS/releases/tag/v1.4.9). v1.4.8 remains available for rollback.
 
 ### Use AILIS
 
