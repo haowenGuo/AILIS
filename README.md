@@ -52,41 +52,24 @@ Talk to AILIS naturally, like a companion. When there is work to do, she can und
 
 ## Evaluation Results
 
-### Agents' Last Exam · Same-Model Comparison
+End-to-end Agent evaluation · **Updated October 16, 2026** · scores in %. The AILIS column is highlighted; model and reasoning settings are shown for each result.
 
-**GPT-6 Luna · xhigh · 98 matched tasks · October 2026**
+![AILIS and Codex benchmark matrix: Terminal-Bench, ALE 98-task comparison and GAIA](docs/assets/benchmarks/ailis-evaluation-20261016.en.svg)
 
-| ALE metric | AILIS · previous | AILIS · evaluated candidate | Codex |
-| :--- | ---: | ---: | ---: |
-| **Mean task score** | 42.63% | **49.35%** | 48.53% |
-| Full / partial / zero credit | 20 / 37 / 41 | 23 / 43 / 32 | 24 / 40 / 34 |
-| Logical input tokens | 270.99M | **208.49M** | 488.25M |
-| Uncached input tokens | 16.76M | 28.72M | **12.25M** |
-| Output tokens | 4.52M | 4.27M | **3.34M** |
-| Input cache rate | 93.81% | 86.22% | **97.49%** |
-| Mean task time | 2,237.4s | **1,517.9s** | 1,694.6s |
+**[1] Terminal-Bench:** 65 / 87 valid tasks; Codex: 89 tasks, five-trial mean. **[2] GAIA:** the same 122 completed tasks, answer-reviewed; AILIS Max / 3000s versus Codex Medium / 600s. The September results retain their original budgets.
 
-The Docker manifest contains 99 tasks; 98 have valid paired results. One unavailable API-dependent verifier is excluded from both systems. Scores include partial credit; timing uses 93 tasks with matched records, including network/setup time. These are local **9,000s-budget** runs, not the official 900s leaderboard protocol. The +0.82 pp lead over Codex is a single-run observation. [Protocol, per-task scores and resource accounting](docs/evaluation-ale-20261012.md).
-
-The evaluated snapshot predates v1.4.9's context-window correction; no new evaluation was launched for this release.
-
-### Earlier Terminal & General-Agent Results
-
-End-to-end Agent evaluation · **2026-09-07** · scores in %. AILIS is highlighted; columns identify both the system and its model / reasoning setting.
-
-![AILIS and Codex benchmark matrix: Terminal-Bench and GAIA overall](docs/assets/benchmarks/ailis-evaluation-20260907.en.svg)
-
-**[1] Terminal-Bench:** 65 passes / 87 valid tasks, with 2 of 89 unresolved. Codex is the official archived mean across 89 tasks, with five trials per task. **[2] GAIA:** reviewed answers on 122 completed tasks, with 43 of 165 unresolved; AILIS uses Max / 3000s, the Codex references use Medium / 600s. These are different-budget frozen-run results, not full-suite certification of the current release.
+**[3] ALE:** 98 matched tasks, both **GPT-6 Luna / xhigh**, 9,000s per task. Mean reward includes partial credit: **AILIS 49.35% · Codex 48.53%**. These are local single-run results, not the official 900s leaderboard protocol. [Per-task scores, tokens, caching, latency and version details](docs/evaluation-ale-20261012.md).
 
 <details>
 <summary>Text table · scores, sample counts, and missing values</summary>
 
-| Capability / Benchmark | AILIS<br>Luna Max | Codex<br>Luna Max | Codex<br>Luna Medium | Codex<br>GPT-5.5 Medium |
+| Capability / Benchmark | AILIS | Codex | Codex<br>Luna Medium | Codex<br>GPT-5.5 Medium |
 | :--- | ---: | ---: | ---: | ---: |
 | **Coding** | | | | |
-| **Agentic terminal coding**<br>Terminal-Bench 2.1 [1] | 74.71<br><sub>65 / 87</sub> | **75.73**<br><sub>89 tasks · 5-trial mean · ± 1.32 SE</sub> | — | — |
+| **Agentic terminal coding**<br>Terminal-Bench 2.1 [1] | 74.71<br><sub>GPT-5.6 Luna · Max · 65 / 87</sub> | **75.73**<br><sub>GPT-5.6 Luna · Max<br>89 tasks · 5-trial mean · ± 1.32 SE</sub> | — | — |
 | **Agent** | | | | |
-| **General-purpose tasks**<br>GAIA · Overall [2] | 77.05<br><sub>94 / 122</sub> | — | 67.21<br><sub>82 / 122</sub> | **79.51**<br><sub>97 / 122</sub> |
+| **Professional tasks**<br>Agents' Last Exam [3] | **49.35**<br><sub>GPT-6 Luna · xhigh<br>98 tasks · mean reward</sub> | 48.53<br><sub>GPT-6 Luna · xhigh<br>98 tasks · mean reward</sub> | — | — |
+| **General-purpose tasks**<br>GAIA · Overall [2] | 77.05<br><sub>GPT-5.6 Luna · Max · 94 / 122</sub> | — | 67.21<br><sub>82 / 122</sub> | **79.51**<br><sub>97 / 122</sub> |
 
 Scores are percentages. Bold indicates the highest reported value in a row, not a controlled ranking. — means no corresponding evidence, not failure or zero.
 

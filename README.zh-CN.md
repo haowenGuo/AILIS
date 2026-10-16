@@ -52,41 +52,24 @@ AILIS 希望成为真正生活在桌面上的个人 AI。她有可见的 3D 角�
 
 ## 评测成绩
 
-### Agents' Last Exam · 同模型对照
+端到端 Agent 评测 · **更新于 2026-10-16** · 成绩单位 %。浅色突出 AILIS，每项成绩标注模型与推理档位。
 
-**GPT-6 Luna · xhigh · 98 道同题对照 · 2026 年 10 月**
+![AILIS 与 Codex 评测矩阵：Terminal-Bench、ALE 98 题同模型对照、GAIA](docs/assets/benchmarks/ailis-evaluation-20261016.zh.svg)
 
-| ALE 指标 | AILIS 旧版 | AILIS 本轮冻结版本 | Codex |
-| :--- | ---: | ---: | ---: |
-| **平均任务得分** | 42.63% | **49.35%** | 48.53% |
-| 满分 / 部分得分 / 零分 | 20 / 37 / 41 | 23 / 43 / 32 | 24 / 40 / 34 |
-| 逻辑输入 Token | 270.99M | **208.49M** | 488.25M |
-| 未缓存输入 Token | 16.76M | 28.72M | **12.25M** |
-| 输出 Token | 4.52M | 4.27M | **3.34M** |
-| 输入缓存率 | 93.81% | 86.22% | **97.49%** |
-| 平均任务时长 | 2,237.4s | **1,517.9s** | 1,694.6s |
+**[1] Terminal-Bench：**65 / 87 有效题；Codex 为 89 题、每题 5 次均值。**[2] GAIA：**相同 122 道已完成题的答案复核，AILIS Max / 3000s 对照 Codex Medium / 600s。两项保留 9 月评测的原有预算。
 
-Docker 清单 99 题中，98 题形成有效同题对照，另 1 题因评判器所需 API 不可用从双方排除。得分包含部分分；时间使用记录完整的 93 道同题，包含网络及环境准备。采用本地 **9,000 秒预算**，非官方 900 秒排行榜协议。领先 Codex 的 0.82 个百分点是单轮观测值。[完整口径、逐题成绩与开销](docs/evaluation-ale-20261012.md)。
-
-本轮冻结评测早于 v1.4.9 的窗口修正，本次发布没有启动新的评测。
-
-### 历史终端与通用任务成绩
-
-端到端 Agent 评测 · **2026-09-07** · 成绩单位 %。浅色突出 AILIS；每列明确标注系统、模型与推理档位。
-
-![AILIS 与 Codex 评测矩阵：Terminal-Bench、GAIA 总体](docs/assets/benchmarks/ailis-evaluation-20260907.zh.svg)
-
-**[1] Terminal-Bench：**65 通过 / 87 有效，计划 89 题中 2 题未决；Codex 为官方存档的 89 题成绩，每题 5 次取均值。**[2] GAIA：**相同 122 道已完成题的答案复核，计划 165 题中 43 题未决；AILIS 为 Max / 3000s，Codex 对照为 Medium / 600s。这是不同预算的冻结运行对照，不是当前版本的全量评测认证。
+**[3] ALE：**98 道同题对照，双方均为 **GPT-6 Luna / xhigh**，每题 9,000 秒。含部分分的平均得分：**AILIS 49.35% · Codex 48.53%**。这是本地单轮结果，不是官方 900 秒排行榜成绩。[逐题分数、Token、缓存率、时延与版本信息](docs/evaluation-ale-20261012.md)。
 
 <details>
 <summary>展开文本表格：成绩、样本量与缺失数据</summary>
 
-| 能力 / 评测集 | AILIS<br>Luna Max | Codex<br>Luna Max | Codex<br>Luna Medium | Codex<br>GPT-5.5 Medium |
+| 能力 / 评测集 | AILIS | Codex | Codex<br>Luna Medium | Codex<br>GPT-5.5 Medium |
 | :--- | ---: | ---: | ---: | ---: |
 | **Coding · 编码** | | | | |
-| **终端编码与环境任务**<br>Terminal-Bench 2.1 [1] | 74.71<br><sub>65 / 87</sub> | **75.73**<br><sub>89 题 · 5 次均值 · ± 1.32 SE</sub> | — | — |
+| **终端编码与环境任务**<br>Terminal-Bench 2.1 [1] | 74.71<br><sub>GPT-5.6 Luna · Max · 65 / 87</sub> | **75.73**<br><sub>GPT-5.6 Luna · Max<br>89 题 · 5 次均值 · ± 1.32 SE</sub> | — | — |
 | **Agent · 通用任务** | | | | |
-| **通用任务执行**<br>GAIA · Overall [2] | 77.05<br><sub>94 / 122</sub> | — | 67.21<br><sub>82 / 122</sub> | **79.51**<br><sub>97 / 122</sub> |
+| **专业领域任务执行**<br>Agents' Last Exam [3] | **49.35**<br><sub>GPT-6 Luna · xhigh<br>98 题 · 平均得分</sub> | 48.53<br><sub>GPT-6 Luna · xhigh<br>98 题 · 平均得分</sub> | — | — |
+| **通用任务执行**<br>GAIA · Overall [2] | 77.05<br><sub>GPT-5.6 Luna · Max · 94 / 122</sub> | — | 67.21<br><sub>82 / 122</sub> | **79.51**<br><sub>97 / 122</sub> |
 
 成绩单位为 %；粗体仅表示本行最高观测值，不代表等条件排名。— 表示无对应证据，不是失败或 0 分。
 

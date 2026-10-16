@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="628" viewBox="0 0 1120 628" role="img" aria-labelledby="title desc">
+<title id="title">AILIS and Codex evaluation comparison · 2026-10-16</title>
+<desc id="desc">Terminal-Bench: AILIS 74.71%, Codex 75.73%. ALE: 98 matched tasks with GPT-6 Luna xhigh, AILIS mean reward 49.35%, Codex 48.53%, including partial credit, with a 9000-second budget. GAIA: AILIS 77.05%, Codex Luna Medium 67.21%, Codex GPT-5.5 Medium 79.51%. Historical protocols differ.</desc>
+<style>text{font-family:Arial,"Microsoft YaHei","Noto Sans CJK SC",sans-serif;font-variant-numeric:tabular-nums}.head{font-size:21px;fill:#3038c9;font-weight:600}.model{font-size:15px;fill:#58628b}.body{font-size:21px;fill:#182033}.muted{font-size:15px;fill:#5b6479}.group{font-size:20px;fill:#3038c9;font-weight:600}.score{font-size:26px;fill:#4b5568}.best{font-size:26px;fill:#101827;font-weight:700}.count{font-size:14px;fill:#667085}.note{font-size:15px;fill:#4b5568}.missing{font-size:24px;fill:#8c94a5}</style>
+<rect width="1120" height="628" rx="14" fill="#ffffff"/>
+<rect x="350" y="0" width="192" height="524" fill="#eef0ff"/>
+<rect x="1" y="1" width="1118" height="523" rx="12" fill="none" stroke="#e3e6ef"/>
+<line x1="350" y1="1" x2="350" y2="524" stroke="#e8eaf2"/>
+<line x1="542" y1="1" x2="542" y2="524" stroke="#e8eaf2"/>
+<line x1="734" y1="1" x2="734" y2="524" stroke="#e8eaf2"/>
+<line x1="926" y1="1" x2="926" y2="524" stroke="#e8eaf2"/>
+<text x="25" y="47" class="head">Capability / Benchmark</text>
+<text x="25" y="77" class="muted">Score % ↑</text>
+<text x="446" y="45" class="head" text-anchor="middle">AILIS</text>
+<text x="446" y="75" class="model" text-anchor="middle">Model shown per row</text>
+<text x="638" y="45" class="head" text-anchor="middle">Codex</text>
+<text x="638" y="75" class="model" text-anchor="middle">Model shown per row</text>
+<text x="830" y="45" class="head" text-anchor="middle">Codex</text>
+<text x="830" y="75" class="model" text-anchor="middle">Luna · Medium</text>
+<text x="1022" y="45" class="head" text-anchor="middle">Codex</text>
+<text x="1022" y="75" class="model" text-anchor="middle">GPT-5.5 · Medium</text>
+<line x1="1" y1="108" x2="1119" y2="108" stroke="#5c68ff" stroke-width="2"/>
+<rect x="1" y="108" width="1118" height="44" fill="#dce0ff"/>
+<text x="25" y="137" class="group">Coding</text>
+<text x="28" y="195" class="body">Agentic terminal coding</text>
+<text x="28" y="221" class="muted">Terminal-Bench 2.1 [1]</text>
+<text x="446" y="178" class="model" text-anchor="middle">GPT-5.6 Luna · Max</text>
+<text x="446" y="211" class="score" text-anchor="middle">74.71</text>
+<text x="446" y="235" class="count" text-anchor="middle">65 / 87</text>
+<text x="638" y="178" class="model" text-anchor="middle">GPT-5.6 Luna · Max</text>
+<text x="638" y="211" class="best" text-anchor="middle">75.73</text>
+<text x="638" y="235" class="count" text-anchor="middle">89 × 5 trials · ± 1.32 SE</text>
+<text x="830" y="211" class="missing" text-anchor="middle">—</text>
+<text x="1022" y="211" class="missing" text-anchor="middle">—</text>
+<line x1="1" y1="260" x2="1119" y2="260" stroke="#e3e6ef"/>
+<rect x="1" y="260" width="1118" height="44" fill="#dce0ff"/>
+<text x="25" y="289" class="group">Agent</text>
+<text x="28" y="352" class="body">Professional tasks</text>
+<text x="28" y="378" class="muted">Agents' Last Exam [3]</text>
+<text x="446" y="330" class="model" text-anchor="middle">GPT-6 Luna · xhigh</text>
+<text x="446" y="364" class="best" text-anchor="middle">49.35</text>
+<text x="446" y="389" class="count" text-anchor="middle">98 tasks · mean reward</text>
+<text x="638" y="330" class="model" text-anchor="middle">GPT-6 Luna · xhigh</text>
+<text x="638" y="364" class="score" text-anchor="middle">48.53</text>
+<text x="638" y="389" class="count" text-anchor="middle">98 tasks · mean reward</text>
+<text x="830" y="364" class="missing" text-anchor="middle">—</text>
+<text x="1022" y="364" class="missing" text-anchor="middle">—</text>
+<line x1="1" y1="414" x2="1119" y2="414" stroke="#e3e6ef"/>
+<text x="28" y="462" class="body">General-purpose tasks</text>
+<text x="28" y="488" class="muted">GAIA · Overall [2]</text>
+<text x="446" y="440" class="model" text-anchor="middle">GPT-5.6 Luna · Max</text>
+<text x="446" y="474" class="score" text-anchor="middle">77.05</text>
+<text x="446" y="499" class="count" text-anchor="middle">94 / 122</text>
+<text x="638" y="474" class="missing" text-anchor="middle">—</text>
+<text x="830" y="440" class="model" text-anchor="middle">GPT-5.6 Luna</text>
+<text x="830" y="474" class="score" text-anchor="middle">67.21</text>
+<text x="830" y="499" class="count" text-anchor="middle">82 / 122</text>
+<text x="1022" y="474" class="best" text-anchor="middle">79.51</text>
+<text x="1022" y="499" class="count" text-anchor="middle">97 / 122</text>
+<line x1="1" y1="524" x2="1119" y2="524" stroke="#e3e6ef"/>
+<text x="6" y="552" class="note">[1] Terminal: 87 valid of 89; Codex: 89 × 5 trials.  [2] GAIA: reviewed answers on the same 122 of 165 tasks.</text>
+<text x="6" y="578" class="note">[3] ALE: GPT-6 Luna / xhigh · 98 matched tasks · 9,000s · mean reward includes partial credit.</text>
+<text x="6" y="604" class="note">AILIS highlighted; bold = highest observed score. Different protocols; see linked scorecards.</text>
+</svg>
