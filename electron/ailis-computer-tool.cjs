@@ -2462,6 +2462,12 @@ class ComputerRuntime {
             record.outputCapture?.append('stderr', chunk);
             record.updatedAt = Date.now();
         });
+        // stdin can close while the process remains alive. Socket errors are
+        // asynchronous and are not delivered through the ChildProcess emitter.
+        child.stdin?.on('error', (error) => {
+            record.stdinError = error;
+            record.updatedAt = Date.now();
+        });
         child.on('exit', (code, signal) => {
             if (record.status !== 'timeout') record.status = 'exited';
             record.exitCode = code;
@@ -3200,7 +3206,30 @@ class ComputerRuntime {
         });
     }
 
-    processWrite(args, context) {
+    async writeProcessInput(record, input, action) {
+        const stdin = record.child.stdin;
+        let error = record.stdinError;
+        if (!error && (!stdin || stdin.destroyed || stdin.writableEnded || !stdin.writable)) {
+            error = Object.assign(new Error('Process stdin is closed or unavailable'), { code: 'ERR_STREAM_DESTROYED' });
+        }
+        if (!error) {
+            error = await new Promise((resolve) => {
+                try {
+                    stdin.write(input, (writeError) => resolve(writeError || null));
+                } catch (writeError) {
+                    resolve(writeError);
+                }
+            });
+        }
+        if (!error) return null;
+        record.stdinError = error;
+        return createErrorResult('error', error.message || String(error), {
+            action, sessionId: record.id, process_status: record.status, errorCode: error.code,
+            bytes_written: 0
+        });
+    }
+
+    async processWrite(args, context) {
         const id = normalizeString(args.sessionId || args.id);
         const input = typeof args.input === 'string' ? args.input : '';
         const record = this.sessions.get(id);
@@ -3214,9 +3243,10 @@ class ComputerRuntime {
         if (record.status !== 'running') {
             return createErrorResult('error', `进程会话不是 running：${record.status}`, { sessionId: id, status: record.status });
         }
-        record.child.stdin?.write(input);
-        if (args.submit === true || args.enter === true) {
-            record.child.stdin?.write(os.EOL);
+        const data = input + (args.submit === true || args.enter === true ? os.EOL : '');
+        if (data) {
+            const failure = await this.writeProcessInput(record, data, 'process_write');
+            if (failure) return failure;
         }
         return createTextResult('input written', {
             status: 'completed',
@@ -3254,10 +3284,9 @@ class ComputerRuntime {
                 return createErrorResult('error', `进程会话不是 running：${processRecord.status}`, { sessionId: id, status: processRecord.status });
             }
             if (input) {
-                processRecord.child.stdin?.write(input);
-            }
-            if (input && (args.submit === true || args.enter === true)) {
-                processRecord.child.stdin?.write(os.EOL);
+                const data = input + (args.submit === true || args.enter === true ? os.EOL : '');
+                const failure = await this.writeProcessInput(processRecord, data, 'write_stdin');
+                if (failure) return failure;
             }
             const details = await this.waitForProcessSnapshot(processRecord, yieldTimeMs);
             details.action = 'write_stdin';
@@ -3613,7 +3642,7 @@ class AILISComputerTool {
             return this.runtime.processRead(args);
         }
         if (action === 'process_write' || action === 'process_input') {
-            return this.runtime.processWrite(args, context);
+            return await this.runtime.processWrite(args, context);
         }
         if (action === 'process_kill') {
             return await this.runtime.processKill(args, context);
