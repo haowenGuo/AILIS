@@ -15,6 +15,16 @@ function send(message) {
     if (typeof process.send === 'function') process.send(message);
 }
 
+function finish(message) {
+    // Output/store messages share this ordered IPC channel. Exiting on the next
+    // tick can drop a large queued result; wait until the final write is flushed.
+    if (typeof process.send === 'function') {
+        process.send(message, error => process.exit(error ? 1 : 0));
+    } else {
+        process.exit(0);
+    }
+}
+
 function jsonClone(value) {
     if (value === undefined) return undefined;
     return JSON.parse(JSON.stringify(value));
@@ -161,21 +171,18 @@ async function run({ source = '', tools = [], store = {} } = {}) {
         });
         await module.evaluate();
         finished = true;
-        send({ type: 'complete', outputs });
-        setImmediate(() => process.exit(0));
+        finish({ type: 'complete', outputs });
     } catch (error) {
         finished = true;
         if (error === '__AILIS_CODE_MODE_EXIT__' || error?.code === 'AILIS_CODE_MODE_EXIT' || error?.message === '__AILIS_CODE_MODE_EXIT__') {
-            send({ type: 'complete', outputs });
-            setImmediate(() => process.exit(0));
+            finish({ type: 'complete', outputs });
             return;
         }
-        send({
+        finish({
             type: 'complete',
             outputs,
             error: error?.stack || error?.message || String(error)
         });
-        setImmediate(() => process.exit(0));
     }
 }
 
@@ -195,7 +202,6 @@ process.on('message', (message) => {
     }
     if (message.type === 'terminate' && !finished) {
         finished = true;
-        send({ type: 'terminated', outputs });
-        process.exit(0);
+        finish({ type: 'terminated', outputs });
     }
 });

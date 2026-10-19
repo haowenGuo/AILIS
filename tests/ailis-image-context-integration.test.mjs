@@ -44,8 +44,8 @@ test('exec view_image preserves pixels in the second HTTP request without compac
     await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
     const result = await gateway.runAgent({ message: 'Inspect image.png.', sessionId, context: {
         agentRole: 'unified_agent', agentLoop: 'llm', directToolExecutor: true, maxSteps: 4,
-        permissionProfile: 'danger-full-access', approvalPolicy: 'auto', confirmationPolicy: 'auto',
-        executeExternal: true, allowOutsideWorkspace: true, allowComputerWideAccess: true,
+        permissionProfile: 'workspace-write', approvalPolicy: 'auto', confirmationPolicy: 'auto',
+        executeExternal: true, allowOutsideWorkspace: false, allowComputerWideAccess: false,
         contextSoftTokenLimit: 10000, contextHardTokenLimit: 20000, contextStopTokenLimit: 100000,
         llmSettings: { provider: 'openai-compatible', baseUrl: `http://127.0.0.1:${server.address().port}/v1`,
             apiKey: 'local-test-only', model: 'test-model', temperature: 0, timeoutMs: 10000 }
@@ -55,7 +55,12 @@ test('exec view_image preserves pixels in the second HTTP request without compac
     assert.equal(result.cost.own.llm.calls, 2);
     const image = requests[1].body.messages.flatMap(message =>
         Array.isArray(message.content) ? message.content : []).find(part => part.type === 'image_url');
-    assert.ok(image, 'the second HTTP request must carry pixels');
+    assert.ok(image, 'the second HTTP request must carry pixels: ' + JSON.stringify({
+        steps: result.steps?.map(step => ({ tool: step.tool, status: step.response?.status,
+            error: step.response?.error, text: step.response?.result?.text?.slice(0, 1000) })),
+        messageTypes: requests[1].body.messages.map(message => ({ role: message.role,
+            types: Array.isArray(message.content) ? message.content.map(part => part.type) : typeof message.content }))
+    }));
     assert.equal(image.image_url.url, `data:image/png;base64,${bytes.toString('base64')}`);
     const canonicalImage = requests[1].checkpoint.items.flatMap(item => item.output?.body?.value || [])
         .find(part => part.type === 'input_image');

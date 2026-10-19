@@ -44,3 +44,14 @@ Original full-run results are not replaced by this experimental retest.
 
 Regression coverage includes the actual isolated exec worker and a two-request
 Gateway HTTP loop, image preservation, text budgets and provider usage thresholds.
+
+## Publishing Prerequisite
+
+The evaluated frozen runtime already waited for the final IPC send callback
+before exiting an exec worker. The public/hosted runtime had not received that
+change. It is published alongside this fix so large images are not dropped by
+an early worker exit. A regression exercises both normal completion and `exit()`
+with more than 1 MiB of pixels. The HTTP integration uses an ordinary bounded
+workspace, not full-control access; Linux server validation runs in a private
+network namespace so the synthetic loopback port does not require a host
+firewall exception. Neither adjustment changes the original task retest bundle.

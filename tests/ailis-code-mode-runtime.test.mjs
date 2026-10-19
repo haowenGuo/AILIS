@@ -143,6 +143,26 @@ test('exec composes multiple enabled tools in one JavaScript program', async () 
     ]);
 });
 
+test('large image outputs are flushed before normal completion and explicit exit', async t => {
+    const bytes = Buffer.concat([
+        Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=', 'base64'),
+        Buffer.alloc(1100000)
+    ]);
+    const spec = createExecToolSpec([functionSpec('view_image')]);
+    const runtime = new AILISCodeModeRuntime({ dispatchTool: async () => imageToolResult(bytes) });
+    t.after(() => runtime.shutdown());
+    for (const suffix of ['text("pixels flushed");', 'exit();']) {
+        const result = await runtime.execute({
+            input: `image(await tools.view_image({path: "large.png"})); ${suffix}`,
+            profileId: spec.x_ailis_code_mode_profile, context: { sessionId: 'large-image-ipc' }
+        });
+        assert.equal(result.ok, true, result.text);
+        const image = result.content.find(part => part.type === 'image');
+        assert.ok(image);
+        assert.equal(image.data, bytes.toString('base64'));
+    }
+});
+
 test('exec yields a live cell and exec_wait returns only its later completion', async () => {
     const spec = createExecToolSpec([functionSpec('noop')]);
     const runtime = new AILISCodeModeRuntime({ dispatchTool: async () => ({ ok: true }) });
