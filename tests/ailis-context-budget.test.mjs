@@ -6,11 +6,93 @@ import toolResultRuntime from '../electron/ailis-tool-result.cjs';
 import contextRuntime from '../electron/ailis-context-manager.cjs';
 
 const {
+    approxTokenCount,
     buildContextBudgetReport,
     makeHeadTailPreview
 } = budgetRuntime;
 const { normalizeAilisToolOutput } = toolResultRuntime;
 const { ContextManager } = contextRuntime;
+
+function inlineImage(detail = 'high', width = 2304, height = 864, bytes = 1100000) {
+    const data = Buffer.alloc(bytes);
+    Buffer.from('89504e470d0a1a0a', 'hex').copy(data);
+    data.writeUInt32BE(width, 16);
+    data.writeUInt32BE(height, 20);
+    return { type: 'input_image', image_url: `data:image/png;base64,${data.toString('base64')}`, detail };
+}
+
+test('inline images use visual token estimates without changing pixels or raw byte diagnostics', () => {
+    const image = inlineImage();
+    const items = [{ type: 'message', role: 'user', content: [image] }];
+    const original = JSON.stringify(items);
+    const wrapperBytes = Buffer.byteLength(original) - image.image_url.split(',')[1].length;
+    assert.equal(approxTokenCount(items), Math.ceil((wrapperBytes + 7373) / 4));
+    const report = buildContextBudgetReport({ recentResponseItems: items });
+    assert.equal(report.estimatedPromptTokens, approxTokenCount(items));
+    assert.equal(report.parts[0].bytes, Buffer.byteLength(original));
+    assert.equal(report.shouldCompact, false);
+    assert.equal(JSON.stringify(items), original);
+    assert.equal(approxTokenCount([inlineImage('high', 2304, 864, 2200000)]), approxTokenCount([image]));
+});
+
+test('original images use capped 32px patches in messages and canonical tool outputs', () => {
+    for (const [width, height, patches] of [[2304, 864, 1944], [32000, 32000, 10000]]) {
+        const image = inlineImage('original', width, height);
+        for (const type of ['function_call_output', 'custom_tool_call_output']) {
+            const item = { type, call_id: 'image-call',
+                output: { body: { kind: 'content_items', value: [{ type: 'input_text', text: 'Keep the image.' }, image] } } };
+            const raw = JSON.stringify(item);
+            const wrapperBytes = Buffer.byteLength(raw) - image.image_url.split(',')[1].length;
+            assert.equal(approxTokenCount(item), Math.ceil((wrapperBytes + patches * 4) / 4));
+        }
+    }
+});
+
+test('image budgeting handles MCP and Chat blocks but never discounts text or remote URLs', () => {
+    const image = inlineImage('original');
+    const url = image.image_url;
+    const payload = url.split(',')[1];
+    for (const part of [
+        { type: 'image_url', image_url: { url, detail: 'original' } },
+        { type: 'image_url', image_url: { url }, detail: 'original' },
+        { type: 'image', mimeType: 'image/png', data: payload, _meta: { 'codex/imageDetail': 'original' } },
+        { ...image, image_url: url.replace('data:image/png;base64,', 'DaTa:ImAgE/png;BASE64,') },
+        { ...image, image_url: url.replace('data:image/png;base64,', 'data:image/png;base64;charset=utf-8,') }
+    ]) {
+        const wrapper = Buffer.byteLength(JSON.stringify(part)) - payload.length;
+        assert.equal(approxTokenCount(part), Math.ceil((wrapper + 1944 * 4) / 4));
+    }
+    for (const value of [
+        url, JSON.stringify(image), { type: 'input_text', text: url },
+        { type: 'input_image', image_url: 'https://example.test/image.png' },
+        { type: 'input_image', image_url: 'data:text/plain;base64,' + payload },
+        { type: 'input_image', image_url: 'data:image/svg+xml,<svg></svg>' }
+    ]) {
+        const raw = typeof value === 'string' ? value : JSON.stringify(value);
+        assert.equal(approxTokenCount(value), Math.ceil(Buffer.byteLength(raw) / 4));
+    }
+    const invalid = { type: 'input_image', detail: 'original', image_url: 'data:image/png;base64,not-an-image' };
+    const wrapper = Buffer.byteLength(JSON.stringify(invalid)) - 'not-an-image'.length;
+    assert.equal(approxTokenCount(invalid), Math.ceil((wrapper + 7373) / 4));
+});
+
+test('visual histories stay below compaction while real text and provider usage still trigger it', () => {
+    const items = Array.from({ length: 8 }, (_, index) => [
+        { type: 'function_call', name: 'exec', call_id: `image-${index}`, arguments: '{}' },
+        { type: 'function_call_output', call_id: `image-${index}`,
+            output: { body: { kind: 'content_items', value: [inlineImage()] } } }
+    ]).flat();
+    const manager = new ContextManager({ items, toolOutputChars: 0 });
+    const options = { inputModalities: ['text', 'image'],
+        budgetConfig: { effectiveInputLimitTokens: 272000, softTokenLimit: 220000,
+            hardTokenLimit: 244800, stopTokenLimit: 260000 } };
+    const pkg = manager.forPromptPackage(options);
+    assert.equal(pkg.budgetReport.shouldCompact, false);
+    assert.ok(pkg.budgetReport.estimatedPromptTokens > 8 * 1800);
+    assert.deepEqual(pkg.recentResponseItems, manager.rawItems());
+    assert.equal(buildContextBudgetReport({ text: 'x'.repeat(244801 * 4) }, options.budgetConfig).shouldCompact, true);
+    assert.equal(buildContextBudgetReport({ images: items }, { ...options.budgetConfig, actualInputTokens: 245000 }).shouldCompact, true);
+});
 
 test('context budget defaults to 256k without overriding an explicit smaller window', () => {
     const fallback = buildContextBudgetReport();

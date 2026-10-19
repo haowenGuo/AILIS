@@ -1,3 +1,6 @@
+const { createHash } = require('node:crypto');
+const { imageDimensions } = require('./ailis-image-content.cjs');
+
 const DEFAULT_SCHEMA_BUDGET_BYTES = 4000;
 const DEFAULT_SCHEMA_DEPTH = 2;
 const DEFAULT_TEXT_BUDGET_CHARS = 6000;
@@ -96,9 +99,51 @@ function stripModelGuidance(value, options = {}) {
     return out;
 }
 
+// Match Codex history.rs: resized images use a fixed estimate; original images
+// use capped 32px patches. These are context estimates, not billing telemetry.
+const RESIZED_IMAGE_BYTES_ESTIMATE = 7373;
+const originalImageEstimates = new Map();
+
+function originalImageBytes(payload) {
+    const key = createHash('sha256').update(payload).digest('hex');
+    let estimate = originalImageEstimates.get(key);
+    if (estimate === undefined) {
+        const dimensions = imageDimensions(Buffer.from(payload, 'base64'));
+        estimate = dimensions?.width > 0 && dimensions?.height > 0
+            ? Math.min(10000, Math.ceil(dimensions.width / 32) * Math.ceil(dimensions.height / 32)) * 4
+            : RESIZED_IMAGE_BYTES_ESTIMATE;
+    }
+    originalImageEstimates.delete(key);
+    originalImageEstimates.set(key, estimate);
+    if (originalImageEstimates.size > 32) originalImageEstimates.delete(originalImageEstimates.keys().next().value);
+    return estimate;
+}
+
+function imageByteAdjustment(value) {
+    if (!value || typeof value !== 'object') return 0;
+    let url;
+    let detail = value.detail;
+    if (value.type === 'input_image') url = value.image_url;
+    else if (value.type === 'image_url') {
+        url = value.image_url?.url;
+        detail = value.image_url?.detail ?? detail;
+    } else if (value.type === 'image' && typeof value.data === 'string' && /^image\//i.test(value.mimeType || '')) {
+        url = `data:${value.mimeType};base64,${value.data}`;
+        detail = value._meta?.['codex/imageDetail'] ?? detail;
+    }
+    const match = typeof url === 'string' && /^data:image\/[^;,]+((?:;[^,]*)?),([\s\S]*)$/i.exec(url);
+    if (match && match[1].split(';').some(parameter => parameter.toLowerCase() === 'base64')) {
+        const payload = match[2];
+        const estimate = detail === 'original' ? originalImageBytes(payload) : RESIZED_IMAGE_BYTES_ESTIMATE;
+        return Buffer.byteLength(JSON.stringify(payload), 'utf8') - 2 - estimate;
+    }
+    return Object.values(value).reduce((total, child) => total + imageByteAdjustment(child), 0);
+}
+
 function approxTokenCount(value = '') {
     const text = typeof value === 'string' ? value : JSON.stringify(value || '');
-    return Math.ceil(Buffer.byteLength(text || '', 'utf8') / 4);
+    // Never parse/discount text: a data URL printed as text really is text input.
+    return Math.ceil(Math.max(0, Buffer.byteLength(text || '', 'utf8') - imageByteAdjustment(value)) / 4);
 }
 
 function compactJsonByteLength(value) {
@@ -182,8 +227,10 @@ function normalizeBudgetParts(parts = {}) {
 
 function measureBudgetPart(name, value) {
     let text = '';
+    let imageAdjustment = 0;
     try {
         text = typeof value === 'string' ? value : JSON.stringify(value || '');
+        imageAdjustment = imageByteAdjustment(value);
     } catch {
         text = String(value || '');
     }
@@ -191,7 +238,7 @@ function measureBudgetPart(name, value) {
         name,
         chars: text.length,
         bytes: Buffer.byteLength(text, 'utf8'),
-        approxTokens: approxTokenCount(text)
+        approxTokens: Math.ceil(Math.max(0, Buffer.byteLength(text, 'utf8') - imageAdjustment) / 4)
     };
 }
 

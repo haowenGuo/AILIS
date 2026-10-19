@@ -304,6 +304,29 @@ const CODEX_NESTED_TOOL_OVERRIDES = Object.freeze({
         parameters: CODEX_WRITE_STDIN_PARAMETERS,
         output_schema: CODEX_EXEC_RESULT_SCHEMA
     }),
+    view_image: Object.freeze({
+        type: 'function',
+        description: 'View an image file in the current tool environment. Returns { image_url, detail } containing image pixels for the Agent model. In exec, use image(await tools.view_image(args)).',
+        parameters: {
+            type: 'object',
+            required: ['path'],
+            properties: {
+                path: { type: 'string', minLength: 1, description: 'Path to an image file in the current tool environment.' },
+                detail: { type: 'string', enum: ['high', 'original'], description: 'Image detail. Defaults to high.' }
+            },
+            additionalProperties: false
+        },
+        // exec projects the Gateway envelope to structuredContent, not MCP content.
+        output_schema: {
+            type: 'object',
+            properties: {
+                image_url: { type: 'string' },
+                detail: { type: 'string', enum: ['high', 'original'] }
+            },
+            required: ['image_url', 'detail'],
+            additionalProperties: true
+        }
+    }),
     apply_patch: Object.freeze({
         type: 'custom',
         description: 'The `apply_patch` tool can be used to edit files. This is a FREEFORM tool, so do not wrap the patch in JSON.',

@@ -14,6 +14,8 @@ const {
     parseExecSource
 } = require('../electron/codex-code-mode-protocol.cjs');
 const { AILISCodeModeRuntime } = require('../electron/ailis-code-mode-runtime.cjs');
+const { imageToolResult } = require('../electron/ailis-image-content.cjs');
+const { getToolContract, validateAgainstSchema } = require('../electron/ailis-tool-contracts.cjs');
 
 function functionSpec(name, properties = {}) {
     return {
@@ -76,6 +78,42 @@ test('exec pragma parsing matches the Codex yield and output-budget contract', (
         max_output_tokens: 50
     });
     assert.throws(() => parseExecSource('// @exec: {"unknown": 1}\ntext("no")'), /only supports/);
+});
+
+test('view_image declares its projected exec result and the documented example emits pixels', async t => {
+    const contract = getToolContract('view_image');
+    const spec = createExecToolSpec([{
+        type: 'function', name: 'view_image', description: 'View an image.',
+        parameters: contract.schema, output_schema: contract.returns
+    }]);
+    const [nested] = getCodeModeProfile(spec.x_ailis_code_mode_profile);
+    assert.deepEqual(nested.parameters, contract.schema);
+    assert.deepEqual(nested.output_schema.required, ['image_url', 'detail']);
+    assert.equal(nested.output_schema.properties.content, undefined);
+    assert.match(spec.description, /image\(await tools\.view_image\(args\)\)/);
+    assert.match(spec.description, /image_url: string;/);
+    assert.doesNotMatch(spec.description, /Promise<CallToolResult/);
+
+    const bytes = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=', 'base64');
+    const calls = [];
+    const runtime = new AILISCodeModeRuntime({ dispatchTool: async call => {
+        calls.push(call);
+        return { ok: true, tool: 'view_image', callId: 'image-call',
+            result: imageToolResult(bytes, { detail: call.args.detail }) };
+    } });
+    t.after(() => runtime.shutdown());
+    const result = await runtime.execute({
+        input: 'const args = {path: "fixture.png", detail: "original"}; const r = await tools.view_image(args); text({keys: Object.keys(r), detail: r.detail}); image(r);',
+        profileId: spec.x_ailis_code_mode_profile, context: { sessionId: 'view-image-contract' }
+    });
+    assert.equal(result.ok, true, result.text);
+    assert.equal(calls[0].args.path, 'fixture.png');
+    assert.deepEqual(validateAgainstSchema(imageToolResult(bytes).structuredContent, nested.output_schema), []);
+    const emitted = result.content.find(part => part.type === 'image');
+    assert.ok(emitted, 'the example must emit an image, not undefined or base64 text');
+    assert.equal(emitted.data, bytes.toString('base64'));
+    assert.equal(emitted._meta['codex/imageDetail'], 'original');
+    assert.doesNotMatch(result.text, /base64|iVBOR/);
 });
 
 test('exec composes multiple enabled tools in one JavaScript program', async () => {
