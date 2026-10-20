@@ -24,7 +24,8 @@ const memory = [
     '</ailis_semantic_task_memory>'
 ].join('\n');
 
-async function fixture(t, { compactionFailure = '', longHistory = true, providerFailure = false } = {}) {
+async function fixture(t, { compactionFailure = '', longHistory = true, providerFailure = false,
+    provider = 'openai-compatible' } = {}) {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-unified-compaction-'));
     const options = { port: 0, workspaceRoot: root, projectRoot: path.resolve('.'),
         auditDir: path.join(root, '.audit'), emberHarnessEnabled: false, profileCurationEnabled: false };
@@ -35,7 +36,7 @@ async function fixture(t, { compactionFailure = '', longHistory = true, provider
     const server = http.createServer(async (request, response) => {
         let body = ''; for await (const chunk of request) body += chunk;
         const data = JSON.parse(body);
-        const compact = JSON.stringify(data.messages.at(-1)).includes('<ailis_semantic_compaction_request>');
+        const compact = JSON.stringify((data.messages || data.input).at(-1)).includes('<ailis_semantic_compaction_request>');
         requests.push({ body: data, compact, checkpoint: gateway.sessionContextStore.getCheckpoint(sessionId) });
         if (providerFailure) {
             response.writeHead(400, { 'content-type': 'application/json' });
@@ -48,6 +49,11 @@ async function fixture(t, { compactionFailure = '', longHistory = true, provider
             return;
         }
         response.writeHead(200, { 'content-type': 'application/json' });
+        if (request.url.endsWith('/responses')) {
+            response.end(JSON.stringify({ output_text: compact ? memory : 'Inspection complete.',
+                usage: { input_tokens: 200, output_tokens: 50, total_tokens: 250 } }));
+            return;
+        }
         response.end(JSON.stringify({ choices: [{ message: { role: 'assistant',
             content: compact ? (compactionFailure === 'invalid' ? 'Invalid short summary' : memory) : 'Inspection complete.' },
             finish_reason: 'stop' }], usage: { prompt_tokens: 200, completion_tokens: 50, total_tokens: 250 } }));
@@ -73,10 +79,53 @@ async function fixture(t, { compactionFailure = '', longHistory = true, provider
         permissionProfile: 'danger-full-access', approvalPolicy: 'auto', confirmationPolicy: 'auto',
         executeExternal: true, allowOutsideWorkspace: true, allowComputerWideAccess: true, allowSystemMutation: false,
         contextSoftTokenLimit: 10000, contextHardTokenLimit: 20000, contextStopTokenLimit: 100000,
-        llmSettings: { provider: 'openai-compatible', baseUrl: `http://127.0.0.1:${server.address().port}/v1`,
+        llmSettings: { provider, baseUrl: `http://127.0.0.1:${server.address().port}/v1`,
             apiKey: 'local-test-only', model: 'test-model', temperature: 0, timeoutMs: 10000 } };
     return { get gateway() { return gateway; }, requests, context,
         restart: async () => { await gateway.stop(); gateway = makeGateway(); return gateway; } };
+}
+
+for (const provider of ['openai-compatible', 'openai-responses']) {
+    for (const override of ['request', 'precedence', 'general', 'default']) {
+        test(`${provider} compaction inherits resolved ${override} reasoning and parallel capability`, async t => {
+            const f = await fixture(t, { provider });
+            f.context.llmSettings.reasoningEffort = 'medium';
+            f.context.parallelToolCalls = override !== 'precedence';
+            if (override === 'request') {
+                f.context.agentDecisionReasoningEffort = 'xhigh';
+                f.context.llmSettings.agentDecisionReasoningEffort = 'high';
+            } else if (override === 'precedence') {
+                f.context.agentDecisionReasoningEffort = 'high';
+                f.context.agentDecisionDeepThinking = true;
+                f.context.reasoningEffort = 'low';
+            } else if (override === 'general') {
+                f.context.agentDecisionDeepThinking = true;
+                f.context.reasoningEffort = 'low';
+            }
+            const result = await f.gateway.runAgent({ message: currentRequest, sessionId, context: f.context });
+            assert.equal(result.status, 'completed');
+            assert.deepEqual(f.requests.map(request => request.compact), [true, false]);
+            const [summary, decision] = f.requests.map(request => request.body);
+            const effort = body => provider === 'openai-responses' ? body.reasoning?.effort : body.reasoning_effort;
+            assert.equal(effort(summary), effort(decision), 'compaction must resolve the same effective effort as execution');
+            if (override !== 'default') {
+                assert.equal(effort(summary), { request: 'xhigh', precedence: 'high', general: 'low' }[override]);
+            }
+            assert.equal(summary.parallel_tool_calls, decision.parallel_tool_calls);
+            assert.equal(summary.parallel_tool_calls, f.context.parallelToolCalls);
+            assert.equal(summary.model, decision.model);
+            assert.deepEqual(summary.tools, decision.tools);
+            assert.equal(summary.prompt_cache_key, decision.prompt_cache_key);
+            assert.equal(summary.tool_choice, 'none', 'summarization must still prohibit tools');
+            if (provider === 'openai-responses') {
+                assert.equal(summary.instructions, decision.instructions);
+                assert.match(JSON.stringify(summary.input.at(-1)), /ailis_semantic_compaction_request/);
+            } else {
+                assert.deepEqual(summary.messages[0], decision.messages[0]);
+                assert.match(JSON.stringify(summary.messages.at(-1)), /ailis_semantic_compaction_request/);
+            }
+        });
+    }
 }
 
 test('provider rejection terminates unlimited-step runs with a visible error after one request', { timeout: 15000 }, async t => {

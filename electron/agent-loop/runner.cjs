@@ -9413,7 +9413,8 @@ class AILISAgentRunner {
                     input: directModelInputPrompt.input,
                     tools: directModelInputPrompt.tools || directToolSpecs,
                     parallel_tool_calls: parallelToolCalls,
-                    reasoning_effort: decisionSettings.reasoningEffort,
+                    // Use the same request overrides as ordinary decisions.
+                    reasoning_effort: resolveExplicitAgentDecisionReasoningEffort(decisionSettings, requestContext),
                     prompt_cache_key: promptCacheKey,
                     compaction_mode: normalizeText(
                         request.contextCompactionMode ||

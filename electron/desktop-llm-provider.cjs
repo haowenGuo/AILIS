@@ -2345,7 +2345,6 @@ async function compactPortableSemanticMemory(settings = {}, payload = {}) {
         messages: undefined,
         toolChoice: 'none',
         tool_choice: 'none',
-        parallel_tool_calls: false,
         jsonMode: false,
         expectJson: false,
         responseFormat: null,

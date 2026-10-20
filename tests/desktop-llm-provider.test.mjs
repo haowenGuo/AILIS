@@ -974,6 +974,8 @@ describe('desktop LLM provider', () => {
         }, {
             instructions: 'stable instructions',
             prompt_cache_key: 'portable-compact-test',
+            reasoning_effort: 'xhigh',
+            parallel_tool_calls: true,
             tools: [{ name: 'demo_tool', description: 'demo', parameters: { type: 'object' } }],
             input: originalInput
         });
@@ -982,6 +984,8 @@ describe('desktop LLM provider', () => {
         assert.equal(receivedRequest.url, '/v1/responses');
         assert.equal(receivedRequest.body.instructions, 'stable instructions');
         assert.equal(receivedRequest.body.prompt_cache_key, 'portable-compact-test');
+        assert.equal(receivedRequest.body.reasoning.effort, 'xhigh');
+        assert.equal(receivedRequest.body.parallel_tool_calls, true);
         assert.equal(receivedRequest.body.tool_choice, 'none');
         assert.equal(receivedRequest.body.input.length, originalInput.length + 1);
         assert.deepEqual(receivedRequest.body.input.slice(0, originalInput.length), originalInput);
