@@ -86,7 +86,8 @@ const PROJECT_ROOT = path.resolve(__dirname, '..');
 const DEFAULT_PORT = Number(process.env.AILIS_GATEWAY_PORT || 19777);
 const DEFAULT_TOOL_GATEWAY_URL =
     process.env.AILIS_TOOL_OPENCLAW_GATEWAY_URL || 'ws://127.0.0.1:18789';
-const MAX_BODY_BYTES = 1024 * 1024;
+// Token budgets are separate from wire bytes (UTF-8, images, encrypted reasoning).
+const MAX_BODY_BYTES = 16 * 1024 * 1024;
 const TOOL_CALL_TIMEOUT_MS = 45000;
 const DEFAULT_EVENT_REPLAY_LIMIT = 2000;
 const MAX_EVENT_REPLAY_LIMIT = 10000;

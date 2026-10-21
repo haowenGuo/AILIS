@@ -3,6 +3,7 @@ const fsp = require('fs/promises');
 const path = require('path');
 const { pathToFileURL } = require('url');
 const { spawn } = require('child_process');
+const { pickContextBudgetSettings } = require('./ailis-runtime-budget.cjs');
 const {
     app,
     BrowserWindow,
@@ -2596,6 +2597,7 @@ function buildTemporaryVisionLlmSettings(settings = {}) {
 function buildTemporaryLlmSettings(settings = {}) {
     const provider = normalizeLlmProvider(settings.provider || settings.llmProvider || DEFAULT_LLM_PROVIDER);
     return {
+        ...pickContextBudgetSettings(settings),
         provider,
         baseUrl: normalizeLlmBaseUrl(
             settings.baseUrl ||
@@ -2634,6 +2636,7 @@ function resolveAgentRunLlmSettings(settings) {
     const provider = normalizeLlmProvider(settings.provider || settings.llmProvider || persisted.provider);
     if (provider === 'ailis-cloud') {
         return buildTemporaryLlmSettings({
+            ...pickContextBudgetSettings(settings),
             provider,
             baseUrl: getDefaultProviderBaseUrl(provider),
             model: getDefaultProviderModel(provider),

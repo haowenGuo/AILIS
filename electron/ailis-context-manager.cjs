@@ -1,5 +1,6 @@
 'use strict';
 
+const { createHash } = require('node:crypto');
 const {
     ContentItem,
     FunctionCallOutputPayload,
@@ -11,6 +12,7 @@ const {
     responseItemOutputToText
 } = require('./ailis-response-model.cjs');
 const {
+    approxTokenCount,
     buildContextBudgetReport,
     summarizeForModel
 } = require('./ailis-runtime-budget.cjs');
@@ -281,11 +283,26 @@ function defaultOutputForCall(call = {}) {
     });
 }
 
+function contextHash(value) {
+    return createHash('sha256').update(JSON.stringify(value)).digest('hex');
+}
+
+function budgetContextHash(options = {}) {
+    return contextHash({
+        model: options.model || '',
+        provider: options.provider || '',
+        reasoningEffort: options.reasoningEffort || '',
+        instructions: options.instructions || options.staticPrefix || '',
+        tools: options.toolSchemas || options.tools || null
+    });
+}
+
 class ContextManager {
     constructor({
         items = [],
         history_version: historyVersion = 0,
         token_info: tokenInfo = null,
+        token_usage_anchor: tokenUsageAnchor = null,
         reference_context_item: referenceContextItem = null,
         toolOutputChars = DEFAULT_TOOL_OUTPUT_CHARS
     } = {}) {
@@ -295,6 +312,7 @@ class ContextManager {
         this.reference_context_item = referenceContextItem;
         this.toolOutputChars = resolveToolOutputChars(toolOutputChars);
         this.recordItems(items);
+        this.token_usage_anchor = tokenUsageAnchor ? cloneJson(tokenUsageAnchor) : null;
     }
 
     setReferenceContextItem(item = null) {
@@ -305,8 +323,28 @@ class ContextManager {
         return this.reference_context_item ? cloneJson(this.reference_context_item) : null;
     }
 
-    setTokenInfo(info = null) {
+    setTokenInfo(info = null, measurement = null) {
         this.token_info = info ? cloneJson(info) : null;
+        this.token_usage_anchor = null;
+        const inputTokens = info?.promptTokens;
+        const outputTokens = info?.completionTokens;
+        const input = measurement?.inputItems;
+        const output = measurement?.outputItems;
+        if (!Number.isFinite(inputTokens) || inputTokens <= 0 ||
+            !Number.isFinite(outputTokens) || outputTokens < 0 ||
+            !measurement?.contextHash || !Array.isArray(input) || !Array.isArray(output) || !output.length ||
+            this.items.length !== input.length + output.length ||
+            contextHash(this.items.slice(0, input.length)) !== contextHash(input) ||
+            contextHash(this.items.slice(input.length)) !==
+                contextHash(output.map(item => this.processItem(item)))) {
+            return;
+        }
+        this.token_usage_anchor = {
+            itemCount: this.items.length,
+            prefixHash: contextHash(this.items),
+            contextHash: measurement.contextHash,
+            tokens: Math.max(inputTokens + outputTokens, Number.isFinite(info.totalTokens) ? info.totalTokens : 0)
+        };
     }
 
     tokenInfo() {
@@ -323,6 +361,7 @@ class ContextManager {
 
     replace(items = [], referenceContextItem = this.reference_context_item) {
         this.items = [];
+        this.setTokenInfo(null);
         this.recordItems(items);
         this.setReferenceContextItem(referenceContextItem);
         this.history_version += 1;
@@ -380,6 +419,7 @@ class ContextManager {
             items: this.rawItems(),
             history_version: this.history_version,
             token_info: this.token_info,
+            token_usage_anchor: this.token_usage_anchor,
             reference_context_item: this.reference_context_item,
             toolOutputChars: this.toolOutputChars
         });
@@ -404,9 +444,30 @@ class ContextManager {
     }
 
     contextBudgetReport(options = {}) {
+        const identity = budgetContextHash(options);
+        const anchor = this.token_usage_anchor;
+        let usageEstimate = { fallbackReason: 'no_usage_anchor' };
+        if (anchor) {
+            if (anchor.contextHash !== identity) {
+                usageEstimate.fallbackReason = 'request_context_changed';
+            } else if (!Number.isInteger(anchor.itemCount) || anchor.itemCount < 0 ||
+                anchor.itemCount > this.items.length || !Number.isFinite(anchor.tokens) || anchor.tokens <= 0 ||
+                contextHash(this.items.slice(0, anchor.itemCount)) !== anchor.prefixHash) {
+                usageEstimate.fallbackReason = 'history_prefix_changed';
+            } else {
+                const appended = this.items.slice(anchor.itemCount);
+                const appendedTokens = appended.reduce((sum, item) => sum + approxTokenCount(item), 0);
+                usageEstimate = {
+                    tokens: anchor.tokens + appendedTokens,
+                    anchorTokens: anchor.tokens,
+                    appendedItems: appended.length,
+                    appendedEstimatedTokens: appendedTokens
+                };
+            }
+        }
         return buildContextBudgetReport({
             staticPrefix: options.staticPrefix || '',
-            instructions: options.instructions || '',
+            instructions: options.instructions || options.staticPrefix || '',
             goal: options.goal || '',
             runtimeEnvironment: options.runtimeEnvironment || null,
             taskState: options.taskState || null,
@@ -416,7 +477,14 @@ class ContextManager {
             toolSummary: options.toolSummary || null,
             toolSchemas: options.toolSchemas || options.tools || null,
             availableOutputRefs: collectAvailableOutputRefs(this.items)
-        }, options.budgetConfig || options.contextBudget || {});
+        }, {
+            ...(options.budgetConfig || options.contextBudget || {}),
+            // The remaining parts describe the package; they are not additional wire content.
+            modelInputParts: ['instructions', 'recentResponseItems', 'toolSchemas'],
+            measurementContextHash: identity,
+            usageEstimate,
+            providerUsageApplicable: !anchor || Number.isFinite(usageEstimate.tokens)
+        });
     }
 
     compactForBudget(options = {}) {
@@ -785,6 +853,7 @@ class ContextManager {
         return {
             history_version: this.history_version,
             token_info: this.token_info ? cloneJson(this.token_info) : null,
+            ...(this.token_usage_anchor ? { token_usage_anchor: cloneJson(this.token_usage_anchor) } : {}),
             reference_context_item: this.reference_context_item ? cloneJson(this.reference_context_item) : null,
             tool_output_chars: this.toolOutputChars,
             items: this.rawItems()
@@ -800,6 +869,7 @@ class ContextManager {
             items,
             history_version: checkpoint.history_version,
             token_info: checkpoint.token_info,
+            token_usage_anchor: checkpoint.token_usage_anchor,
             reference_context_item: checkpoint.reference_context_item,
             toolOutputChars: resolveToolOutputChars(
                 options.toolOutputChars,

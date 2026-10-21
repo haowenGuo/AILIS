@@ -10,12 +10,28 @@ const DEFAULT_JSON_OBJECT_KEYS = 80;
 const MAX_SOURCE_VIEWPORT_LINES = 256;
 const MAX_SOURCE_VIEWPORT_TEXT_CHARS = 24000;
 // Used only when no explicit or built-in model window is available.
-const DEFAULT_CONTEXT_INPUT_LIMIT_TOKENS = 256000;
+const DEFAULT_CONTEXT_INPUT_LIMIT_TOKENS = 512000;
 const DEFAULT_CONTEXT_RESERVED_OUTPUT_TOKENS = 4096;
 const DEFAULT_CONTEXT_SYSTEM_RESERVE_TOKENS = 8192;
-const DEFAULT_CONTEXT_SOFT_RATIO = 0.5;
-const DEFAULT_CONTEXT_HARD_RATIO = 0.7;
-const DEFAULT_CONTEXT_STOP_RATIO = 0.8;
+const DEFAULT_CONTEXT_SOFT_RATIO = 400000 / DEFAULT_CONTEXT_INPUT_LIMIT_TOKENS;
+const DEFAULT_CONTEXT_HARD_RATIO = 0.9;
+const DEFAULT_CONTEXT_STOP_RATIO = 0.95;
+
+// Preserve budget configuration across desktop and headless normalization.
+function pickContextBudgetSettings(settings = {}) {
+    const keys = [
+        'contextWindowTokens', 'context_window_tokens', 'modelContextWindowTokens',
+        'model_context_window', 'maxContextTokens', 'maxContextWindowTokens',
+        'contextSoftTokenLimit', 'context_soft_token_limit', 'contextSoftRatio',
+        'contextHardTokenLimit', 'context_hard_token_limit', 'contextHardRatio',
+        'autoCompactTokenLimit', 'contextStopTokenLimit', 'context_stop_token_limit',
+        'emergencyContextTokenLimit', 'contextStopRatio', 'reservedOutputTokens',
+        'reserved_output_tokens', 'maxOutputTokens', 'max_tokens',
+        'modelCapabilities', 'capabilities'
+    ];
+    return Object.fromEntries(keys.filter(key => settings[key] !== undefined)
+        .map(key => [key, settings[key]]));
+}
 
 function normalizeString(value, fallback = '') {
     if (typeof value !== 'string') {
@@ -140,10 +156,24 @@ function imageByteAdjustment(value) {
     return Object.values(value).reduce((total, child) => total + imageByteAdjustment(child), 0);
 }
 
+function reasoningByteAdjustment(value) {
+    if (!value || typeof value !== 'object') return 0;
+    let adjustment = 0;
+    if (['reasoning', 'compaction', 'context_compaction'].includes(value.type) &&
+        typeof value.encrypted_content === 'string') {
+        // Codex estimates the decoded reasoning payload, not its base64 envelope.
+        const encodedBytes = Buffer.byteLength(value.encrypted_content, 'utf8');
+        const reasoningBytes = Math.max(0, Math.floor(encodedBytes * 3 / 4) - 650);
+        adjustment = Buffer.byteLength(JSON.stringify(value.encrypted_content), 'utf8') - 2 - reasoningBytes;
+    }
+    return adjustment + Object.values(value).reduce((total, child) => total + reasoningByteAdjustment(child), 0);
+}
+
 function approxTokenCount(value = '') {
     const text = typeof value === 'string' ? value : JSON.stringify(value || '');
     // Never parse/discount text: a data URL printed as text really is text input.
-    return Math.ceil(Math.max(0, Buffer.byteLength(text || '', 'utf8') - imageByteAdjustment(value)) / 4);
+    return Math.ceil(Math.max(0, Buffer.byteLength(text || '', 'utf8') -
+        imageByteAdjustment(value) - reasoningByteAdjustment(value)) / 4);
 }
 
 function compactJsonByteLength(value) {
@@ -227,10 +257,10 @@ function normalizeBudgetParts(parts = {}) {
 
 function measureBudgetPart(name, value) {
     let text = '';
-    let imageAdjustment = 0;
+    let payloadAdjustment = 0;
     try {
         text = typeof value === 'string' ? value : JSON.stringify(value || '');
-        imageAdjustment = imageByteAdjustment(value);
+        payloadAdjustment = imageByteAdjustment(value) + reasoningByteAdjustment(value);
     } catch {
         text = String(value || '');
     }
@@ -238,7 +268,7 @@ function measureBudgetPart(name, value) {
         name,
         chars: text.length,
         bytes: Buffer.byteLength(text, 'utf8'),
-        approxTokens: Math.ceil(Math.max(0, Buffer.byteLength(text, 'utf8') - imageAdjustment) / 4)
+        approxTokens: Math.ceil(Math.max(0, Buffer.byteLength(text, 'utf8') - payloadAdjustment) / 4)
     };
 }
 
@@ -281,7 +311,7 @@ function buildContextBudgetReport(parts = {}, config = {}) {
         effectiveInputLimitTokens,
         Number.isFinite(configuredHardTokenLimit) && configuredHardTokenLimit > 0
             ? Math.round(configuredHardTokenLimit)
-            : Math.ceil(effectiveInputLimitTokens * configuredThresholds.hard)
+            : Math.ceil(inputLimitTokens * configuredThresholds.hard)
     );
     const stopTokenLimit = Math.min(
         effectiveInputLimitTokens,
@@ -289,14 +319,14 @@ function buildContextBudgetReport(parts = {}, config = {}) {
             hardTokenLimit,
             Number.isFinite(configuredStopTokenLimit) && configuredStopTokenLimit > 0
                 ? Math.round(configuredStopTokenLimit)
-                : Math.ceil(effectiveInputLimitTokens * configuredThresholds.stop)
+                : Math.ceil(inputLimitTokens * configuredThresholds.stop)
         )
     );
     const softTokenLimit = Math.min(
         hardTokenLimit,
         Number.isFinite(configuredSoftTokenLimit) && configuredSoftTokenLimit > 0
             ? Math.round(configuredSoftTokenLimit)
-            : Math.ceil(effectiveInputLimitTokens * configuredThresholds.soft)
+            : Math.ceil(inputLimitTokens * configuredThresholds.soft)
     );
     const thresholdTokens = {
         soft: softTokenLimit,
@@ -308,8 +338,14 @@ function buildContextBudgetReport(parts = {}, config = {}) {
         hard: hardTokenLimit / effectiveInputLimitTokens,
         stop: stopTokenLimit / effectiveInputLimitTokens
     };
-    const measuredParts = normalizeBudgetParts(parts).map((part) => measureBudgetPart(part.name, part.value));
-    const estimatedPromptTokens = measuredParts.reduce((sum, part) => sum + part.approxTokens, 0);
+    const modelInputParts = Array.isArray(config.modelInputParts) ? new Set(config.modelInputParts) : null;
+    const measuredParts = normalizeBudgetParts(parts).map((part) => ({
+        ...measureBudgetPart(part.name, part.value),
+        counted: modelInputParts
+            ? modelInputParts.has(part.name)
+            : !(part.name === 'staticPrefix' && parts.instructions && part.value === parts.instructions)
+    }));
+    const estimatedPromptTokens = measuredParts.reduce((sum, part) => sum + (part.counted ? part.approxTokens : 0), 0);
     const tokenInfo = parts.tokenInfo && typeof parts.tokenInfo === 'object'
         ? parts.tokenInfo
         : {};
@@ -323,9 +359,16 @@ function buildContextBudgetReport(parts = {}, config = {}) {
     ]
         .map((value) => Number(value))
         .find((value) => Number.isFinite(value) && value > 0) || 0;
-    // Provider usage is authoritative for the previous request. The local estimate
-    // still protects the next request after new tool outputs have been appended.
-    const effectivePromptTokens = Math.max(estimatedPromptTokens, providerInputTokens);
+    const usageEstimate = config.usageEstimate;
+    const anchored = Number.isFinite(usageEstimate?.tokens) && usageEstimate.tokens > 0;
+    // Bound estimation uncertainty without changing the configured compaction thresholds.
+    const measurementReserveTokens = anchored
+        ? Math.min(DEFAULT_CONTEXT_SYSTEM_RESERVE_TOKENS, Math.ceil(effectiveInputLimitTokens * 0.05))
+        : 0;
+    const applicableProviderInput = config.providerUsageApplicable === false ? 0 : providerInputTokens;
+    const effectivePromptTokens = anchored
+        ? Math.max(usageEstimate.tokens + measurementReserveTokens, applicableProviderInput)
+        : Math.max(estimatedPromptTokens, applicableProviderInput);
     const ratio = effectivePromptTokens / effectiveInputLimitTokens;
     const level = classifyCompactionLevel(ratio, thresholds);
     const largestParts = measuredParts
@@ -342,6 +385,22 @@ function buildContextBudgetReport(parts = {}, config = {}) {
         estimatedPromptTokens,
         providerInputTokens,
         effectivePromptTokens,
+        measurement: {
+            unit: 'tokens',
+            mode: anchored ? 'provider_usage_anchor' : 'structured_estimate',
+            contextHash: config.measurementContextHash || null,
+            fallbackReason: anchored ? null : (usageEstimate?.fallbackReason || 'no_usage_anchor'),
+            // Numeric diagnostics use their declared unit, not credential-like field names.
+            inputEstimate: effectivePromptTokens,
+            structuredEstimate: estimatedPromptTokens,
+            previousActualInput: providerInputTokens || null,
+            anchor: anchored ? usageEstimate.anchorTokens : null,
+            appendedItems: anchored ? usageEstimate.appendedItems : null,
+            appendedEstimate: anchored ? usageEstimate.appendedEstimatedTokens : null,
+            reserve: measurementReserveTokens,
+            providerUsageApplicable: config.providerUsageApplicable !== false,
+            previousEstimateError: tokenInfo.budgetEstimateErrorTokens ?? null
+        },
         ratio,
         level,
         shouldCompact: level === 'hard' || level === 'stop',
@@ -703,6 +762,7 @@ module.exports = {
     compactToolResultForModel,
     compactToolSchema,
     makeHeadTailPreview,
+    pickContextBudgetSettings,
     summarizeForModel,
     truncateMiddleText,
     stripModelGuidance

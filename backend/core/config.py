@@ -77,7 +77,7 @@ class Settings(BaseSettings):
 
     # ================= Desktop LLM managed relay =================
     AILIS_LLM_RELAY_ENABLED: bool = True
-    AILIS_LLM_RELAY_MAX_BYTES: int = 4 * 1024 * 1024
+    AILIS_LLM_RELAY_MAX_BYTES: int = 16 * 1024 * 1024
     AILIS_LLM_RELAY_REQUESTS_PER_MINUTE: int = 30
     AILIS_LLM_RELAY_MAX_CONCURRENT_PER_SESSION: int = 2
     AILIS_LLM_RELAY_IP_REQUESTS_PER_MINUTE: int = 60

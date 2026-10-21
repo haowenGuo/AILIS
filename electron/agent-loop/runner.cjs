@@ -36,8 +36,12 @@ const {
 } = require('../ailis-mcp-adapter.cjs');
 const {
     DEFAULT_CONTEXT_INPUT_LIMIT_TOKENS,
+    DEFAULT_CONTEXT_SOFT_RATIO,
+    DEFAULT_CONTEXT_HARD_RATIO,
+    DEFAULT_CONTEXT_STOP_RATIO,
     approxTokenCount,
     compactToolSchema,
+    pickContextBudgetSettings,
     summarizeForModel,
     truncateMiddleText
 } = require('../ailis-runtime-budget.cjs');
@@ -116,12 +120,6 @@ const DEFAULT_RUN_TIMEOUT_MS = 90000;
 const DEFAULT_TASK_HANDOFF_TIMEOUT_MS = 15 * 60 * 1000;
 const DEFAULT_TASK_VERIFY_EXECUTION_TIMEOUT_MS = 120000;
 const TOOL_TRANSPORT_TIMEOUT_BUFFER_MS = 10000;
-const A7_LUNA_CONTEXT_PROFILE = Object.freeze({
-    inputLimitTokens: 272000,
-    softTokenLimit: 220000,
-    hardTokenLimit: 244800,
-    stopTokenLimit: 258400
-});
 const MAX_RESULT_PREVIEW_CHARS = 2600;
 const STRUCTURED_TOOL_RESULT_PREVIEW_CHARS = 12000;
 const MAX_PROMPT_MEMORY_CHARS = 20000;
@@ -1302,97 +1300,99 @@ function resolveBuiltInContextBudgetProfile(settings = {}, requestContext = {}) 
         settings.modelId ||
         settings.model_id
     ).toLowerCase();
-    // Codex's gpt-6-luna catalog also defaults to 272k, with compaction at 90%.
+    // Explicit model/provider capabilities still take precedence over this default.
     if (model === 'gpt-5.6-luna' || model === 'gpt-6-luna') {
         return {
-            ...A7_LUNA_CONTEXT_PROFILE,
+            inputLimitTokens: DEFAULT_CONTEXT_INPUT_LIMIT_TOKENS,
             source: `builtin_model_profile:${model}`
         };
     }
     return null;
 }
 
-function resolveModelContextWindowTokens(settings = {}, requestContext = {}, tokenInfo = null) {
+function resolveModelContextWindowTokens(settings = {}, requestContext = {}) {
     const capabilities = settings.capabilities && typeof settings.capabilities === 'object'
         ? settings.capabilities
         : {};
     const contextCapabilities = requestContext.modelCapabilities && typeof requestContext.modelCapabilities === 'object'
         ? requestContext.modelCapabilities
         : {};
+    const modelCapabilities = settings.modelCapabilities && typeof settings.modelCapabilities === 'object'
+        ? settings.modelCapabilities
+        : {};
+    const maximum = firstPositiveNumber([
+        contextCapabilities.maxContextWindowTokens, contextCapabilities.max_context_window,
+        modelCapabilities.maxContextWindowTokens, modelCapabilities.max_context_window,
+        capabilities.maxContextWindowTokens, capabilities.max_context_window,
+        requestContext.maxContextWindowTokens, settings.maxContextWindowTokens
+    ]);
+    const bounded = (tokens, source) => ({
+        tokens: Math.round(maximum > 0 ? Math.min(tokens, maximum) : tokens),
+        source: maximum > 0 && tokens > maximum ? 'provider_context_window_cap' : source
+    });
     const configured = firstPositiveNumber([
         requestContext.contextWindowTokens,
         requestContext.context_window_tokens,
         requestContext.modelContextWindowTokens,
+        requestContext.model_context_window,
         requestContext.maxContextTokens,
         settings.contextWindowTokens,
         settings.context_window_tokens,
         settings.modelContextWindowTokens,
+        settings.model_context_window,
         settings.maxContextTokens,
         contextCapabilities.contextWindowTokens,
         contextCapabilities.context_window_tokens,
+        contextCapabilities.context_window,
+        modelCapabilities.contextWindowTokens,
+        modelCapabilities.context_window_tokens,
+        modelCapabilities.context_window,
         capabilities.contextWindowTokens,
         capabilities.context_window_tokens,
-        tokenInfo?.contextWindowTokens,
-        tokenInfo?.context_window_tokens
+        capabilities.context_window
     ]);
     if (configured > 0) {
-        return {
-            tokens: Math.round(configured),
-            source: 'provider_or_model_configuration'
-        };
+        return bounded(configured, 'provider_or_model_configuration');
     }
     const environmentValue = firstPositiveNumber([
         process.env.AILIS_LLM_CONTEXT_WINDOW_TOKENS,
         process.env.AILIS_AGENT_CONTEXT_WINDOW_TOKENS
     ]);
     if (environmentValue > 0) {
-        return {
-            tokens: Math.round(environmentValue),
-            source: 'environment_configuration'
-        };
+        return bounded(environmentValue, 'environment_configuration');
     }
     const builtInProfile = resolveBuiltInContextBudgetProfile(settings, requestContext);
     if (builtInProfile) {
-        return {
-            tokens: builtInProfile.inputLimitTokens,
-            source: builtInProfile.source
-        };
+        return bounded(builtInProfile.inputLimitTokens, builtInProfile.source);
     }
-    return {
-        tokens: DEFAULT_CONTEXT_INPUT_LIMIT_TOKENS,
-        source: 'conservative_runtime_fallback'
-    };
+    return bounded(DEFAULT_CONTEXT_INPUT_LIMIT_TOKENS, 'conservative_runtime_fallback');
 }
 
 function buildAgentContextBudgetConfig(settings = {}, requestContext = {}, tokenInfo = null) {
-    const contextWindow = resolveModelContextWindowTokens(settings, requestContext, tokenInfo);
-    const builtInProfile = resolveBuiltInContextBudgetProfile(settings, requestContext);
-    const builtInAbsoluteLimits = builtInProfile &&
-        contextWindow.tokens >= builtInProfile.stopTokenLimit
-        ? builtInProfile
-        : null;
+    // Checkpoint window values describe an old budget, not current model capabilities.
+    const contextWindow = resolveModelContextWindowTokens(settings, requestContext);
     return {
         inputLimitTokens: contextWindow.tokens,
         reservedOutputTokens: firstPositiveNumber([
             requestContext.reservedOutputTokens,
             requestContext.reserved_output_tokens,
             settings.reservedOutputTokens,
+            settings.reserved_output_tokens,
             settings.maxOutputTokens,
             settings.max_tokens
         ], 4096),
         // Instructions and schemas are measured explicitly in the context package.
         systemReserveTokens: 0,
-        softRatio: Number(requestContext.contextSoftRatio ?? settings.contextSoftRatio ?? 0.55),
-        hardRatio: Number(requestContext.contextHardRatio ?? settings.contextHardRatio ?? 0.70),
-        stopRatio: Number(requestContext.contextStopRatio ?? settings.contextStopRatio ?? 0.86),
+        softRatio: Number(requestContext.contextSoftRatio ?? settings.contextSoftRatio ?? DEFAULT_CONTEXT_SOFT_RATIO),
+        hardRatio: Number(requestContext.contextHardRatio ?? settings.contextHardRatio ?? DEFAULT_CONTEXT_HARD_RATIO),
+        stopRatio: Number(requestContext.contextStopRatio ?? settings.contextStopRatio ?? DEFAULT_CONTEXT_STOP_RATIO),
         softTokenLimit: firstPositiveNumber([
             requestContext.contextSoftTokenLimit,
             requestContext.context_soft_token_limit,
             settings.contextSoftTokenLimit,
             settings.context_soft_token_limit,
             process.env.AILIS_LLM_CONTEXT_SOFT_TOKEN_LIMIT,
-            process.env.AILIS_AGENT_CONTEXT_SOFT_TOKEN_LIMIT,
-            builtInAbsoluteLimits?.softTokenLimit
+            process.env.AILIS_AGENT_CONTEXT_SOFT_TOKEN_LIMIT
         ]),
         hardTokenLimit: firstPositiveNumber([
             requestContext.contextHardTokenLimit,
@@ -1402,8 +1402,7 @@ function buildAgentContextBudgetConfig(settings = {}, requestContext = {}, token
             settings.context_hard_token_limit,
             settings.autoCompactTokenLimit,
             process.env.AILIS_LLM_AUTO_COMPACT_TOKEN_LIMIT,
-            process.env.AILIS_AGENT_AUTO_COMPACT_TOKEN_LIMIT,
-            builtInAbsoluteLimits?.hardTokenLimit
+            process.env.AILIS_AGENT_AUTO_COMPACT_TOKEN_LIMIT
         ]),
         stopTokenLimit: firstPositiveNumber([
             requestContext.contextStopTokenLimit,
@@ -1413,8 +1412,7 @@ function buildAgentContextBudgetConfig(settings = {}, requestContext = {}, token
             settings.context_stop_token_limit,
             settings.emergencyContextTokenLimit,
             process.env.AILIS_LLM_EMERGENCY_CONTEXT_TOKEN_LIMIT,
-            process.env.AILIS_AGENT_EMERGENCY_CONTEXT_TOKEN_LIMIT,
-            builtInAbsoluteLimits?.stopTokenLimit
+            process.env.AILIS_AGENT_EMERGENCY_CONTEXT_TOKEN_LIMIT
         ]),
         providerInputTokens: firstPositiveNumber([
             tokenInfo?.promptTokens,
@@ -3052,6 +3050,7 @@ function resolveAgentLlmSettings(request = {}, requestContext = {}) {
         AILIS_CLOUD_PROVIDER
     );
     return {
+        ...pickContextBudgetSettings(settings),
         provider,
         baseUrl: normalizeText(
             settings.baseUrl ||
@@ -6875,6 +6874,8 @@ function compareModelInputFingerprints(previous = null, current = null) {
 function buildLlmAgentDirectToolPrompt({
     message,
     model = '',
+    provider = '',
+    reasoningEffort = '',
     originalUserGoal = '',
     messageHistory = [],
     turnInputHistory = [],
@@ -7055,6 +7056,9 @@ function buildLlmAgentDirectToolPrompt({
             item.content.some((part) => part?.type === 'input_image')
         ) || responseItemOutputImages(item, { materializeLocalImages: false }).length > 0);
     const contextPackageOptions = {
+        model,
+        provider,
+        reasoningEffort,
         instructions,
         staticPrefix: instructions,
         contextMode: unifiedMode ? 'unified_session' : persistentTaskAgentSession
@@ -9318,6 +9322,8 @@ class AILISAgentRunner {
                 turnId: runId,
                 message: currentTurnRequest,
                 model: normalizeText(decisionSettings.model),
+                provider: normalizeText(decisionSettings.provider),
+                reasoningEffort: resolveExplicitAgentDecisionReasoningEffort(decisionSettings, requestContext),
                 originalUserGoal: normalizeText(
                     requestContext.parentUserGoal ||
                     requestContext.parent_user_goal ||
@@ -9766,16 +9772,29 @@ class AILISAgentRunner {
             if (usageSummary?.promptTokens) {
                 cumulativeInputTokens += usageSummary.promptTokens;
             }
-            modelInputContextManager?.setTokenInfo?.({
-                ...(usageSummary || {}),
-                providerUsage: decision.usage || null,
-                cumulativeInputTokens,
-                contextWindowTokens: contextBudgetConfig.inputLimitTokens,
-                contextWindowSource: contextBudgetConfig.contextWindowSource,
-                provider: decision.provider || decisionSettings.provider || '',
-                model: decision.model || decisionSettings.model || '',
-                measuredAtIteration: iteration
-            });
+            // A transport failure must not erase the last successful usage anchor.
+            if (decision.ok || usageSummary?.promptTokens > 0) {
+                const budgetReport = directModelInputPrompt.contextPackage?.budgetReport;
+                modelInputContextManager?.setTokenInfo?.({
+                    ...(usageSummary || {}),
+                    providerUsage: decision.usage || null,
+                    cumulativeInputTokens,
+                    contextWindowTokens: contextBudgetConfig.inputLimitTokens,
+                    contextWindowSource: contextBudgetConfig.contextWindowSource,
+                    provider: decision.provider || decisionSettings.provider || '',
+                    model: decision.model || decisionSettings.model || '',
+                    measuredAtIteration: iteration,
+                    budgetEstimatedInputTokens: budgetReport?.effectivePromptTokens ?? null,
+                    budgetEstimateErrorTokens: usageSummary?.promptTokens > 0 && budgetReport
+                        ? budgetReport.effectivePromptTokens - usageSummary.promptTokens
+                        : null,
+                    budgetAccountingMode: budgetReport?.measurement?.mode || null
+                }, decision.ok && !decision.repaired && !decision.repairAttempted ? {
+                    inputItems: directModelInputPrompt.input,
+                    outputItems: decision.providerResponseItems,
+                    contextHash: budgetReport?.measurement?.contextHash
+                } : null);
+            }
             this.gateway.emitGatewayEvent?.('agent.llm_call.completed', {
                 runId,
                 sessionId,

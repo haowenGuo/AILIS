@@ -178,7 +178,7 @@ test('agent context budget accepts Codex-aligned absolute limits from environmen
     }
 });
 
-test('Luna uses the A7 context profile without benchmark adapter configuration', () => {
+test('Luna and fallback models use the shared 512k budget without adapter configuration', () => {
     const names = [
         'AILIS_LLM_CONTEXT_WINDOW_TOKENS',
         'AILIS_AGENT_CONTEXT_WINDOW_TOKENS',
@@ -195,16 +195,18 @@ test('Luna uses the A7 context profile without benchmark adapter configuration',
         const { buildContextBudgetReport } = require('../electron/ailis-runtime-budget.cjs');
         for (const model of ['gpt-5.6-luna', 'gpt-6-luna']) {
             const config = buildAgentContextBudgetConfig({ model }, {}, null);
-            assert.equal(config.inputLimitTokens, 272000, model);
-            assert.equal(config.softTokenLimit, 220000, model);
-            assert.equal(config.hardTokenLimit, 244800, model);
-            assert.equal(config.stopTokenLimit, 258400, model);
+            assert.equal(config.inputLimitTokens, 512000, model);
+            assert.equal(config.softTokenLimit, 0, model);
+            assert.equal(config.hardTokenLimit, 0, model);
+            assert.equal(config.stopTokenLimit, 0, model);
             assert.equal(config.contextWindowSource, `builtin_model_profile:${model}`);
             for (const [tokens, shouldCompact, mustStop] of [
-                [128000, false, false], [220000, false, false],
-                [244799, false, false], [244800, true, false], [258400, true, true]
+                [128000, false, false], [244800, false, false],
+                [400000, false, false], [460799, false, false],
+                [460800, true, false], [486400, true, true]
             ]) {
                 const report = buildContextBudgetReport({ tokenInfo: { promptTokens: tokens } }, config);
+                assert.deepEqual(report.thresholdTokens, { soft: 400000, hard: 460800, stop: 486400 });
                 assert.equal(report.shouldCompact, shouldCompact, `${model} at ${tokens}`);
                 assert.equal(report.mustStopAndCheckpoint, mustStop, `${model} at ${tokens}`);
             }
@@ -213,14 +215,15 @@ test('Luna uses the A7 context profile without benchmark adapter configuration',
             { model: 'unknown-model' }, { model: 'gpt-6-luna' }, null
         );
         assert.equal(requested.contextWindowSource, 'builtin_model_profile:gpt-6-luna');
-        assert.equal(requested.inputLimitTokens, 272000);
+        assert.equal(requested.inputLimitTokens, 512000);
         const unknown = buildAgentContextBudgetConfig(
             { model: 'gpt-6-luna' }, { model: 'unknown-model' }, null
         );
         assert.equal(unknown.contextWindowSource, 'conservative_runtime_fallback');
-        assert.equal(unknown.inputLimitTokens, 256000);
+        assert.equal(unknown.inputLimitTokens, 512000);
         const unspecified = buildAgentContextBudgetConfig({}, {}, null);
-        assert.equal(unspecified.inputLimitTokens, 256000);
+        assert.equal(unspecified.inputLimitTokens, 512000);
+        assert.equal(unspecified.contextWindowSource, 'conservative_runtime_fallback');
         const smallerCapability = buildAgentContextBudgetConfig({
             model: 'unknown-model', capabilities: { contextWindowTokens: 64000 }
         }, {}, null);

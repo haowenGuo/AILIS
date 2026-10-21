@@ -39,6 +39,18 @@ ContextCompiler 获取记忆来源后，生成 persona、user、relationship、p
 
 上下文预算、模型投影和语义压缩是不同环节。语义摘要会损失细节，运行时应保留后续所需的目标、约束、未完成状态和证据引用。具体入口的实现差异单列在[实现记录](../reference/implementation-status.md)。
 
+## 当前窗口与压缩点
+
+运行时默认窗口为 512,000 Token，适用于 Luna 内置配置及没有窗口声明的模型。默认预警、常规压缩、紧急点分别为 400,000、460,800、486,400 Token。预警本身不发起语义压缩。计量包括安全余量，因此这些数值不是账单 Token 数的精确触发点。
+
+显式声明的模型窗口继续优先：请求、模型设置及 provider 能力声明优先于环境变量，环境变量优先于内置值和兜底值。能力声明中的 `max_context_window` 限制可配置的最大窗口；明确的 64K、128K 等窗口不会被默认值强行放大。未知模型的 512K 是客户端预算兜底，不代表远端一定支持，接入时应提供真实窗口能力。
+
+只覆盖窗口时，三个压缩点按该窗口的 78.125%、90%、95% 同步计算，并受实际输入预算约束；显式配置的比例或绝对压缩点仍然有效。输出预留和计量安全余量保持独立。配置可使用 `contextWindowTokens`、`contextHardTokenLimit` 等模型设置，或 `AILIS_LLM_CONTEXT_WINDOW_TOKENS`、`AILIS_LLM_AUTO_COMPACT_TOKEN_LIMIT` 等环境变量。
+
+Checkpoint 里的旧 `contextWindowTokens` 只用于诊断，不再覆盖当前模型配置，避免升级后仍停留在旧窗口，或切换模型时沿用上一个模型的窗口。桌面与无头入口共用预算规则；默认值和比例集中在 [runtime-budget](../../electron/ailis-runtime-budget.cjs)，配置解析在 [Runner](../../electron/agent-loop/runner.cjs)。已冻结的评测包不随主目录默认值变更而重写。
+
+Token 窗口不等于 HTTP 字节上限。Gateway 请求体上限和服务器 `AILIS_LLM_RELAY_MAX_BYTES` 默认均为 16 MiB，以容纳长文本和编码后的历史；超限仍返回 413。现有部署若显式设置旧值，需同步更新环境变量与反向代理限制后重启，改代码不会覆盖已有运维配置。
+
 ## 保存、清除和保护
 
 Agent 数据根由宿主解析，见[配置](../guide/configuration.md)。长期记忆目录包含 memory-state.json、events.jsonl、capsules、daily、reflections 和画像文件。

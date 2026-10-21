@@ -156,7 +156,7 @@
     "test:ailis-skills": "node --test tests/ailis-skills.test.mjs",
     "test:ailis-memory": "node --test tests/ailis-memory-store.test.mjs",
     "test:browsecomp-plus": "node --test tests/ailis-browsecomp-plus.test.mjs",
-    "test:ailis-agent": "node --test tests/ailis-agent-runner.test.mjs",
+    "test:ailis-agent": "node --test tests/ailis-agent-runner.test.mjs tests/ailis-context-budget.test.mjs tests/ailis-context-window-profile.test.mjs",
     "test:ailis-llm-planner": "node --test tests/ailis-llm-planner.test.mjs",
     "test:ailis-email": "node --test tests/ailis-email-tool.test.mjs",
     "test:ailis-file-manager": "node --test tests/ailis-file-manager-tool.test.mjs",

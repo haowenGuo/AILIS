@@ -94,10 +94,11 @@ test('visual histories stay below compaction while real text and provider usage 
     assert.equal(buildContextBudgetReport({ images: items }, { ...options.budgetConfig, actualInputTokens: 245000 }).shouldCompact, true);
 });
 
-test('context budget defaults to 256k without overriding an explicit smaller window', () => {
+test('context budget defaults to 512k with matching thresholds and respects smaller windows', () => {
     const fallback = buildContextBudgetReport();
-    assert.equal(fallback.inputLimitTokens, 256000);
-    assert.equal(fallback.effectiveInputLimitTokens, 256000 - 4096 - 8192);
+    assert.equal(fallback.inputLimitTokens, 512000);
+    assert.equal(fallback.effectiveInputLimitTokens, 512000 - 4096 - 8192);
+    assert.deepEqual(fallback.thresholdTokens, { soft: 400000, hard: 460800, stop: 486400 });
     const explicit = buildContextBudgetReport({}, { inputLimitTokens: 64000 });
     assert.equal(explicit.inputLimitTokens, 64000);
     assert.equal(explicit.effectiveInputLimitTokens, 64000 - 4096 - 8192);
