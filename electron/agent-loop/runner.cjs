@@ -7327,9 +7327,98 @@ function responseItemForDirectToolCall(toolCall = {}, fallbackCallId = '') {
     });
 }
 
+function isRetryableModelTransportFailure(response = {}) {
+    if (response.ok === true || response.aborted === true) return false;
+    const status = Number(response.status || 0);
+    if ([400, 401, 403, 422, 429].includes(status)) return false;
+    if ([408, 502, 503, 504].includes(status)) return true;
+    return [
+        'timeout', 'network_error', 'transient_network_error',
+        'codex_network_error', 'provider_stream_error'
+    ].includes(normalizeText(response.code).toLowerCase());
+}
+
+function waitForModelTransportRetry(delayMs, signal) {
+    return new Promise((resolve) => {
+        if (signal?.aborted) return resolve();
+        const done = () => {
+            clearTimeout(timer);
+            signal?.removeEventListener?.('abort', done);
+            resolve();
+        };
+        const timer = setTimeout(done, delayMs);
+        signal?.addEventListener?.('abort', done, { once: true });
+    });
+}
+
+async function retryModelTransport(invoke, {
+    maxRetries = 0, recoveryBudgetMs = 0, recoveryDeadlineMs = 0,
+    signal = null, onEvent = null, now = Date.now, wait = waitForModelTransportRetry
+} = {}) {
+    const retries = Math.min(2, Math.max(0, Math.floor(Number(maxRetries) || 0)));
+    const budgetMs = Math.max(0, Math.floor(Number(recoveryBudgetMs) || 0));
+    const absoluteDeadline = Number.isFinite(Number(recoveryDeadlineMs)) && Number(recoveryDeadlineMs) > 0
+        ? Number(recoveryDeadlineMs) : 0;
+    // Keep the episode deadline fixed; retry the request, never completed tools.
+    let recoveryDeadline = absoluteDeadline;
+    let lastResponse = null;
+    let recoveryStartedAt = null;
+    const emit = async (event) => {
+        try { await onEvent?.(event); } catch {}
+    };
+    const exhausted = async () => {
+        await emit({ event: 'recovery_exhausted', deadlineMs: recoveryDeadline,
+            code: lastResponse?.code || 'timeout' });
+        return { ...(lastResponse || { ok: false, code: 'timeout', error: 'Model request episode deadline exhausted.' }),
+            recoveryExhausted: true, recoveryDeadlineMs: recoveryDeadline };
+    };
+    for (let attempt = 0; ; attempt++) {
+        if (signal?.aborted) return { ok: false, code: 'aborted', aborted: true };
+        const remainingMs = recoveryDeadline ? recoveryDeadline - now() : null;
+        if (remainingMs !== null && remainingMs <= 5000) return exhausted();
+        let response;
+        try {
+            response = await invoke(remainingMs);
+        } catch (error) {
+            if (signal?.aborted || error.name === 'AbortError') {
+                return { ok: false, code: 'aborted', aborted: true };
+            }
+            const code = error.code || error.cause?.code;
+            if (!['ECONNREFUSED', 'ECONNRESET', 'ETIMEDOUT', 'EAI_AGAIN',
+                'ENETUNREACH', 'EHOSTUNREACH', 'UND_ERR_SOCKET', 'UND_ERR_CONNECT_TIMEOUT'].includes(code)) throw error;
+            response = { ok: false, code: 'network_error', errorCode: code };
+        }
+        lastResponse = response;
+        if (signal?.aborted || !isRetryableModelTransportFailure(response)) {
+            if (recoveryStartedAt !== null) await emit({
+                event: response.ok ? 'recovery_succeeded' : 'recovery_stopped', attempt,
+                elapsedMs: now() - recoveryStartedAt, code: response.code || ''
+            });
+            return response;
+        }
+        if (budgetMs && !recoveryDeadline) recoveryDeadline = now() + budgetMs;
+        if (!recoveryDeadline && attempt >= retries) return response;
+        if (recoveryStartedAt === null) {
+            recoveryStartedAt = now();
+            await emit({ event: 'recovery_started', code: response.code || '',
+                deadlineMs: recoveryDeadline || null });
+        }
+        let delayMs = Math.min(absoluteDeadline ? 30000 : 5000, 250 * (2 ** Math.min(attempt, 7)));
+        if (absoluteDeadline) delayMs = Math.min(delayMs, Math.max(0, recoveryDeadline - now() - 5001));
+        if (recoveryDeadline && (delayMs < 1 || recoveryDeadline - now() <= delayMs + 5000)) return exhausted();
+        await emit({ event: 'retry_scheduled', attempt: attempt + 1, delayMs,
+            remainingMs: recoveryDeadline ? recoveryDeadline - now() : null,
+            code: response.code || '', httpStatus: Number(response.status || 0) });
+        await wait(delayMs, signal);
+    }
+}
+
 async function callLlmAgentDirectToolDecision(settings, payload, {
     hasToolHistory = false,
-    nativeToolValidationContext = null
+    nativeToolValidationContext = null,
+    modelTransportRetryAttempts = 0,
+    modelTransportRecoveryBudgetMs = 0,
+    modelTransportRecoveryDeadlineMs = 0
 } = {}) {
     const rawToolChoice = payload.toolChoice ?? payload.tool_choice;
     const requestedToolChoice = rawToolChoice &&
@@ -7338,9 +7427,21 @@ async function callLlmAgentDirectToolDecision(settings, payload, {
             ? { ...rawToolChoice }
             : normalizeText(rawToolChoice, 'auto');
     const providerPayload = payload;
+    const requestModel = (input) => retryModelTransport(
+        (remainingMs) => callDesktopLlmProvider(settings, remainingMs === null ? input : {
+            ...input,
+            timeoutMs: Math.min(Number(input.timeoutMs || settings.timeoutMs) || 600000, remainingMs)
+        }), {
+            maxRetries: modelTransportRetryAttempts,
+            recoveryBudgetMs: modelTransportRecoveryBudgetMs,
+            recoveryDeadlineMs: modelTransportRecoveryDeadlineMs,
+            signal: input.abortSignal || input.signal || null,
+            onEvent: input.onProviderRequestEvent
+        }
+    );
     let effectiveToolChoice = requestedToolChoice;
     let toolChoiceFallback = false;
-    let response = await callDesktopLlmProvider(settings, {
+    let response = await requestModel({
         ...providerPayload,
         jsonMode: false,
         expectJson: false,
@@ -7350,7 +7451,7 @@ async function callLlmAgentDirectToolDecision(settings, payload, {
         parallel_tool_calls: providerPayload.parallel_tool_calls === true
     });
     if (!response.ok && providerPayload.parallel_tool_calls === true && looksLikeParallelToolCallsUnsupported(response)) {
-        response = await callDesktopLlmProvider(settings, {
+        response = await requestModel({
             ...providerPayload,
             jsonMode: false,
             expectJson: false,
@@ -7371,7 +7472,7 @@ async function callLlmAgentDirectToolDecision(settings, payload, {
     );
     if (!response.ok && specificToolChoiceRequested && looksLikeSpecificToolChoiceUnsupported(response)) {
         effectiveToolChoice = 'auto';
-        response = await callDesktopLlmProvider(settings, {
+        response = await requestModel({
             ...providerPayload,
             jsonMode: false,
             expectJson: false,
@@ -7414,7 +7515,7 @@ async function callLlmAgentDirectToolDecision(settings, payload, {
             repairMessages.unshift({ role: 'system', content: repairInstruction });
         }
         const originalUsage = response.usage;
-        const repairedResponse = await callDesktopLlmProvider(settings, {
+        const repairedResponse = await requestModel({
             ...providerPayload,
             input: providerPayload.input,
             messages: repairMessages,
@@ -9719,7 +9820,10 @@ class AILISAgentRunner {
             // 模型可以选择 final、blocked、load_context、单工具或并行工具调用。
             // Harness 只验证格式、权限和预算，不会替模型改写任务语义。
             let decision = await callLlmAgentDirectToolDecision(decisionSettings, decisionPayload, {
-                hasToolHistory: stepResults.length > 0 || events.some((event) => event?.type === 'tool_result')
+                hasToolHistory: stepResults.length > 0 || events.some((event) => event?.type === 'tool_result'),
+                modelTransportRetryAttempts: request.modelTransportRetryAttempts,
+                modelTransportRecoveryBudgetMs: request.modelTransportRecoveryBudgetMs,
+                modelTransportRecoveryDeadlineMs: request.modelTransportRecoveryDeadlineMs
             });
             const commitsVisibleAssistantText = Boolean(
                 decision.ok === true &&
@@ -12344,6 +12448,8 @@ module.exports = {
     isAgentDecisionDeepThinkingMode,
     isDeepThinkingAgentDecisionModel,
     isTerminalAgentDecisionFailure,
+    isRetryableModelTransportFailure,
+    retryModelTransport,
     resolveAgentDecisionTimeoutMs,
     resolveDirectToolTransportTimeoutMs,
     stageFileAttachmentsForWorkspace
