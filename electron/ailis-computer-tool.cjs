@@ -2076,6 +2076,30 @@ function appendBounded(buffer, chunk, maxBytes = DEFAULT_PROCESS_BUFFER_BYTES) {
     return merged.slice(Math.max(0, merged.length - maxBytes));
 }
 
+function appendProcessOutput(record, stream, chunk, maxBytes = DEFAULT_PROCESS_BUFFER_BYTES) {
+    const text = Buffer.isBuffer(chunk) ? chunk.toString('utf8') : String(chunk);
+    const previousLength = record[stream].length;
+    record[stream] = appendBounded(record[stream], text, maxBytes);
+    const runs = record.outputRuns;
+    if (text.length) {
+        const last = runs[runs.length - 1];
+        if (last?.stream === stream) last.length += text.length;
+        else runs.push({ stream, length: text.length });
+    }
+    // 顺序索引只引用两个原有缓冲区；某个流裁掉多少字符，索引同步裁掉多少。
+    let removed = previousLength + text.length - record[stream].length;
+    if (removed > 0) {
+        for (const run of runs) {
+            if (run.stream !== stream) continue;
+            const count = Math.min(removed, run.length);
+            run.length -= count;
+            removed -= count;
+            if (!removed) break;
+        }
+        record.outputRuns = runs.filter((run) => run.length > 0);
+    }
+}
+
 function estimateTokenCount(text = '') {
     return Math.ceil(String(text).length / 4);
 }
@@ -2087,7 +2111,14 @@ function truncateByApproxTokens(text = '', maxTokens = DEFAULT_EXEC_MAX_OUTPUT_T
     if (source.length <= maxChars) {
         return source;
     }
-    return `${source.slice(0, Math.max(0, maxChars - 160))}\n...[truncated: original_token_count=${estimateTokenCount(source)}, max_output_tokens=${limit}]`;
+    const marker = `\n...[truncated: original_token_count=${estimateTokenCount(source)}, max_output_tokens=${limit}]...\n`;
+    const remaining = Math.max(0, maxChars - marker.length);
+    let head = Math.ceil(remaining / 2);
+    let tailStart = source.length - Math.floor(remaining / 2);
+    // 不在 UTF-16 代理对中间切开字符；预算和计量方式保持原样。
+    if (/[\uD800-\uDBFF]/.test(source[head - 1])) head--;
+    if (/[\uDC00-\uDFFF]/.test(source[tailStart])) tailStart++;
+    return `${source.slice(0, head)}${marker}${source.slice(tailStart)}`;
 }
 
 function hasShellNewline(command = '') {
@@ -2170,6 +2201,9 @@ function formatExecContent(details = {}) {
         }
         return lines.join('\n');
     }
+    if (typeof details.output === 'string' && details.output) {
+        return details.output;
+    }
     if (details.stdout) {
         return details.stdout;
     }
@@ -2194,6 +2228,14 @@ function formatExecContent(details = {}) {
 }
 
 function collectSessionText(record = {}) {
+    if (Array.isArray(record.outputRuns)) {
+        const offsets = { stdout: 0, stderr: 0 };
+        return record.outputRuns.map(({ stream, length }) => {
+            const start = offsets[stream];
+            offsets[stream] += length;
+            return record[stream].slice(start, offsets[stream]);
+        }).join('');
+    }
     return [record.stdout || '', record.stderr || ''].filter(Boolean).join(record.stdout && record.stderr ? '\n' : '');
 }
 
@@ -2446,6 +2488,7 @@ class ComputerRuntime {
             signal: null,
             stdout: '',
             stderr: '',
+            outputRuns: [],
             child,
             runId,
             timeout: null,
@@ -2453,12 +2496,12 @@ class ComputerRuntime {
             outputStore: summarizeExecOutputCapture(outputCapture)
         };
         child.stdout?.on('data', (chunk) => {
-            record.stdout = appendBounded(record.stdout, chunk);
+            appendProcessOutput(record, 'stdout', chunk);
             record.outputCapture?.append('stdout', chunk);
             record.updatedAt = Date.now();
         });
         child.stderr?.on('data', (chunk) => {
-            record.stderr = appendBounded(record.stderr, chunk);
+            appendProcessOutput(record, 'stderr', chunk);
             record.outputCapture?.append('stderr', chunk);
             record.updatedAt = Date.now();
         });
@@ -2486,7 +2529,7 @@ class ComputerRuntime {
             record.error = error.message || String(error);
             record.errorCode = error.code;
             if (record.timeout) { clearTimeout(record.timeout); record.timeout = null; }
-            record.stderr = appendBounded(record.stderr, `\n${error.message || error}`);
+            appendProcessOutput(record, 'stderr', `\n${error.message || error}`);
             record.outputCapture?.append('stderr', `\n${error.message || error}`);
             record.updatedAt = Date.now();
             finalizeExecOutputCapture(record.outputCapture, {
@@ -2919,8 +2962,7 @@ class ComputerRuntime {
         return await new Promise((resolve) => {
             let settled = false;
             let timedOut = false;
-            let stdout = '';
-            let stderr = '';
+            const outputRecord = { stdout: '', stderr: '', outputRuns: [] };
             const maxOutputBytes = normalizeNumber(args.maxOutputBytes, DEFAULT_PROCESS_BUFFER_BYTES, 1024, 5 * 1024 * 1024);
             let timer = null;
             const finish = async ({ status, exitCode = null, signal = null, error = '' } = {}) => {
@@ -2939,7 +2981,8 @@ class ComputerRuntime {
                     error,
                     durationMs: Date.now() - startedAt
                 });
-                const outputText = [stdout, stderr].filter(Boolean).join(stdout && stderr ? '\n' : '');
+                const { stdout, stderr } = outputRecord;
+                const outputText = collectSessionText(outputRecord);
                 const details = attachOutputStoreDetails(annotateExecDetails({
                     status,
                     action: 'exec',
@@ -2971,16 +3014,16 @@ class ComputerRuntime {
                 });
             }, timeoutMs);
             child.stdout?.on('data', (chunk) => {
-                stdout = appendBounded(stdout, chunk, maxOutputBytes);
+                appendProcessOutput(outputRecord, 'stdout', chunk, maxOutputBytes);
                 outputCapture?.append('stdout', chunk);
             });
             child.stderr?.on('data', (chunk) => {
-                stderr = appendBounded(stderr, chunk, maxOutputBytes);
+                appendProcessOutput(outputRecord, 'stderr', chunk, maxOutputBytes);
                 outputCapture?.append('stderr', chunk);
             });
             child.on('error', (error) => {
                 const message = error?.message || String(error);
-                stderr = appendBounded(stderr, `\n${message}`, maxOutputBytes);
+                appendProcessOutput(outputRecord, 'stderr', `\n${message}`, maxOutputBytes);
                 outputCapture?.append('stderr', `\n${message}`);
                 finish({
                     status: 'error',

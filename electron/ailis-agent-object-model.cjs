@@ -198,6 +198,10 @@ function normalizeToolOutput(input = {}, index = 0, options = {}) {
             ''
     );
     const toolName = normalizeText(input.tool || input.name || input.nativeToolCall?.name);
+    if (isNativeExecutionTool(toolName) && typeof result?.status === 'string' &&
+        !Object.prototype.hasOwnProperty.call(details, 'status')) {
+        details.status = result.status;
+    }
     const rawText = extractText(result) || errorSummary || extractText(response);
     const outputText = isWebToolName(toolName)
         ? sanitizeWebToolTextForModel(rawText)
@@ -284,6 +288,24 @@ function buildModelVisibleToolMetadata(toolOutput = {}) {
             ? 'OutputArtifactHint: full stdout/stderr is stored by outputId; inspect only the needed slice instead of rerunning the same command to recover truncated text.'
             : ''
     ].filter(Boolean);
+}
+
+function isNativeExecutionTool(toolName) {
+    return ['exec', 'exec_wait', 'exec_command', 'write_stdin'].includes(toolName);
+}
+
+function nativeExecutionFeedback(toolOutput, options) {
+    // 正文已有工具层状态；只透传原字段，不把调用成功推断成进程完成。
+    const { output, stdout, stderr, ...metadata } = toolOutput.details || {};
+    const text = toolOutput.outputText || '';
+    const budget = options.toolOutputChars || DEFAULT_TOOL_OUTPUT_CHARS;
+    return [
+        toolOutput.errorSummary ? `Error: ${toolOutput.errorSummary}` : '',
+        toolOutput.durationMs != null ? `DurationMs: ${toolOutput.durationMs}` : '',
+        ...buildModelVisibleToolMetadata(toolOutput),
+        Object.keys(metadata).length ? safeJsonStringify(metadata, '') : '',
+        text.length <= budget ? text : summarizeForModel(text, budget)
+    ].filter(Boolean).join('\n');
 }
 
 function firstObject(...values) {
@@ -846,7 +868,7 @@ function toolOutputToResponseItems(toolOutput = {}, options = {}) {
     }
     const callId = canonicalCallId(toolOutput);
     if (toolOutput.callType === 'custom') {
-        const output = [
+        const output = isNativeExecutionTool(toolName) ? nativeExecutionFeedback(toolOutput, options) : [
             toolOutput.ok ? 'Status: completed' : `Status: ${toolOutput.status || 'failed'}`,
             toolOutput.errorSummary ? `Error: ${toolOutput.errorSummary}` : '',
             toolOutput.durationMs != null ? `DurationMs: ${toolOutput.durationMs}` : '',
@@ -922,7 +944,7 @@ function toolOutputToResponseItems(toolOutput = {}, options = {}) {
         ].filter(Boolean);
     }
     const metadataLines = buildModelVisibleToolMetadata(toolOutput);
-    const output = [
+    const output = isNativeExecutionTool(toolName) ? nativeExecutionFeedback(toolOutput, options) : [
         toolOutput.ok ? 'Status: completed' : `Status: ${toolOutput.status || 'failed'}`,
         toolOutput.errorSummary ? `Error: ${toolOutput.errorSummary}` : '',
         toolOutput.durationMs != null ? `DurationMs: ${toolOutput.durationMs}` : '',
