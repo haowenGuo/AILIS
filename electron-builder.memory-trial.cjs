@@ -5,7 +5,11 @@ module.exports = {
     productName: 'AILIS Memory Trial',
     artifactName: 'AILIS-Memory-Trial-${version}-${arch}.${ext}',
     directories: { output: 'release-memory-trial' },
-    extraMetadata: { ailisHierarchicalMemoryTrial: true },
+    extraMetadata: {
+        ailisHierarchicalMemoryTrial: true,
+        ailisMemoryBaseCommit: '31e73e4ca6942be93afa4921042434f11459246c',
+        ailisMemoryBaselineCommit: '6573669'
+    },
     win: { executableName: 'AILIS Memory Trial', target: [{ target: 'nsis', arch: ['x64'] }] },
     nsis: {
         artifactName: 'AILIS-Memory-Trial-Setup-${version}-win-${arch}.${ext}',

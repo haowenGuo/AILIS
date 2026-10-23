@@ -18,9 +18,21 @@ async function main() {
     const metadata = packagedRequire('./package.json');
     assert.equal(metadata.ailisHierarchicalMemoryTrial, true);
     assert.equal(metadata.name, 'ailis');
-    const files = ['electron/main.cjs', 'electron/ailis-gateway.cjs', 'electron/agent-loop/runner.cjs',
+    assert.equal(metadata.version, '1.4.9-memory.1');
+    assert.equal(metadata.ailisMemoryBaseCommit, '31e73e4ca6942be93afa4921042434f11459246c');
+    assert.equal(metadata.ailisMemoryBaselineCommit, '6573669');
+    const { execFileSync } = require('node:child_process');
+    const sourceCommit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: sourceDir, encoding: 'utf8', windowsHide: true }).trim();
+    assert.equal(metadata.ailisSourceCommit, sourceCommit);
+    const { desktopFiles } = require(path.join(sourceDir, 'scripts/production-closure.cjs'));
+    const runtimeFiles = desktopFiles(sourceDir).filter(file => /^(electron|scripts)\//.test(file) && /\.(cjs|mjs|js|py|json)$/.test(file));
+    const distFiles = directory => fs.readdirSync(directory, { withFileTypes: true }).flatMap(entry => {
+        const absolute = path.join(directory, entry.name);
+        return entry.isDirectory() ? distFiles(absolute) : [path.relative(sourceDir, absolute).split(path.sep).join('/')];
+    });
+    const files = [...new Set(['electron/main.cjs', 'electron/ailis-gateway.cjs', 'electron/agent-loop/runner.cjs',
         'electron/desktop-llm-provider.cjs', 'electron/ailis-memory-store.cjs',
-        'electron/ailis-hierarchical-user-memory.cjs'];
+        'electron/ailis-hierarchical-user-memory.cjs', ...runtimeFiles, ...distFiles(path.join(sourceDir, 'dist'))])];
     const sha = file => crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
     const identities = files.map(file => {
         const expected = sha(path.join(sourceDir, file)), actual = sha(path.join(root, file));
@@ -76,6 +88,7 @@ async function main() {
     const restored = new AILISHierarchicalUserMemory({ rootDir: store.rootDir });
     assert.equal(restored.buildPromptContext(), store.buildPromptContext());
     const result = { ok: true, version: metadata.version, executable: process.execPath,
+        sourceCommit, baseCommit: metadata.ailisMemoryBaseCommit, baselineCommit: metadata.ailisMemoryBaselineCommit,
         sourceIdentities: identities, hierarchicalStatus: store.getStatus(),
         verified: ['packaged source identity', 'empty initial user profile', 'real packaged modules load',
             'same 460800-token baseline as conversation compaction', 'no preview-triggered early rollup',
