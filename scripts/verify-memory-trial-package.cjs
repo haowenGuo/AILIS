@@ -37,7 +37,7 @@ async function main() {
     baseline.appendCompaction({ sessionId: 'synthetic-package-test', sourceId: 'baseline', summary: 'A synthetic remembered fact. '.repeat(2000) });
     assert.equal((await baseline.consolidate()).merges, 0);
     assert.equal(baseline.getStatus().mergeInputTokens, 460800);
-    const longSummary = 'Synthetic complete user understanding with family, interests and relationship changes. '.repeat(120);
+    const longSummary = 'Synthetic complete user understanding with family, interests and relationship changes. '.repeat(120).trim();
     let longCalls = 0;
     const uncapped = new AILISHierarchicalUserMemory({ rootDir: path.join(scratch, 'uncapped'), mergeInputTokens: 100,
         llmClient: async payload => {
