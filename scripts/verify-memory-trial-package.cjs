@@ -37,9 +37,24 @@ async function main() {
     baseline.appendCompaction({ sessionId: 'synthetic-package-test', sourceId: 'baseline', summary: 'A synthetic remembered fact. '.repeat(2000) });
     assert.equal((await baseline.consolidate()).merges, 0);
     assert.equal(baseline.getStatus().mergeInputTokens, 460800);
+    const longSummary = 'Synthetic complete user understanding with family, interests and relationship changes. '.repeat(120);
+    let longCalls = 0;
+    const uncapped = new AILISHierarchicalUserMemory({ rootDir: path.join(scratch, 'uncapped'), mergeInputTokens: 100,
+        llmClient: async payload => {
+            longCalls++;
+            assert.equal(Object.hasOwn(JSON.parse(payload.messages[1].content), 'outputMaxCharacters'), false);
+            assert.equal(Object.hasOwn(payload, 'max_tokens'), false);
+            return { ok: true, content: longSummary, finishReason: 'stop' };
+        } });
+    for (let i = 0; i < 2; i++) uncapped.appendCompaction({ sessionId: 'synthetic', sourceId: String(i), summary: 'Source material. '.repeat(50) });
+    assert.equal((await uncapped.consolidate()).merges, 1);
+    assert.equal(longCalls, 1);
+    assert.equal(uncapped.state.frontier[0].text, longSummary);
+    const uncappedRestored = new AILISHierarchicalUserMemory({ rootDir: uncapped.rootDir });
+    assert.equal(uncappedRestored.state.frontier[0].text, longSummary);
     let calls = 0;
     const store = new AILISHierarchicalUserMemory({ rootDir: path.join(scratch, 'hierarchy'),
-        mergeInputTokens: 100, nodeOutputChars: 200, maxPromptChars: 2000,
+        mergeInputTokens: 100, maxPromptChars: 2000,
         llmClient: async payload => {
             calls++;
             assert.equal(payload.messages[0].content, USER_UNDERSTANDING_PROMPT);
@@ -64,6 +79,7 @@ async function main() {
         sourceIdentities: identities, hierarchicalStatus: store.getStatus(),
         verified: ['packaged source identity', 'empty initial user profile', 'real packaged modules load',
             'same 460800-token baseline as conversation compaction', 'no preview-triggered early rollup',
+            'uncapped complete rollup persisted intact', 'no single-parent self-recompression',
             'recursive rollup with synthetic LLM', 'bounded context injection', 'restart restore'],
         notVerified: ['long-term subjective benefit', 'real model summary quality', 'microphone hardware', 'other platforms'] };
     await fsp.mkdir(path.dirname(reportPath), { recursive: true });

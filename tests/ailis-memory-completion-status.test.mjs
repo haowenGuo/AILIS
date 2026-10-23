@@ -44,7 +44,7 @@ for (const [provider, reason, body] of cases) {
         const baseUrl = `http://127.0.0.1:${server.address().port}`;
         let observed;
         const store = new AILISHierarchicalUserMemory({ rootDir: root, mergeInputTokens: 100,
-            maxPromptChars: 2000, nodeOutputChars: 200,
+            maxPromptChars: 2000,
             llmClient: async payload => {
                 observed = await callDesktopLlmProvider({ provider, baseUrl, model: 'synthetic-model',
                     apiKey: 'synthetic-key', timeoutMs: 5000 },

@@ -18,7 +18,7 @@ async function fixture(t, options = {}) {
     const calls = [];
     const llmClient = async input => { calls.push(input); return { ok: true, content: 'Known user understanding. '.repeat(6) }; };
     const store = new AILISHierarchicalUserMemory({ rootDir: path.join(root, 'hierarchy'), llmClient,
-        maxPromptChars: 2000, mergeInputTokens: 100, nodeOutputChars: 200, ...options });
+        maxPromptChars: 2000, mergeInputTokens: 100, ...options });
     return { root, store, calls };
 }
 
@@ -74,7 +74,6 @@ test('compaction archive orphan is recovered when a state write did not commit',
 for (const [label, response] of [
     ['empty', { ok: true, content: '' }],
     ['failed', { ok: false, error: 'synthetic failure' }],
-    ['oversized', { ok: true, content: 'too long '.repeat(300) }],
     ['truncated', { ok: true, content: 'incomplete', finish_reason: 'length' }],
     ['tool call', { ok: true, content: 'not an answer', toolCalls: [{ name: 'exec' }] }]
 ]) test(`${label} LLM output never consumes original summaries`, async t => {
@@ -86,6 +85,32 @@ for (const [label, response] of [
     assert.deepEqual(store.state.frontier.map(node => node.id), before);
     assert.equal(store.state.mergeCount, 0);
     assert.ok(store.getStatus().lastError);
+});
+
+test('complete long rollup has no character/shrink cap and is persisted intact without self-recompression', async t => {
+    const longSummary = '用户明确描述了背景、家庭、兴趣、关系变化与近期生活状态。'.repeat(700);
+    let calls = 0;
+    const { store } = await fixture(t, { llmClient: async payload => {
+        calls++;
+        const input = JSON.parse(payload.messages[1].content);
+        assert.equal(Object.hasOwn(input, 'outputMaxCharacters'), false);
+        for (const key of ['max_tokens', 'maxTokens', 'max_output_tokens', 'maxOutputTokens']) {
+            assert.equal(Object.hasOwn(payload, key), false);
+        }
+        assert.equal(payload.messages[0].content, USER_UNDERSTANDING_PROMPT);
+        return { ok: true, content: longSummary, finishReason: 'stop' };
+    } });
+    add(store, '1'); add(store, '2');
+    const result = await store.consolidate();
+    assert.equal(result.ok, true);
+    assert.equal(result.merges, 1);
+    assert.equal(calls, 1, 'a single large parent must wait for another same-layer node');
+    assert.equal(store.getStatus().pending, false);
+    assert.equal(store.state.frontier[0].text, longSummary);
+    assert.equal(JSON.parse(await fsp.readFile(path.join(store.nodesDir, store.state.frontier[0].id + '.json'))).text, longSummary);
+    const restored = new AILISHierarchicalUserMemory({ rootDir: store.rootDir, mergeInputTokens: 100 });
+    assert.equal(restored.state.frontier[0].text, longSummary);
+    assert.equal(restored.getStatus().promptPreviewTruncated, true);
 });
 
 test('later correction is supplied intact and can replace an earlier assumption', async t => {
@@ -125,7 +150,7 @@ test('clear during an LLM call cannot resurrect forgotten active memory', async 
 });
 
 test('injection preview budget never promotes complete stored nodes ahead of their token threshold', async t => {
-    const { store } = await fixture(t, { maxPromptChars: 450, nodeOutputChars: 140,
+    const { store } = await fixture(t, { maxPromptChars: 450,
         mergeInputTokens: 8192, llmClient: async () => ({ ok: true, content: 'A compact complete user understanding.' }) });
     add(store, '1', 'x'.repeat(340)); add(store, '2', 'y'.repeat(340));
     assert.equal((await store.consolidate()).ok, true);
