@@ -169,8 +169,10 @@ class AILISHierarchicalUserMemory {
                 });
                 if (epoch !== this.state.epoch) return { ok: false, status: 'reset_during_consolidation' };
                 const text = redactSecretLikeText(outputText(response)).trim();
+                const finishReason = String(response?.finishReason || response?.finish_reason || '').toLowerCase();
+                const incomplete = finishReason && !['stop', 'end_turn', 'stop_sequence', 'completed'].includes(finishReason);
                 if (response?.ok === false || response?.toolCalls?.length || !text || text.length > outputLimit ||
-                    ['length', 'max_tokens'].includes(response?.finishReason || response?.finish_reason)) {
+                    incomplete) {
                     throw new Error(response?.error || `Invalid user-memory summary (characters=${text.length}, limit=${outputLimit}); original nodes retained.`);
                 }
                 const ids = new Set(children.map(node => node.id));

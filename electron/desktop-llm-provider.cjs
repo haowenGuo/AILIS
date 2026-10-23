@@ -1303,6 +1303,11 @@ function buildJsonHeaders({ apiKey = '', bearer = true, extra = {} } = {}) {
 }
 
 function buildProviderResult(settings, data, content, toolCalls = [], options = {}) {
+    // Preserve upstream completion evidence for consumers such as memory rollup.
+    // A non-empty partial answer is not necessarily a completed generation.
+    const finishReason = normalizeString(data?.finish_reason || data?.choices?.[0]?.finish_reason ||
+        data?.stop_reason || data?.candidates?.[0]?.finishReason || data?.done_reason ||
+        data?.incomplete_details?.reason || (data?.status === 'incomplete' ? 'incomplete' : ''));
     return {
         ok: true,
         provider: settings.provider,
@@ -1311,6 +1316,7 @@ function buildProviderResult(settings, data, content, toolCalls = [], options = 
         toolCalls,
         nativeToolCalls: toolCalls.length > 0,
         usage: data?.usage || data?.usageMetadata || null,
+        ...(finishReason ? { finishReason } : {}),
         ...(options.providerMessage ? { providerMessage: options.providerMessage } : {}),
         capabilities: getProviderCapabilities(settings)
     };
