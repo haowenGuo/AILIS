@@ -7,7 +7,7 @@ import test from 'node:test';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const { AILISHierarchicalUserMemory, USER_UNDERSTANDING_PROMPT } = require('../electron/ailis-hierarchical-user-memory.cjs');
+const { AILISHierarchicalUserMemory, USER_UNDERSTANDING_PROMPT, DEFAULT_MERGE_INPUT_TOKENS } = require('../electron/ailis-hierarchical-user-memory.cjs');
 const { AILISMemoryRuntime } = require('../electron/ailis-memory-store.cjs');
 const { AILISGateway } = require('../electron/ailis-gateway.cjs');
 const { AILISContextCompiler } = require('../electron/ailis-context-compiler.cjs');
@@ -124,13 +124,60 @@ test('clear during an LLM call cannot resurrect forgotten active memory', async 
     assert.equal(store.getStatus().capturedCount, 0);
 });
 
-test('context ceiling triggers complete-node rollup instead of string truncation', async t => {
+test('injection preview budget never promotes complete stored nodes ahead of their token threshold', async t => {
     const { store } = await fixture(t, { maxPromptChars: 450, nodeOutputChars: 140,
         mergeInputTokens: 8192, llmClient: async () => ({ ok: true, content: 'A compact complete user understanding.' }) });
     add(store, '1', 'x'.repeat(340)); add(store, '2', 'y'.repeat(340));
     assert.equal((await store.consolidate()).ok, true);
-    assert.ok(store.buildPromptContext().length <= 510);
-    assert.match(store.buildPromptContext(), /complete user understanding/);
+    assert.equal(store.state.frontier.length, 2);
+    assert.equal(store.state.mergeCount, 0);
+    assert.equal(store.getStatus().pending, false);
+    assert.equal(store.getStatus().promptPreviewTruncated, true);
+    assert.match(store.buildPromptContext(), /本轮注入预算预览/);
+    assert.ok(store.buildPromptContext().indexOf('yyyy') < store.buildPromptContext().indexOf('xxxx'));
+    assert.equal(JSON.parse(await fsp.readFile(path.join(store.nodesDir, store.state.frontier[0].id + '.json'))).text, 'x'.repeat(340));
+    add(store, '3', 'NEW EXPLICIT CORRECTION');
+    assert.match(store.buildPromptContext(), /NEW EXPLICIT CORRECTION/);
+});
+
+test('default per-layer threshold is the same 460800-token conversation compaction baseline, not 8192', async t => {
+    const { store, calls } = await fixture(t, { mergeInputTokens: null });
+    assert.equal(DEFAULT_MERGE_INPUT_TOKENS, 460800);
+    assert.equal(store.getStatus().mergeInputTokens, DEFAULT_MERGE_INPUT_TOKENS);
+    add(store, '1', 'a'.repeat(20000)); add(store, '2', 'b'.repeat(20000));
+    assert.equal((await store.consolidate()).merges, 0);
+    assert.equal(calls.length, 0);
+    assert.equal(store.state.frontier.length, 2);
+});
+
+test('default threshold is reached at 460800 estimated tokens, not the preview character ceiling', async t => {
+    const { store, calls } = await fixture(t, { mergeInputTokens: null });
+    add(store, '1', 'a '.repeat(460798)); add(store, '2', 'b '.repeat(460798));
+    assert.equal((await store.consolidate()).merges, 0);
+    add(store, '3', '12345678');
+    assert.equal((await store.consolidate()).merges, 1);
+    assert.equal(calls.length, 1);
+    assert.deepEqual(store.getStatus().layers, [1]);
+});
+
+test('all layers inherit the actual summary1 hard threshold and restore it after restart', async t => {
+    const { store } = await fixture(t, { mergeInputTokens: null, maxPromptChars: 450 });
+    store.appendCompaction({ sessionId: 'synthetic', sourceId: '1', summary: 'a'.repeat(800),
+        budgetReport: { inputLimitTokens: 2400, thresholdTokens: { soft: 150, hard: 400, stop: 500 } } });
+    add(store, '2', 'b'.repeat(800));
+    assert.equal(store.getStatus().mergeInputTokens, 400);
+    assert.equal(store.getStatus().mergeThresholdSource, 'conversation_compaction_hard_threshold');
+    assert.equal((await store.consolidate()).merges, 1);
+    add(store, '3', 'c'.repeat(800)); add(store, '4', 'd'.repeat(800));
+    assert.equal((await store.consolidate()).merges, 1);
+    assert.equal(store.state.frontier.filter(node => node.level === 1).length, 2);
+    assert.equal(store.getStatus().pending, false, 'neither preview overflow nor different layers may force a promotion');
+    const restored = new AILISHierarchicalUserMemory({ rootDir: store.rootDir });
+    assert.equal(restored.mergeInputTokens, 400);
+    assert.equal(restored.getStatus().pending, false);
+    restored.appendCompaction({ sessionId: 'synthetic', sourceId: '5', summary: 'changed model window',
+        budgetReport: { inputLimitTokens: 9000, thresholdTokens: { hard: 8100 } } });
+    assert.equal(restored.mergeInputTokens, 8100);
 });
 
 test('trial memory context excludes old seeded user/relationship/affinity blocks', async t => {

@@ -27,10 +27,16 @@ async function main() {
         assert.equal(actual, expected, `Packaged source differs: ${file}`);
         return { file, sha256: actual };
     });
-    const { AILISHierarchicalUserMemory, USER_UNDERSTANDING_PROMPT } = packagedRequire('./electron/ailis-hierarchical-user-memory.cjs');
+    const { AILISHierarchicalUserMemory, USER_UNDERSTANDING_PROMPT, DEFAULT_MERGE_INPUT_TOKENS } = packagedRequire('./electron/ailis-hierarchical-user-memory.cjs');
     const { AILISMemoryRuntime } = packagedRequire('./electron/ailis-memory-store.cjs');
     const { AILISContextCompiler } = packagedRequire('./electron/ailis-context-compiler.cjs');
     const scratch = await fsp.mkdtemp(path.join(os.tmpdir(), 'ailis-memory-package-'));
+    assert.equal(DEFAULT_MERGE_INPUT_TOKENS, 460800);
+    const baseline = new AILISHierarchicalUserMemory({ rootDir: path.join(scratch, 'baseline'),
+        llmClient: async () => { throw new Error('8192 tokens or preview overflow must not trigger a default rollup'); } });
+    baseline.appendCompaction({ sessionId: 'synthetic-package-test', sourceId: 'baseline', summary: 'A synthetic remembered fact. '.repeat(2000) });
+    assert.equal((await baseline.consolidate()).merges, 0);
+    assert.equal(baseline.getStatus().mergeInputTokens, 460800);
     let calls = 0;
     const store = new AILISHierarchicalUserMemory({ rootDir: path.join(scratch, 'hierarchy'),
         mergeInputTokens: 100, nodeOutputChars: 200, maxPromptChars: 2000,
@@ -57,6 +63,7 @@ async function main() {
     const result = { ok: true, version: metadata.version, executable: process.execPath,
         sourceIdentities: identities, hierarchicalStatus: store.getStatus(),
         verified: ['packaged source identity', 'empty initial user profile', 'real packaged modules load',
+            'same 460800-token baseline as conversation compaction', 'no preview-triggered early rollup',
             'recursive rollup with synthetic LLM', 'bounded context injection', 'restart restore'],
         notVerified: ['long-term subjective benefit', 'real model summary quality', 'microphone hardware', 'other platforms'] };
     await fsp.mkdir(path.dirname(reportPath), { recursive: true });

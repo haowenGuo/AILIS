@@ -9555,6 +9555,7 @@ class AILISAgentRunner {
                     this.gateway.recordHierarchicalCompaction?.({
                         summary: providerCompaction.summary || '', sessionId,
                         responseId: providerCompaction.responseId || '',
+                        budgetReport: packageBefore.budgetReport,
                         mode: providerCompaction.providerMessage?.transport || ''
                     });
                     modelInputContextManager.replaceCompactedHistory(

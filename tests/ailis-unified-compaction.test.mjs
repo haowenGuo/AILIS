@@ -222,6 +222,7 @@ test('trial captures real portable compaction and restores hierarchy without rep
     const result = await f.gateway.runAgent({ message: currentRequest, sessionId, context: f.context });
     assert.equal(result.status, 'completed');
     assert.equal(f.gateway.hierarchicalUserMemory.getStatus().capturedCount, 1);
+    assert.equal(f.gateway.hierarchicalUserMemory.getStatus().mergeInputTokens, f.context.contextHardTokenLimit);
     assert.match(JSON.stringify(f.requests[0].body.messages), /双方关系、称呼、边界、共同经历/);
     await f.restart();
     assert.equal(f.gateway.hierarchicalUserMemory.getStatus().capturedCount, 1);
