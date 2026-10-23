@@ -1,0 +1,56 @@
+{
+  "schema": "ailis.tool-baseline.v1",
+  "baselineId": "taskagent-tool-exit-state-20261024",
+  "acceptedAt": "2026-10-24",
+  "adoption": "explicit_user_approval",
+  "codeGitRef": "taskagent-tool-exit-state-20261024",
+  "parentCommit": "31e73e4ca6942be93afa4921042434f11459246c",
+  "changedProductFiles": ["electron/ailis-code-mode-runtime.cjs", "electron/codex-code-mode-protocol.cjs"],
+  "scope": ["preserve_native_exit_state", "preserve_null_exit_code", "structured_process_failure_projection", "corresponding_output_schema"],
+  "unchanged": ["executor", "utf8", "output_order", "cumulative_output", "truncation", "wait_defaults", "timing", "prompt", "input_schema", "context", "recovery", "search"],
+  "runtimeArchiveSha256": "103900e03ab99f745731dc25377976ed37ad0bc59144357423d0d3217cdbd509",
+  "evidenceRoot": "longrun/jobs/tb4-tool-exit-state-ab10-20261024",
+  "protocol": {
+    "suiteId": "tb4-tool-regression-10-v1",
+    "selectionSha256": "0508a702cbf7d14fc81aac1e67312e7976b3f5248e04663e77f38b062effec24",
+    "model": "gpt-6-luna",
+    "effort": "xhigh",
+    "contextWindowTokens": 512000,
+    "attemptsPerTaskPerArm": 1,
+    "freshPairedTrials": 20,
+    "maxConcurrentTrials": 5,
+    "officialTaskTimeouts": true
+  },
+  "baseline": {
+    "passes": 1, "tasks": 10, "inputTokens": 80433213, "cacheTokens": 78827392,
+    "uncachedTokens": 1605821, "outputTokens": 880529, "modelCalls": 690,
+    "toolCalls": 2271, "agentSeconds": 11336.359, "peakInputTokens": 352001
+  },
+  "candidate": {
+    "passes": 2, "tasks": 10, "inputTokens": 57772474, "cacheTokens": 56348672,
+    "uncachedTokens": 1423802, "outputTokens": 795685, "modelCalls": 620,
+    "toolCalls": 1610, "agentSeconds": 10012.379, "peakInputTokens": 243310
+  },
+  "tasks": [
+    {"taskId":"mvcc-lsm-compaction","baseline":0,"candidate":0},
+    {"taskId":"react-lead-form","baseline":0,"candidate":0},
+    {"taskId":"fin-saccr-rwa","baseline":0,"candidate":0},
+    {"taskId":"biped-contact-dynamics","baseline":1,"candidate":1},
+    {"taskId":"sound-change-cascade","baseline":0,"candidate":0},
+    {"taskId":"risk-scorer-replay","baseline":0,"candidate":1},
+    {"taskId":"batched-eval-parity","baseline":0,"candidate":0},
+    {"taskId":"freecad-spring-clip","baseline":0,"candidate":0},
+    {"taskId":"hof-topology-interpenetration","baseline":0,"candidate":0},
+    {"taskId":"kv-live-surgery","baseline":0,"candidate":0}
+  ],
+  "missingVerifier": 0,
+  "terminalExceptions": 0,
+  "observedPassToFail": [],
+  "validation": {"windowsTests":86,"linuxTests":94,"sameInputReplays":18,"macosTested":false},
+  "interpretation": [
+    "This difficult tool-regression suite is not a full Terminal-Bench score.",
+    "The previous frozen baseline also passed risk-scorer in another run; single-run gains do not establish causality.",
+    "Savings are concentrated in sound-change and risk-scorer; the other eight tasks used 19 percent more total Agent time.",
+    "Contract tests verify preservation of exit-state observations; exhaustive trajectory causal audit is not claimed."
+  ]
+}

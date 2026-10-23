@@ -165,8 +165,32 @@ const CODEX_EXEC_RESULT_SCHEMA = Object.freeze({
             description: 'Elapsed wall time spent waiting for output in seconds.'
         },
         exit_code: {
-            type: 'number',
-            description: 'Process exit code when the command finished during this call.'
+            type: ['number', 'null'],
+            description: 'Native process exit code; null means no numeric exit code was reported. Check the native process state and signal when present.'
+        },
+        status: {
+            type: 'string',
+            description: 'Original executor status, when reported; not an inferred normal process exit.'
+        },
+        process_status: {
+            type: 'string',
+            description: 'Original child-process state, when reported.'
+        },
+        running: {
+            type: 'boolean',
+            description: 'Original executor observation of whether the process is running.'
+        },
+        signal: {
+            type: ['string', 'null'],
+            description: 'Native termination signal, when reported; preserved without converting it to an exit code.'
+        },
+        error: {
+            type: ['string', 'null'],
+            description: 'Original executor error message, when reported.'
+        },
+        errorCode: {
+            type: ['string', 'number', 'null'],
+            description: 'Original executor error code, when reported.'
         },
         session_id: {
             type: 'number',

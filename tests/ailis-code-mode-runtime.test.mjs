@@ -49,7 +49,7 @@ test('TaskAgent exec spec preserves the Codex 0.145 freeform description and Lar
     assert.equal(createExecWaitToolSpec().name, 'exec_wait');
 });
 
-test('complete exec Description freezes the Codex 0.145 built-in nested-tool ABI', () => {
+test('complete exec Description freezes the built-in nested-tool ABI with native exit state', () => {
     const spec = createExecToolSpec([
         functionSpec('exec_command'),
         functionSpec('write_stdin'),
@@ -67,7 +67,7 @@ test('complete exec Description freezes the Codex 0.145 built-in nested-tool ABI
     assert.doesNotMatch(spec.description, /callId/);
     assert.equal(
         createHash('sha256').update(spec.description).digest('hex'),
-        '3ccb2454faad73044bb1c3a281c026b6115a532e81bd776a55edbe19b48529d8'
+        '3cc1eeee4c8083714c22b73ab3680560888119008146c9a355e39d739672ee68'
     );
 });
 

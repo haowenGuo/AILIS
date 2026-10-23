@@ -150,6 +150,14 @@ function compactUnifiedExecResult(value, { envelope = null, mapSessionId = null 
     if (typeof details.chunk_id === 'string' && details.chunk_id) compact.chunk_id = details.chunk_id;
     if (Number.isFinite(Number(details.exit_code)) && details.exit_code !== null) {
         compact.exit_code = Number(details.exit_code);
+    } else if (details.exit_code === null) {
+        compact.exit_code = null;
+    }
+    // Keep native observations; an absent exit code must not hide a signal exit.
+    for (const key of ['status', 'process_status', 'running', 'signal', 'error', 'errorCode']) {
+        if (Object.prototype.hasOwnProperty.call(details, key) && details[key] !== undefined) {
+            compact[key] = details[key];
+        }
     }
     if (Number.isFinite(Number(details.original_token_count))) {
         compact.original_token_count = Number(details.original_token_count);
@@ -219,10 +227,14 @@ class AILISCodeModeRuntime {
             throw new Error(normalizeString(envelope.error, `${toolName} failed`));
         }
         if (toolName === 'exec_command' || toolName === 'write_stdin') {
-            const details = result?.details && typeof result.details === 'object' ? result.details : {};
+            const details = result?.details && typeof result.details === 'object'
+                ? result.details
+                : result?.structuredContent && typeof result.structuredContent === 'object'
+                    ? result.structuredContent
+                    : result && typeof result === 'object' ? result : {};
             const hasExecShape = 'output' in details || 'exit_code' in details || 'session_id' in details || 'sessionId' in details;
-            const processFailure = ['error', 'timeout'].includes(details.process_status);
-            if ((envelope?.ok === false || result?.isError === true) && (!hasExecShape || processFailure)) {
+            // Structured process failures still carry output and native exit state.
+            if ((envelope?.ok === false || result?.isError === true) && !hasExecShape) {
                 const reason = normalizeString(
                     details.error || envelope?.error || textFromToolResult(result),
                     `${toolName} failed`
