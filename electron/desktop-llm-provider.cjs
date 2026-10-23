@@ -2336,7 +2336,8 @@ async function compactPortableSemanticMemory(settings = {}, payload = {}) {
         {
             type: 'message',
             role: 'user',
-            content: [{ type: 'input_text', text: PORTABLE_COMPACTION_REQUEST }]
+            content: [{ type: 'input_text', text: [PORTABLE_COMPACTION_REQUEST,
+                normalizeString(payload.userMemorySummaryInstructions)].filter(Boolean).join('\n\n') }]
         }
     ];
     const response = await callDesktopLlmProvider(settings, {

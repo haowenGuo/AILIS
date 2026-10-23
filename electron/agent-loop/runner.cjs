@@ -9522,6 +9522,7 @@ class AILISAgentRunner {
                     parallel_tool_calls: parallelToolCalls,
                     // Use the same request overrides as ordinary decisions.
                     reasoning_effort: resolveExplicitAgentDecisionReasoningEffort(decisionSettings, requestContext),
+                    userMemorySummaryInstructions: this.gateway.hierarchicalUserMemory?.getCompactionInstructions?.() || '',
                     prompt_cache_key: promptCacheKey,
                     compaction_mode: normalizeText(
                         request.contextCompactionMode ||
@@ -9551,6 +9552,11 @@ class AILISAgentRunner {
                     providerCompaction.outputItems.length
                 ) {
                     const referenceContextItem = modelInputContextManager?.referenceContextItem?.() || null;
+                    this.gateway.recordHierarchicalCompaction?.({
+                        summary: providerCompaction.summary || '', sessionId,
+                        responseId: providerCompaction.responseId || '',
+                        mode: providerCompaction.providerMessage?.transport || ''
+                    });
                     modelInputContextManager.replaceCompactedHistory(
                         { replacement_history: providerCompaction.outputItems },
                         referenceContextItem

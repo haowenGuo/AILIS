@@ -5920,7 +5920,9 @@ function truncatePanelText(value, maxChars = 180) {
 function renderMemorySnapshot(snapshot = {}) {
     const status = snapshot.status || {};
     if (elements.memoryStatusText) {
-        const affinity = typeof status.affinityScore === 'number'
+        const affinity = status.affinityScoringDisabled
+            ? `分层用户理解 · ${status.hierarchicalMemory?.capturedCount || 0} 份会话摘要 · ${status.hierarchicalMemory?.mergeCount || 0} 次归并`
+            : typeof status.affinityScore === 'number'
             ? `好感度 ${status.affinityScore}/100`
             : '好感度未初始化';
         const blocks = typeof status.blockCount === 'number' ? `${status.blockCount} 个记忆块` : '';
@@ -5930,6 +5932,8 @@ function renderMemorySnapshot(snapshot = {}) {
             affinity,
             blocks,
             events,
+            status.hierarchicalMemory?.lastError ? '分层整理失败，原摘要已保留' : '',
+            status.hierarchicalMemory?.pending ? '分层摘要待归并' : '',
             status.secretCount ? `隐私条目 ${status.secretCount}` : ''
         ].filter(Boolean).join(' | ');
     }

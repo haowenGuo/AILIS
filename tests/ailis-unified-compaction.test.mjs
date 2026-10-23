@@ -24,11 +24,12 @@ const memory = [
     '</ailis_semantic_task_memory>'
 ].join('\n');
 
-async function fixture(t, { compactionFailure = '', longHistory = true, providerFailure = false,
-    provider = 'openai-compatible' } = {}) {
+async function fixture(t, { compactionFailure = '', longHistory = true, providerFailure = false, decisionReply = null,
+    provider = 'openai-compatible', hierarchicalMemoryEnabled = false } = {}) {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ailis-unified-compaction-'));
     const options = { port: 0, workspaceRoot: root, projectRoot: path.resolve('.'),
-        auditDir: path.join(root, '.audit'), emberHarnessEnabled: false, profileCurationEnabled: false };
+        auditDir: path.join(root, '.audit'), emberHarnessEnabled: false, profileCurationEnabled: false,
+        hierarchicalMemoryEnabled };
     const gateways = [];
     const makeGateway = () => { const instance = new AILISGateway(options); gateways.push(instance); return instance; };
     let gateway = makeGateway();
@@ -214,6 +215,20 @@ test('unified soft budget does not call the compaction model', async t => {
     const transcript = await f.gateway.runtime.readTranscript(result.runId, 2000);
     assert.equal(transcript.items.some(x => x.type === 'agent.context_compaction'), false);
     assert.equal(transcript.items.find(x => x.type === 'agent.context_snapshot').payload.context_package.budgetReport.level, 'soft');
+});
+
+test('trial captures real portable compaction and restores hierarchy without replaying the old raw context', async t => {
+    const f = await fixture(t, { hierarchicalMemoryEnabled: true });
+    const result = await f.gateway.runAgent({ message: currentRequest, sessionId, context: f.context });
+    assert.equal(result.status, 'completed');
+    assert.equal(f.gateway.hierarchicalUserMemory.getStatus().capturedCount, 1);
+    assert.match(JSON.stringify(f.requests[0].body.messages), /双方关系、称呼、边界、共同经历/);
+    await f.restart();
+    assert.equal(f.gateway.hierarchicalUserMemory.getStatus().capturedCount, 1);
+    const resumed = await f.gateway.runAgent({ message: 'Continue with the same user understanding.', sessionId, context: f.context });
+    assert.equal(resumed.status, 'completed');
+    assert.deepEqual(f.requests.map(request => request.compact), [true, false, false]);
+    assert.match(f.gateway.memoryRuntime.compileContext({ contextMode: 'unified' }), /分层摘要/);
 });
 
 test('wire requests append only real host permission changes, not user claims of escalation', async t => {

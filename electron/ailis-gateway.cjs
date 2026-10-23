@@ -40,6 +40,7 @@ const { AILISAgentRunner } = require('./agent-loop/index.cjs');
 const { AILISMemoryRuntime } = require('./ailis-memory-store.cjs');
 const { AILISRawMemoryLedger } = require('./ailis-raw-memory-ledger.cjs');
 const { AILISUserProfileCurator } = require('./ailis-user-profile-curator.cjs');
+const { AILISHierarchicalUserMemory } = require('./ailis-hierarchical-user-memory.cjs');
 const { AILISPreferenceState } = require('./ailis-preference-state.cjs');
 const { AILISTaskResultCapsuleStore } = require('./ailis-task-result-capsules.cjs');
 const { AILISSystemTaskAgentHarness } = require('./ailis-task-agent-harness.cjs');
@@ -1238,6 +1239,12 @@ class AILISGateway extends EventEmitter {
         this.toolSets = new Map();
         this.webRunSessions = new Map();
         this.toolRuntimeSupervisor = null;
+        this.hierarchicalUserMemory = options.hierarchicalUserMemory || (options.hierarchicalMemoryEnabled === true
+            ? new AILISHierarchicalUserMemory({
+                rootDir: path.join(this.auditDir, 'memory', 'hierarchy'),
+                llmClient: options.profileCurationLlm,
+                emitGatewayEvent: (type, payload) => this.emitGatewayEvent(type, payload)
+            }) : null);
         this.profileCurationEnabled = options.profileCurationEnabled !== false;
         this.profileCurationStartDelayMs = Math.max(1000, Number(options.profileCurationStartDelayMs) || DEFAULT_PROFILE_CURATION_START_DELAY_MS);
         this.profileCurationCheckIntervalMs = Math.max(60 * 1000, Number(options.profileCurationCheckIntervalMs) || DEFAULT_PROFILE_CURATION_CHECK_INTERVAL_MS);
@@ -1266,7 +1273,8 @@ class AILISGateway extends EventEmitter {
         this.visionTurnExecutions = new Map();
         this.memoryRuntime = options.memoryRuntime || new AILISMemoryRuntime({
             rootDir: path.join(this.auditDir, 'memory'),
-            workspaceRoot: this.workspaceRoot
+            workspaceRoot: this.workspaceRoot,
+            hierarchicalUserMemory: this.hierarchicalUserMemory
         });
         this.preferenceState = options.preferenceState || new AILISPreferenceState({
             rootDir: path.join(this.auditDir, 'memory')
@@ -1696,6 +1704,11 @@ class AILISGateway extends EventEmitter {
         }
         this.profileCurationRunning = true;
         try {
+            if (this.hierarchicalUserMemory) {
+                const result = await this.hierarchicalUserMemory.consolidate();
+                if (result.status === 'pending') this.scheduleProfileCurationSoon('hierarchy_resume');
+                return result;
+            }
             const [profileState, rawStatus] = await Promise.all([
                 this.getUserProfileCurationState(),
                 Promise.resolve(this.getRawMemoryStatus())
@@ -1738,6 +1751,18 @@ class AILISGateway extends EventEmitter {
             return { ok: false, status: 'profile_curation_error', error: error?.message || String(error) };
         } finally {
             this.profileCurationRunning = false;
+        }
+    }
+
+    recordHierarchicalCompaction(payload = {}) {
+        if (!this.hierarchicalUserMemory) return { ok: true, status: 'disabled' };
+        try {
+            const result = this.hierarchicalUserMemory.appendCompaction(payload);
+            if (result.status === 'captured') this.scheduleProfileCurationSoon('hierarchy_compaction');
+            return result;
+        } catch (error) {
+            this.emitGatewayEvent('memory.hierarchy.error', { error: error.message || String(error) });
+            return { ok: false, status: 'capture_failed', error: error.message || String(error) };
         }
     }
 

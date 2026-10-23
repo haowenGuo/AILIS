@@ -151,3 +151,6 @@ Resources/MotionIntake/candidates/*/raw/
 Resources/MotionIntake/candidates/**/unity_anim/
 Resources/MotionIntake/candidates/**/*.blend
 Resources/MotionIntake/candidates/sachi-vrma-1/
+
+# Personal hierarchical-memory trial build products, never source.
+/release-memory-trial/

@@ -574,6 +574,7 @@ function decodeSecretValue(valueBase64) {
 class AILISMemoryRuntime {
     constructor(options = {}) {
         this.workspaceRoot = path.resolve(options.workspaceRoot || process.cwd());
+        this.hierarchicalUserMemory = options.hierarchicalUserMemory || null;
         this.rootDir = path.resolve(
             options.rootDir ||
                 path.join(options.auditDir || path.join(this.workspaceRoot, '.ailis-state'), 'memory')
@@ -599,6 +600,9 @@ class AILISMemoryRuntime {
             const rawState = readJsonFileSync(this.statePath, null);
             this.backupLegacyStateBeforeMigration(rawState);
             this.state = normalizeState(rawState, this.workspaceRoot);
+            if (this.hierarchicalUserMemory && !rawState) {
+                for (const key of ['user', 'relationship', 'project']) this.state.blocks[key].value = '';
+            }
             this.loaded = true;
             this.lastError = '';
             this.persist('initialize');
@@ -687,9 +691,13 @@ class AILISMemoryRuntime {
             },
             blockCount,
             eventCount,
-            affinityScore,
+            affinityScore: this.hierarchicalUserMemory ? null : affinityScore,
             affinityStage: curated.affinityStage || buildAffinityStage(affinityScore),
             affinitySource: curated.hasAffinityState ? 'curated_capsule' : 'memory_state',
+            ...(this.hierarchicalUserMemory ? {
+                hierarchicalMemory: this.hierarchicalUserMemory.getStatus(),
+                affinityScoringDisabled: true
+            } : {}),
             secretCount: Array.isArray(this.state?.secrets) ? this.state.secrets.length : 0,
             lastError: this.lastError
         };
@@ -737,6 +745,11 @@ class AILISMemoryRuntime {
         if (blockByKey.affinity && curated.hasAffinityState) {
             blockByKey.affinity.value = curated.affinityText;
         }
+        if (this.hierarchicalUserMemory) {
+            blockByKey.user.value = this.hierarchicalUserMemory.buildPromptContext();
+            blockByKey.relationship.value = '';
+            blockByKey.affinity.value = '- 分层记忆试用版不使用数值好感度；关系认识包含在用户理解摘要中。';
+        }
         const normalizedSessionId = normalizeText(sessionId);
         const recentEvents = (this.state?.events || [])
             .filter((event) => !normalizedSessionId || normalizeText(event.sessionId) === normalizedSessionId)
@@ -763,6 +776,18 @@ class AILISMemoryRuntime {
     } = {}) {
         const state = this.state || normalizeState(null, this.workspaceRoot);
         const blocks = state.blocks || {};
+        if (this.hierarchicalUserMemory) {
+            const taskAgentMode = normalizeText(contextMode, 'persona').toLowerCase() === 'task_agent';
+            return {
+                contextMode, personaText: taskAgentMode ? '' : sanitizePromptMemoryBlockText(blocks.persona?.value || ''),
+                userText: this.hierarchicalUserMemory.buildPromptContext(),
+                relationshipText: '', affinityText: '', projectText: '', relevantMemoriesText: '',
+                secretIndexText: this.buildSecretsIndexText(),
+                personaRefs: ['memory:block:persona'], userRefs: ['memory:hierarchy'],
+                relationshipRefs: [], projectRefs: [], relevantMemoryRefs: [], secretRefs: [],
+                relevantMemoryCount: 0, retrievalQueryChars: 0, sessionId
+            };
+        }
         const curated = loadCuratedPromptMemory(this.rootDir);
         const retrievalQuery = buildMemoryRetrievalQuery(message, messageHistory);
         const searchResult = this.searchMemory(retrievalQuery, {
@@ -988,6 +1013,10 @@ class AILISMemoryRuntime {
         clearDirectoryContentsSync(this.reflectionsDir);
         atomicWriteFileSync(this.eventsPath, '');
         this.state = createDefaultState(this.workspaceRoot);
+        if (this.hierarchicalUserMemory) {
+            this.hierarchicalUserMemory.reset();
+            for (const key of ['user', 'relationship', 'project']) this.state.blocks[key].value = '';
+        }
         this.state.secrets = secrets;
         const clearedAt = nowIso();
         atomicWriteJsonSync(path.join(this.rootDir, 'user-profile.json'), {

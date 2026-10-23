@@ -4,6 +4,7 @@ const path = require('path');
 const { pathToFileURL } = require('url');
 const { spawn } = require('child_process');
 const { pickContextBudgetSettings } = require('./ailis-runtime-budget.cjs');
+const HIERARCHICAL_MEMORY_TRIAL = require('../package.json').ailisHierarchicalMemoryTrial === true;
 const {
     app,
     BrowserWindow,
@@ -341,6 +342,11 @@ function getTrayIconPath() {
 }
 
 app.setName('AILIS');
+if (HIERARCHICAL_MEMORY_TRIAL) {
+    app.setName('AILIS Memory Trial');
+    app.setPath('userData', path.join(app.getPath('appData'), 'ailis-memory-trial'));
+    app.setPath('sessionData', app.getPath('userData'));
+}
 const taskInteractionPreview = process.env.AILIS_TASK_INTERACTION_PREVIEW === '1' && !app.isPackaged;
 const taskInteractionPreviewRoot = path.resolve(__dirname, '..', 'tmp', 'task-interaction-profile');
 if (taskInteractionPreview) {
@@ -355,7 +361,7 @@ const worldServiceOnly = process.env.AILIS_WORLD_SERVICE_ONLY === '1';
 if (worldServiceOnly && !taskInteractionPreview && process.env.AILIS_SHARED_USER_DATA_DIR) {
     app.setPath('userData', path.resolve(process.env.AILIS_SHARED_USER_DATA_DIR));
 }
-app.setAppUserModelId('com.ailis.desktop');
+app.setAppUserModelId(HIERARCHICAL_MEMORY_TRIAL ? 'com.ailis.desktop.memorytrial' : 'com.ailis.desktop');
 
 let petWindow = null;
 let quickControls = null;
@@ -874,7 +880,7 @@ function getGatewayWorkspaceRoot() {
 }
 
 function getDefaultAILISStateDir() {
-    if (app.isPackaged) {
+    if (app.isPackaged || HIERARCHICAL_MEMORY_TRIAL) {
         return path.join(app.getPath('userData'), AILIS_STATE_DIRNAME);
     }
     return path.join(getProjectRoot(), AILIS_STATE_DIRNAME);
@@ -3176,6 +3182,7 @@ function ensureAILISGateway() {
     );
     ailisGateway = new AILISGateway({
         app,
+        ...(HIERARCHICAL_MEMORY_TRIAL ? { hierarchicalMemoryEnabled: true, port: 19877 } : {}),
         ...(taskInteractionPreview ? { port: 0 } : {}),
         ...(worldServiceOnly ? {
             toolAllowlist: [], mcpServers: [], disableBuiltinAilisResearchMcp: true,
