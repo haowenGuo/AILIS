@@ -162,7 +162,11 @@ const CODEX_EXEC_RESULT_SCHEMA = Object.freeze({
         },
         wall_time_seconds: {
             type: 'number',
-            description: 'Elapsed wall time spent waiting for output in seconds.'
+            description: 'Elapsed wall time of this tool call in seconds, not the process lifetime.'
+        },
+        process_wall_time_seconds: {
+            type: 'number',
+            description: 'Cumulative process age in seconds, when reported.'
         },
         exit_code: {
             type: ['number', 'null'],
@@ -180,6 +184,14 @@ const CODEX_EXEC_RESULT_SCHEMA = Object.freeze({
             type: 'boolean',
             description: 'Original executor observation of whether the process is running.'
         },
+        output_complete: {
+            type: 'boolean',
+            description: 'Whether process output pipes have fully closed. If false, keep reading session_id even when the process has exited.'
+        },
+        bytes_written: {
+            type: 'number',
+            description: 'Input bytes confirmed by completed writes; a failed write is not counted as successful.'
+        },
         signal: {
             type: ['string', 'null'],
             description: 'Native termination signal, when reported; preserved without converting it to an exit code.'
@@ -194,7 +206,7 @@ const CODEX_EXEC_RESULT_SCHEMA = Object.freeze({
         },
         session_id: {
             type: 'number',
-            description: 'Session identifier to pass to write_stdin when the process is still running.'
+            description: 'Session identifier to pass to write_stdin while the process is running or its output pipes are still open.'
         },
         original_token_count: {
             type: 'number',

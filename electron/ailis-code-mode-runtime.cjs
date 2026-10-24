@@ -154,7 +154,8 @@ function compactUnifiedExecResult(value, { envelope = null, mapSessionId = null 
         compact.exit_code = null;
     }
     // Keep native observations; an absent exit code must not hide a signal exit.
-    for (const key of ['status', 'process_status', 'running', 'signal', 'error', 'errorCode']) {
+    for (const key of ['status', 'process_status', 'running', 'signal', 'error', 'errorCode',
+        'output_complete', 'bytes_written', 'process_wall_time_seconds']) {
         if (Object.prototype.hasOwnProperty.call(details, key) && details[key] !== undefined) {
             compact[key] = details[key];
         }

@@ -49,7 +49,7 @@ test('TaskAgent exec spec preserves the Codex 0.145 freeform description and Lar
     assert.equal(createExecWaitToolSpec().name, 'exec_wait');
 });
 
-test('complete exec Description freezes the built-in nested-tool ABI with native exit state', () => {
+test('complete exec Description freezes the built-in nested-tool ABI with native I/O and exit state', () => {
     const spec = createExecToolSpec([
         functionSpec('exec_command'),
         functionSpec('write_stdin'),
@@ -60,6 +60,9 @@ test('complete exec Description freezes the built-in nested-tool ABI with native
     assert.match(spec.description, /declare const tools: \{ exec_command\(args:/);
     assert.match(spec.description, /session_id\?: number;/);
     assert.match(spec.description, /output: string;/);
+    assert.match(spec.description, /output_complete\?: boolean;/);
+    assert.match(spec.description, /bytes_written\?: number;/);
+    assert.match(spec.description, /process_wall_time_seconds\?: number;/);
     assert.match(spec.description, /declare const tools: \{ write_stdin\(args:/);
     assert.match(spec.description, /declare const tools: \{ apply_patch\(input: string\): Promise<unknown>; \};/);
     assert.match(spec.description, /declare const tools: \{ update_plan\(args:/);
@@ -67,7 +70,7 @@ test('complete exec Description freezes the built-in nested-tool ABI with native
     assert.doesNotMatch(spec.description, /callId/);
     assert.equal(
         createHash('sha256').update(spec.description).digest('hex'),
-        '3cc1eeee4c8083714c22b73ab3680560888119008146c9a355e39d739672ee68'
+        'e3303de4a8ed0d1350c1d12cabaa2c4ea806a4605c836952de0f4d0dd8371b81'
     );
 });
 

@@ -7,6 +7,7 @@ const crypto = require('crypto');
 const zlib = require('zlib');
 const { execFile, spawn } = require('child_process');
 const { randomUUID } = require('crypto');
+const { performance } = require('perf_hooks');
 const { createAILISPlatformAdapter, getDefaultPlatformAdapter } = require('./ailis-platform-adapter.cjs');
 const { extractPdfDocument } = require('./ailis-pdf-document-engine.cjs');
 const { buildTextPreview } = require('./ailis-output-store.cjs');
@@ -2145,7 +2146,9 @@ function formatExecContent(details = {}) {
                 'modelHint=Visible stdout/stderr is a preview with omitted bytes. Use tool_search query "exec output outputId search tail read" to load output_search/output_tail/output_read, then inspect only the needed slice. Do not rerun the command just to recover omitted output.'
             );
         } else {
-            lines.push('modelHint=Visible stdout/stderr below is complete for this command.');
+            lines.push(details.output_complete === false
+                ? 'modelHint=Output pipes are still open; continue reading session_id with write_stdin.'
+                : 'modelHint=Visible stdout/stderr below is complete for this command.');
         }
         if (outputStore.structuredPreview) {
             lines.push(
@@ -2260,6 +2263,13 @@ async function finalizeExecOutputCapture(outputCapture, extra = {}) {
 }
 
 async function summarizeRecordOutputStore(record = {}, extra = {}) {
+    if (record.outputFinalization) {
+        await record.outputFinalization;
+        return record.outputStore;
+    }
+    if (record.closed === false) {
+        return summarizeExecOutputCapture(record.outputCapture);
+    }
     if (record.outputStore) {
         return record.outputStore;
     }
@@ -2444,6 +2454,9 @@ class ComputerRuntime {
             status: 'running',
             exitCode: null,
             signal: null,
+            closed: false,
+            stdinError: null,
+            outputFinalization: null,
             stdout: '',
             stderr: '',
             child,
@@ -2462,6 +2475,10 @@ class ComputerRuntime {
             record.outputCapture?.append('stderr', chunk);
             record.updatedAt = Date.now();
         });
+        // stdin emits its own errors, independently of ChildProcess 'error'.
+        child.stdin?.on('error', (error) => {
+            record.stdinError = error;
+        });
         child.on('exit', (code, signal) => {
             if (record.status !== 'timeout') record.status = 'exited';
             record.exitCode = code;
@@ -2471,15 +2488,6 @@ class ComputerRuntime {
                 clearTimeout(record.timeout);
                 record.timeout = null;
             }
-            finalizeExecOutputCapture(record.outputCapture, {
-                status: code === 0 ? 'completed' : 'error',
-                exitCode: code,
-                signal
-            }).then((summary) => {
-                if (summary) {
-                    record.outputStore = summary;
-                }
-            }).catch(() => {});
         });
         child.on('error', (error) => {
             record.status = 'error';
@@ -2489,9 +2497,18 @@ class ComputerRuntime {
             record.stderr = appendBounded(record.stderr, `\n${error.message || error}`);
             record.outputCapture?.append('stderr', `\n${error.message || error}`);
             record.updatedAt = Date.now();
-            finalizeExecOutputCapture(record.outputCapture, {
-                status: 'error',
-                error: error?.message || String(error)
+        });
+        // 'exit' can precede the last stdout/stderr data (inherited pipes).
+        // Finalize only after 'close', when all child stdio has drained.
+        child.on('close', () => {
+            record.closed = true;
+            record.updatedAt = Date.now();
+            record.outputFinalization = finalizeExecOutputCapture(record.outputCapture, {
+                status: ['error', 'timeout'].includes(record.status)
+                    ? record.status : record.exitCode === 0 ? 'completed' : 'error',
+                exitCode: record.exitCode,
+                signal: record.signal,
+                ...(record.error ? { error: record.error, errorCode: record.errorCode } : {})
             }).then((summary) => {
                 if (summary) {
                     record.outputStore = summary;
@@ -2504,25 +2521,19 @@ class ComputerRuntime {
             if (record.status === 'running') {
                 record.status = 'timeout';
                 child.kill('SIGTERM');
-                finalizeExecOutputCapture(record.outputCapture, {
-                    status: 'timeout'
-                }).then((summary) => {
-                    if (summary) {
-                        record.outputStore = summary;
-                    }
-                }).catch(() => {});
             }
         }, timeoutMs);
         this.sessions.set(id, record);
         return record;
     }
 
-    async waitForProcessSnapshot(record, yieldTimeMs = DEFAULT_EXEC_YIELD_TIME_MS) {
+    async waitForProcessSnapshot(record, yieldTimeMs = DEFAULT_EXEC_YIELD_TIME_MS, options = {}) {
+        const startedAt = options.startedAt ?? performance.now();
         const waitMs = normalizeNumber(yieldTimeMs, DEFAULT_EXEC_YIELD_TIME_MS, MIN_EXEC_YIELD_TIME_MS, MAX_EXEC_YIELD_TIME_MS);
         const deadline = Date.now() + waitMs;
         let lastLength = Buffer.byteLength(collectSessionText(record), 'utf8');
         while (Date.now() < deadline) {
-            if (record.status !== 'running') {
+            if (record.status !== 'running' && record.closed !== false) {
                 break;
             }
             await new Promise((resolve) => setTimeout(resolve, 25));
@@ -2531,10 +2542,13 @@ class ComputerRuntime {
                 lastLength = nextLength;
             }
         }
-        return this.buildUnifiedExecDetails(record, { yieldTimeMs: waitMs });
+        return this.buildUnifiedExecDetails(record, {
+            yieldTimeMs: waitMs, wallTimeSeconds: Math.max(0, (performance.now() - startedAt) / 1000)
+        });
     }
 
-    async waitForPtySnapshot(record, yieldTimeMs = DEFAULT_EXEC_YIELD_TIME_MS) {
+    async waitForPtySnapshot(record, yieldTimeMs = DEFAULT_EXEC_YIELD_TIME_MS, options = {}) {
+        const startedAt = options.startedAt ?? performance.now();
         const waitMs = normalizeNumber(yieldTimeMs, DEFAULT_EXEC_YIELD_TIME_MS, MIN_EXEC_YIELD_TIME_MS, MAX_EXEC_YIELD_TIME_MS);
         const deadline = Date.now() + waitMs;
         while (Date.now() < deadline) {
@@ -2543,7 +2557,9 @@ class ComputerRuntime {
             }
             await new Promise((resolve) => setTimeout(resolve, 25));
         }
-        return this.buildUnifiedPtyDetails(record, { yieldTimeMs: waitMs });
+        return this.buildUnifiedPtyDetails(record, {
+            yieldTimeMs: waitMs, wallTimeSeconds: Math.max(0, (performance.now() - startedAt) / 1000)
+        });
     }
 
     buildUnifiedExecDetails(record, options = {}) {
@@ -2552,7 +2568,10 @@ class ComputerRuntime {
         const originalTokenCount = estimateTokenCount(outputText);
         const output = truncateByApproxTokens(outputText, maxOutputTokens);
         const running = record.status === 'running';
-        const outputStore = record.outputStore || summarizeExecOutputCapture(record.outputCapture);
+        const outputComplete = record.closed !== false && !running;
+        const outputStore = record.closed === false
+            ? summarizeExecOutputCapture(record.outputCapture)
+            : record.outputStore || summarizeExecOutputCapture(record.outputCapture);
         return {
             status: ['error', 'timeout'].includes(record.status) ? 'error' : 'completed',
             error: record.error || (record.status === 'timeout' ? 'Process timed out' : undefined),
@@ -2561,15 +2580,17 @@ class ComputerRuntime {
             command: record.command,
             workdir: record.workdir,
             pid: record.pid,
-            session_id: running ? record.id : undefined,
-            sessionId: running ? record.id : undefined,
+            session_id: !outputComplete ? record.id : undefined,
+            sessionId: !outputComplete ? record.id : undefined,
             exit_code: running ? null : record.exitCode,
             exitCode: running ? null : record.exitCode,
             signal: record.signal,
             process_status: record.status,
             running,
+            output_complete: outputComplete,
             chunk_id: randomUUID(),
-            wall_time_seconds: Math.max(0, (Date.now() - record.startedAt) / 1000),
+            wall_time_seconds: options.wallTimeSeconds ?? 0,
+            process_wall_time_seconds: Math.max(0, (Date.now() - record.startedAt) / 1000),
             original_token_count: originalTokenCount,
             max_output_tokens: maxOutputTokens,
             output,
@@ -2602,7 +2623,8 @@ class ComputerRuntime {
             process_status: record.status,
             running,
             chunk_id: randomUUID(),
-            wall_time_seconds: Math.max(0, (Date.now() - record.startedAt) / 1000),
+            wall_time_seconds: options.wallTimeSeconds ?? 0,
+            process_wall_time_seconds: Math.max(0, (Date.now() - record.startedAt) / 1000),
             original_token_count: originalTokenCount,
             max_output_tokens: maxOutputTokens,
             output,
@@ -2819,7 +2841,9 @@ class ComputerRuntime {
     }
 
     publicSession(record, includeOutput = true) {
-        const outputStore = record.outputStore || summarizeExecOutputCapture(record.outputCapture);
+        const outputStore = record.closed === false
+            ? summarizeExecOutputCapture(record.outputCapture)
+            : record.outputStore || summarizeExecOutputCapture(record.outputCapture);
         return {
             id: record.id,
             command: record.command,
@@ -2828,6 +2852,7 @@ class ComputerRuntime {
             status: record.status,
             exitCode: record.exitCode,
             signal: record.signal,
+            output_complete: record.closed !== false && record.status !== 'running',
             startedAt: new Date(record.startedAt).toISOString(),
             updatedAt: new Date(record.updatedAt).toISOString(),
             ...(outputStore ? { outputId: outputStore.outputId, outputStore } : {}),
@@ -2999,6 +3024,7 @@ class ComputerRuntime {
     }
 
     async execCommand(args, context, runtime) {
+        const startedAt = performance.now();
         const command = normalizeString(args.cmd || args.command);
         if (!command) {
             return createErrorResult('needs_config', 'exec_command 需要 cmd 或 command 参数。');
@@ -3040,7 +3066,7 @@ class ComputerRuntime {
             if (!record) {
                 return createErrorResult('session_not_found', 'exec_command PTY 会话创建后无法读取。', { action: 'exec_command' });
             }
-            const details = await this.waitForPtySnapshot(record, yieldTimeMs);
+            const details = await this.waitForPtySnapshot(record, yieldTimeMs, { startedAt });
             details.max_output_tokens = maxOutputTokens;
             details.output = truncateByApproxTokens(details.output, maxOutputTokens);
             details.stdout = details.output;
@@ -3099,7 +3125,7 @@ class ComputerRuntime {
             };
         }
         const record = this.createSessionRecord({ command, workdir, child, timeoutMs, outputCapture, runId: context.runId || '' });
-        const details = await this.waitForProcessSnapshot(record, yieldTimeMs);
+        const details = await this.waitForProcessSnapshot(record, yieldTimeMs, { startedAt });
         details.max_output_tokens = maxOutputTokens;
         details.output = truncateByApproxTokens(collectSessionText(record), maxOutputTokens);
         details.stdout = truncateByApproxTokens(record.stdout || '', maxOutputTokens);
@@ -3111,6 +3137,8 @@ class ComputerRuntime {
             annotateExecDetails(details, { command, args: commandArgs, platformAdapter }),
             outputStore
         );
+        annotatedDetails.session = this.publicSession(record);
+        annotatedDetails.wall_time_seconds = Math.max(0, (performance.now() - startedAt) / 1000);
         return { ...createTextResult(formatExecContent(annotatedDetails), annotatedDetails),
             ...(annotatedDetails.status === 'error' ? { isError: true } : {}) };
     }
@@ -3200,7 +3228,29 @@ class ComputerRuntime {
         });
     }
 
-    processWrite(args, context) {
+    async writeProcessInput(record, input, submit = false) {
+        let bytesWritten = 0;
+        try {
+            if (record.status !== 'running') {
+                throw new Error(`Process session is not running: ${record.status}`);
+            }
+            if (!record.child.stdin) throw new Error('Process stdin is unavailable');
+            for (const chunk of submit ? [input, os.EOL] : [input]) {
+                if (!chunk) continue;
+                await new Promise((resolve, reject) => {
+                    if (record.stdinError) return reject(record.stdinError);
+                    record.child.stdin.write(chunk, (error) => error ? reject(error) : resolve());
+                });
+                bytesWritten += Buffer.byteLength(chunk);
+            }
+            return { bytesWritten };
+        } catch (error) {
+            return { bytesWritten, error };
+        }
+    }
+
+    async processWrite(args, context) {
+        const startedAt = performance.now();
         const id = normalizeString(args.sessionId || args.id);
         const input = typeof args.input === 'string' ? args.input : '';
         const record = this.sessions.get(id);
@@ -3211,22 +3261,21 @@ class ComputerRuntime {
         if (approval) {
             return approval;
         }
-        if (record.status !== 'running') {
-            return createErrorResult('error', `进程会话不是 running：${record.status}`, { sessionId: id, status: record.status });
-        }
-        record.child.stdin?.write(input);
-        if (args.submit === true || args.enter === true) {
-            record.child.stdin?.write(os.EOL);
-        }
-        return createTextResult('input written', {
-            status: 'completed',
+        const written = await this.writeProcessInput(record, input, args.submit === true || args.enter === true);
+        const details = {
+            ...this.buildUnifiedExecDetails(record, { wallTimeSeconds: Math.max(0, (performance.now() - startedAt) / 1000) }),
             action: 'process_write',
             sessionId: id,
-            bytes: Buffer.byteLength(input)
-        });
+            bytes: written.bytesWritten,
+            bytes_written: written.bytesWritten,
+            ...(written.error ? { status: 'error', error: written.error.message, errorCode: written.error.code } : {})
+        };
+        return { ...createTextResult(written.error?.message || 'input written', details),
+            ...(written.error ? { isError: true } : {}) };
     }
 
     async writeStdin(args, context) {
+        const startedAt = performance.now();
         const id = normalizeString(args.session_id || args.sessionId || args.id);
         const input = typeof args.chars === 'string'
             ? args.chars
@@ -3250,24 +3299,27 @@ class ComputerRuntime {
             }
         }
         if (processRecord) {
-            if (input && processRecord.status !== 'running') {
-                return createErrorResult('error', `进程会话不是 running：${processRecord.status}`, { sessionId: id, status: processRecord.status });
-            }
-            if (input) {
-                processRecord.child.stdin?.write(input);
-            }
-            if (input && (args.submit === true || args.enter === true)) {
-                processRecord.child.stdin?.write(os.EOL);
-            }
-            const details = await this.waitForProcessSnapshot(processRecord, yieldTimeMs);
+            const written = input
+                ? await this.writeProcessInput(processRecord, input, args.submit === true || args.enter === true)
+                : { bytesWritten: 0 };
+            const details = written.error
+                ? this.buildUnifiedExecDetails(processRecord)
+                : await this.waitForProcessSnapshot(processRecord, yieldTimeMs, { startedAt });
             details.action = 'write_stdin';
             details.max_output_tokens = maxOutputTokens;
             details.output = truncateByApproxTokens(collectSessionText(processRecord), maxOutputTokens);
             details.stdout = truncateByApproxTokens(processRecord.stdout || '', maxOutputTokens);
             details.stderr = truncateByApproxTokens(processRecord.stderr || '', maxOutputTokens);
-            details.bytes_written = Buffer.byteLength(input);
+            details.bytes_written = written.bytesWritten;
+            if (written.error) {
+                details.status = 'error';
+                details.error = written.error.message;
+                details.errorCode = written.error.code;
+            }
             const outputStore = await summarizeRecordOutputStore(processRecord);
             const withOutputStore = attachOutputStoreDetails(details, outputStore);
+            withOutputStore.session = this.publicSession(processRecord);
+            withOutputStore.wall_time_seconds = Math.max(0, (performance.now() - startedAt) / 1000);
             return { ...createTextResult(formatExecContent(withOutputStore), withOutputStore),
                 ...(withOutputStore.status === 'error' ? { isError: true } : {}) };
         }
@@ -3280,7 +3332,7 @@ class ComputerRuntime {
         if (input && (args.submit === true || args.enter === true)) {
             ptyRecord.terminal.write(os.EOL);
         }
-        const details = await this.waitForPtySnapshot(ptyRecord, yieldTimeMs);
+        const details = await this.waitForPtySnapshot(ptyRecord, yieldTimeMs, { startedAt });
         details.action = 'write_stdin';
         details.max_output_tokens = maxOutputTokens;
         details.output = truncateByApproxTokens(collectPtyText(ptyRecord), maxOutputTokens);
