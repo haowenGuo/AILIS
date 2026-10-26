@@ -1,15 +1,17 @@
 {
   "schema": "ailis.tool-baseline-pointer.v1",
-  "baselineId": "taskagent-tool-exit-state-20261024",
-  "codeGitRef": "taskagent-tool-exit-state-20261024",
-  "acceptedAt": "2026-10-24",
-  "decision": "user_approved_after_fixed_ten_paired_review",
-  "scorecard": "docs/evaluation/taskagent-tool-exit-state-20261024.json",
-  "frozenRuntimeArchive": "longrun/jobs/tb4-tool-exit-state-ab10-20261024/variants/candidate/bundle/runtime.tar.gz",
-  "runtimeArchiveSha256": "103900e03ab99f745731dc25377976ed37ad0bc59144357423d0d3217cdbd509",
-  "previousCodeCommit": "31e73e4ca6942be93afa4921042434f11459246c",
-  "previousRuntimeArchiveSha256": "7f55360810306269182447e9c76487e453ec853fc533b6e7b2bdbcbc8c77f401",
+  "baselineId": "taskagent-tools-pre-exit-state-31e73e4",
+  "codeGitRef": "31e73e4ca6942be93afa4921042434f11459246c",
+  "acceptedAt": "2026-10-26",
+  "decision": "explicit_user_rollback_of_two_tool_changes",
+  "frozenRuntimeArchive": "longrun/jobs/tb4-recovery512k-full-20261021/bundle/runtime.tar.gz",
+  "runtimeArchiveSha256": "7f55360810306269182447e9c76487e453ec853fc533b6e7b2bdbcbc8c77f401",
+  "withdrawnCommits": [
+    "cc7e1444bcd44711ee51d056b1ff51913433bc88",
+    "239f20132d4ea059457fc84357a3f02ab9f415ec"
+  ],
+  "historicalScorecard": "docs/evaluation/taskagent-tool-exit-state-20261024.json",
   "suiteId": "tb4-tool-regression-10-v1",
   "selectionSha256": "0508a702cbf7d14fc81aac1e67312e7976b3f5248e04663e77f38b062effec24",
-  "note": "The fixed suite's original selection baseline remains historical evidence. Future candidates start from this accepted code/runtime; do not overwrite prior runs."
+  "note": "Restore the three tool runtime files and matching tests to 31e73e4. Preserve context, 512K window, compaction, multimodal input, model transport recovery and all evaluation evidence. Historical scores are not a new post-rollback measurement."
 }

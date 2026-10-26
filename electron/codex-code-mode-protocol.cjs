@@ -162,51 +162,15 @@ const CODEX_EXEC_RESULT_SCHEMA = Object.freeze({
         },
         wall_time_seconds: {
             type: 'number',
-            description: 'Elapsed wall time of this tool call in seconds, not the process lifetime.'
-        },
-        process_wall_time_seconds: {
-            type: 'number',
-            description: 'Cumulative process age in seconds, when reported.'
+            description: 'Elapsed wall time spent waiting for output in seconds.'
         },
         exit_code: {
-            type: ['number', 'null'],
-            description: 'Native process exit code; null means no numeric exit code was reported. Check the native process state and signal when present.'
-        },
-        status: {
-            type: 'string',
-            description: 'Original executor status, when reported; not an inferred normal process exit.'
-        },
-        process_status: {
-            type: 'string',
-            description: 'Original child-process state, when reported.'
-        },
-        running: {
-            type: 'boolean',
-            description: 'Original executor observation of whether the process is running.'
-        },
-        output_complete: {
-            type: 'boolean',
-            description: 'Whether process output pipes have fully closed. If false, keep reading session_id even when the process has exited.'
-        },
-        bytes_written: {
             type: 'number',
-            description: 'Input bytes confirmed by completed writes; a failed write is not counted as successful.'
-        },
-        signal: {
-            type: ['string', 'null'],
-            description: 'Native termination signal, when reported; preserved without converting it to an exit code.'
-        },
-        error: {
-            type: ['string', 'null'],
-            description: 'Original executor error message, when reported.'
-        },
-        errorCode: {
-            type: ['string', 'number', 'null'],
-            description: 'Original executor error code, when reported.'
+            description: 'Process exit code when the command finished during this call.'
         },
         session_id: {
             type: 'number',
-            description: 'Session identifier to pass to write_stdin while the process is running or its output pipes are still open.'
+            description: 'Session identifier to pass to write_stdin when the process is still running.'
         },
         original_token_count: {
             type: 'number',
