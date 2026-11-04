@@ -117,6 +117,9 @@ locked hash. There is no unverified `runtime_dir` override.
 
 ## Verification
 
+See [the dated verification report](VERIFICATION.md) for the completed checks
+and remaining production/Hosted prerequisites.
+
 ```sh
 uv sync --frozen
 uv run --frozen pytest -q

@@ -3,7 +3,13 @@ name = "ailis-harbor-acp"
 version = "0.1.0"
 description = "ACP transport for the frozen AILIS Terminal-Bench runtime"
 requires-python = ">=3.12,<3.13"
-dependencies = ["agent-client-protocol==0.12.1"]
+dependencies = [
+  "agent-client-protocol==0.12.1",
+  "ailis-tb4-runtime @ https://github.com/haowenGuo/AILIS/releases/download/harbor-acp-runtime-20261029/ailis_tb4_runtime-0.20261029.0-py3-none-any.whl ; sys_platform == 'linux' and platform_machine == 'x86_64'",
+]
+
+[project.scripts]
+ailis-harbor-acp = "ailis_harbor_acp.__main__:cli"
 
 [build-system]
 requires = ["hatchling==1.27.0"]
@@ -11,6 +17,9 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["ailis_harbor_acp"]
+
+[tool.hatch.metadata]
+allow-direct-references = true
 
 [dependency-groups]
 dev = ["pytest==8.4.2", "pytest-asyncio==1.2.0"]

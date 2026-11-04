@@ -1,5 +1,5 @@
 version = 1
-revision = 2
+revision = 3
 requires-python = "==3.12.*"
 
 [[package]]
@@ -20,6 +20,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "agent-client-protocol" },
+    { name = "ailis-tb4-runtime", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
 ]
 
 [package.dev-dependencies]
@@ -29,12 +30,23 @@ dev = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "agent-client-protocol", specifier = "==0.12.1" }]
+requires-dist = [
+    { name = "agent-client-protocol", specifier = "==0.12.1" },
+    { name = "ailis-tb4-runtime", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", url = "https://github.com/haowenGuo/AILIS/releases/download/harbor-acp-runtime-20261029/ailis_tb4_runtime-0.20261029.0-py3-none-any.whl" },
+]
 
 [package.metadata.requires-dev]
 dev = [
     { name = "pytest", specifier = "==8.4.2" },
     { name = "pytest-asyncio", specifier = "==1.2.0" },
+]
+
+[[package]]
+name = "ailis-tb4-runtime"
+version = "0.20261029.0"
+source = { url = "https://github.com/haowenGuo/AILIS/releases/download/harbor-acp-runtime-20261029/ailis_tb4_runtime-0.20261029.0-py3-none-any.whl" }
+wheels = [
+    { url = "https://github.com/haowenGuo/AILIS/releases/download/harbor-acp-runtime-20261029/ailis_tb4_runtime-0.20261029.0-py3-none-any.whl", hash = "sha256:b4791a0e25593789bf2410af8153c6a8f36fc1c299aa87b6bd901364080c956f" },
 ]
 
 [[package]]

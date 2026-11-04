@@ -24,10 +24,14 @@ async def main():
         await agent.shutdown()
 
 
-if __name__ == "__main__":
+def cli():
     if sys.argv[1:] == ["--prepare"]:
         print(prepare_runtime())
     elif sys.argv[1:]:
         raise SystemExit("Usage: python -m ailis_harbor_acp [--prepare]")
     else:
         asyncio.run(main())
+
+
+if __name__ == "__main__":
+    cli()

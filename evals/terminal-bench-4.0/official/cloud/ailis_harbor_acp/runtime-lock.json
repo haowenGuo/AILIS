@@ -4,6 +4,7 @@
   "source_baseline_commit": "31e73e4ca6942be93afa4921042434f11459246c",
   "model": "gpt-6-luna",
   "reasoning_effort": "xhigh",
-  "url": null,
-  "publication_status": "local_only_not_uploaded"
+  "wheel_url": "https://github.com/haowenGuo/AILIS/releases/download/harbor-acp-runtime-20261029/ailis_tb4_runtime-0.20261029.0-py3-none-any.whl",
+  "wheel_sha256": "b4791a0e25593789bf2410af8153c6a8f36fc1c299aa87b6bd901364080c956f",
+  "publication_status": "candidate_prerelease"
 }

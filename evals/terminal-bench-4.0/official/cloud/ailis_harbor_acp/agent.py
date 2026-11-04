@@ -60,13 +60,11 @@ async def stop_process(process):
         return
     # The worker and Codex exec-server share a process group in the task sandbox.
     # Cancel must also clean tools, even if the Node leader has already exited.
-    if os.name == "posix":
+    if process.returncode is None:
         with contextlib.suppress(ProcessLookupError):
-            os.killpg(process.pid, signal.SIGTERM)
-    elif process.returncode is None:
-        process.terminate()
+            process.terminate()
     try:
-        await asyncio.wait_for(process.wait(), timeout=3)
+        await asyncio.wait_for(process.wait(), timeout=5)
     except asyncio.TimeoutError:
         if os.name != "posix":
             process.kill()

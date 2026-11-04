@@ -51,6 +51,18 @@ gateway.on('event', event => {
 });
 let active = false;
 let turn = 0;
+let abort = null;
+let stopping = false;
+async function shutdown() {
+    if (stopping) return;
+    stopping = true;
+    abort?.abort();
+    const forceExit = setTimeout(() => process.exit(1), 4000);
+    try { await gateway.stop(); }
+    finally { clearTimeout(forceExit); process.exit(0); }
+}
+process.once('SIGTERM', shutdown);
+process.once('SIGINT', shutdown);
 const input = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
 input.on('line', async line => {
     if (active) { send({ type: 'error', error: 'A prompt is already running' }); return; }
@@ -59,10 +71,12 @@ input.on('line', async line => {
         const request = JSON.parse(line);
         if (typeof request.message !== 'string') throw new Error('Text prompt required');
         const started = Date.now();
+        abort = new AbortController();
         const result = await gateway.runAgent({
             sessionId: process.env.AILIS_SESSION_ID, message: request.message,
             agentRole: 'unified_agent', planner: 'llm', agentLoop: 'llm', llmSettings: settings,
-            context, onTextDelta: () => {}, modelTransportRecoveryDeadlineMs: started + 28800000
+            context, onTextDelta: () => {}, abortSignal: abort.signal,
+            modelTransportRecoveryDeadlineMs: started + 28800000
         });
         turn += 1;
         fs.writeFileSync(path.join(out, `turn-${turn}.json`), JSON.stringify({
@@ -73,7 +87,7 @@ input.on('line', async line => {
         // Never forward provider exceptions (which may contain request credentials).
         console.error('AILIS worker turn failed:', error?.code || error?.name || 'Error');
         send({ type: 'error', error: 'AILIS worker turn failed; inspect private runtime diagnostics' });
-    } finally { active = false; }
+    } finally { active = false; abort = null; }
 });
-input.on('close', async () => { await gateway.stop(); process.exit(0); });
+input.on('close', shutdown);
 send({ type: 'ready' });
