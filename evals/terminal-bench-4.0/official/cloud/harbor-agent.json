@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "id": "ailis",
+  "version": "0.1.0",
+  "protocol": "acp",
+  "runtime": {
+    "kind": "python-uv",
+    "python": "3.12",
+    "project": ".",
+    "lockfile": "uv.lock",
+    "entrypoint": ["python", "-m", "ailis_harbor_acp"]
+  }
+}

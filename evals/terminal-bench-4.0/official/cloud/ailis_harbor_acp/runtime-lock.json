@@ -1,0 +1,9 @@
+{
+  "profile": "512k-codex-exec-20261029",
+  "sha256": "9e224d1a3f33dc8fea97358ebbd6069b4a078502b673dfb7667bd11cc60a5729",
+  "source_baseline_commit": "31e73e4ca6942be93afa4921042434f11459246c",
+  "model": "gpt-6-luna",
+  "reasoning_effort": "xhigh",
+  "url": null,
+  "publication_status": "local_only_not_uploaded"
+}
