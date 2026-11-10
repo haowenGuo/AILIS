@@ -73,6 +73,10 @@ mac:
     - zip
 dmg:
   artifactName: ${productName}-${version}-mac-${arch}.${ext}
+  # Private Python/ASR plus Electron exceeds dmgbuild's automatic volume estimate.
+  # Shrinking remains enabled; this is staging capacity, not download size.
+  size: "6g"
+  shrink: true
 linux:
   maintainer: 郭浩文 <13488293+haowenGuo@user.noreply.gitee.com>
   icon: build/icon.png

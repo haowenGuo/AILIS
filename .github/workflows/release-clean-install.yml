@@ -165,6 +165,9 @@ jobs:
         run: node scripts/prepare-bundled-asr.mjs
       - name: Stage automatic ASR wake-word model
         run: node scripts/prepare-wake-model.mjs
+      - name: Record macOS build disk capacity
+        if: runner.os == 'macOS'
+        run: df -h . "${{ runner.temp }}"
       - name: Build native versioned release artifacts (no publishing)
         run: node scripts/build-native-release.mjs
       - name: Verify actual packaged code and relocated offline recognition
