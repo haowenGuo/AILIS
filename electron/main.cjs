@@ -4814,7 +4814,7 @@ function createChatWindow() {
         resizable: true,
         show: false,
         skipTaskbar: false,
-        alwaysOnTop: true,
+        alwaysOnTop: false,
         title: 'AILIS Chat'
     });
 

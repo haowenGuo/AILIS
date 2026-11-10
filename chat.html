@@ -17,7 +17,6 @@
                 <img class="chat-brand-avatar" src="./Resources/Emotes/ailis-small/wave.png" alt="" width="36" height="42">
                 <div id="chat-header-text">
                     <div id="chat-title">AILIS</div>
-                    <div id="chat-subtitle">陪你聊天，也陪你做事</div>
                 </div>
             </div>
             <div id="chat-header-actions">
@@ -38,6 +37,20 @@
                             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18"></path><path d="M8 6V4h8v2"></path><path d="M19 6l-1 14H6L5 6"></path><path d="M10 11v5"></path><path d="M14 11v5"></path></svg>
                             <span>清空会话</span>
                         </button>
+                        <fieldset id="chat-appearance">
+                            <legend>背景颜色</legend>
+                            <div class="chat-color-presets">
+                                <button type="button" class="chat-color-swatch" data-chat-color="#edf5fc" style="--swatch: #edf5fc" aria-label="淡蓝" title="淡蓝" aria-pressed="true"></button>
+                                <button type="button" class="chat-color-swatch" data-chat-color="#fff2f5" style="--swatch: #fff2f5" aria-label="浅粉" title="浅粉" aria-pressed="false"></button>
+                                <button type="button" class="chat-color-swatch" data-chat-color="#eef7f2" style="--swatch: #eef7f2" aria-label="薄荷" title="薄荷" aria-pressed="false"></button>
+                                <button type="button" class="chat-color-swatch" data-chat-color="#ffffff" style="--swatch: #ffffff" aria-label="白色" title="白色" aria-pressed="false"></button>
+                            </div>
+                            <label class="chat-custom-color" for="chat-background-color">
+                                <span>自定义</span>
+                                <input id="chat-background-color" type="color" value="#edf5fc">
+                            </label>
+                            <span id="chat-color-notice" role="status" hidden></span>
+                        </fieldset>
                     </div>
                 </details>
                 <button id="settings-btn" class="icon-btn" type="button" aria-label="打开控制面板" title="打开控制面板">
@@ -58,6 +71,11 @@
             </div>
         </header>
 
+        <div id="chat-body">
+        <aside id="companion-scene" aria-label="AILIS">
+            <img src="./src/assets/chat/ailis-room.png" alt="AILIS 坐在窗边的书桌前" draggable="false" fetchpriority="high">
+        </aside>
+        <div id="chat-pane">
         <div id="chat-search-bar" hidden role="search">
             <input id="chat-search-input" type="search" placeholder="查找当前会话" aria-label="查找当前会话" autocomplete="off">
             <span id="chat-search-count" role="status"></span>
@@ -70,8 +88,6 @@
             <div id="chat-empty-state">
                 <img src="./Resources/Emotes/ailis/wave.png" alt="" width="100" height="118">
                 <h1>今天，想聊点什么？</h1>
-                <p>聊聊日常，或把一个任务交给我。</p>
-                <span>也可以拖入文件，一起看看。</span>
             </div>
             <button id="scroll-to-latest" type="button" hidden>
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14m-5-5 5 5 5-5"></path></svg>
@@ -81,7 +97,7 @@
 
         <section id="composer-dock" aria-label="发送消息">
             <div id="composer">
-                <textarea id="message-input" rows="1" aria-label="消息内容" aria-describedby="composer-hint" placeholder="说点什么，让 AILIS 陪你聊聊"></textarea>
+                <textarea id="message-input" rows="1" aria-label="消息内容" aria-describedby="composer-hint" placeholder="和 AILIS 聊聊…"></textarea>
                 <div id="vision-preview" hidden>
                     <img id="vision-preview-img" alt="截图预览">
                     <div>
@@ -126,9 +142,11 @@
             </div>
             <div id="composer-meta">
                 <div id="chat-status" role="status">已连接桌宠</div>
-                <span id="composer-hint">Enter 发送 · Shift+Enter 换行</span>
+                <span id="composer-hint" class="sr-only">Enter 发送 · Shift+Enter 换行</span>
             </div>
         </section>
+        </div>
+        </div>
     </div>
 
     <script type="module" src="./src/chat-panel-app.js"></script>

@@ -14,6 +14,7 @@ import {
 } from './realtime-voice/asr-latency-presets.js';
 import { applyI18n, setUiLanguage, t } from './i18n.js';
 import { installChatSearch } from './chat-search.js';
+import { installChatAppearance } from './chat-appearance.js';
 import { TaskInteractionView } from './task-interaction-view.js';
 
 function getMessageClassName(role) {
@@ -116,6 +117,7 @@ window.addEventListener('DOMContentLoaded', () => {
     let activeContinuousRecording = false;
     const speechRecognition = createDesktopSpeechRecognitionService();
     applyI18n(document, { skipSelectors: ['#message-list', '#file-preview'] });
+    installChatAppearance({ translate: t });
     if (taskApi) {
         document.body.classList.add('task-interaction-enabled');
     }
@@ -1237,7 +1239,7 @@ window.addEventListener('DOMContentLoaded', () => {
         if (!moreActionsEl.contains(event.target)) moreActionsEl.open = false;
     });
     moreActionsEl.addEventListener('click', (event) => {
-        if (event.target.closest('button')) moreActionsEl.open = false;
+        if (event.target.closest('button') && !event.target.closest('#chat-appearance')) moreActionsEl.open = false;
     });
     document.addEventListener('keydown', (event) => {
         if (event.key !== 'Escape') return;

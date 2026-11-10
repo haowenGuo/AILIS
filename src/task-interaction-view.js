@@ -32,6 +32,14 @@ const duration = run => {
     return seconds < 60 ? `${seconds} 秒` : `${Math.floor(seconds / 60)} 分 ${seconds % 60} 秒`;
 };
 
+const hasDiffCount = item => Number.isFinite(item.added) && Number.isFinite(item.removed);
+const diffCount = (added, removed) => {
+    const count = node('small', 'task-diff-count');
+    count.setAttribute('aria-label', `新增 ${added} 行，删除 ${removed} 行`);
+    count.append(node('span', 'task-added', `+${added}`), node('span', 'task-removed', `−${removed}`));
+    return count;
+};
+
 // A reader of host records. Never invokes a model, shell, or patch from a rendered link.
 export class TaskInteractionView {
     constructor({ api, list, dock, onState, notice, restoreDraft }) {
@@ -164,17 +172,13 @@ export class TaskInteractionView {
             if (!final && ['stopped', 'failed', 'unknown'].includes(run.status)) message.append(node('small', 'task-receipt', '未完成的输出'));
             fragment.append(message);
         }
-        for (const item of run.items.filter(item => item.kind === 'file')) {
-            const card = node('div', 'task-file-card');
-            const title = node('div', 'task-file-title');
-            title.append(node('strong', '', `${{ add: '已新增', edit: '已编辑', delete: '已删除', observed: '已写入' }[item.action]} ${item.name}`));
-            if (Number.isFinite(item.added) && Number.isFinite(item.removed)) {
-                const count = node('small', 'task-diff-count');
-                count.append(node('span', 'task-added', `+${item.added}`), node('span', 'task-removed', `−${item.removed}`)); title.append(count);
-            }
-            card.append(title, button('查看改动', () => this.openFile(run, item)));
-            if (item.artifactRef) card.append(...this.resources.actions(run, item));
-            fragment.append(card);
+        const files = run.items.filter(item => item.kind === 'file');
+        if (files.length) {
+            const group = entry.element.querySelector('.task-file-changes');
+            fragment.append(this.fileChanges(run, files, {
+                open: group?.open === true,
+                expanded: group?.querySelector('.task-file-changes-toggle')?.getAttribute('aria-expanded') === 'true'
+            }));
         }
         for (const item of run.items.filter(item => item.kind === 'artifact')) {
             const card = node('div', 'task-file-card task-artifact-card'); card.dataset.itemId = item.id;
@@ -204,6 +208,56 @@ export class TaskInteractionView {
         // No floating ellipsis under an unfinished, otherwise empty answer.
         if (!active) fragment.append(actions);
         entry.element.replaceChildren(fragment); entry.fingerprint = fingerprint;
+    }
+    fileChanges(run, files, { open = false, expanded = false } = {}) {
+        const visibleLimit = 5;
+        const group = node('details', 'task-file-card task-file-changes');
+        group.open = open;
+        group.setAttribute('aria-label', '文件改动');
+        const header = node('summary', 'task-file-changes-header');
+        const actions = new Set(files.map(item => item.action).filter(Boolean));
+        const actionLabel = actions.size === 1
+            ? ({ add: '新增', edit: '编辑', delete: '删除', observed: '修改' }[[...actions][0]] || '修改')
+            : '修改';
+        header.append(node('strong', '', `已${actionLabel} ${files.length} 个文件`));
+        const summary = node('div', 'task-file-changes-summary');
+        const counted = files.filter(hasDiffCount);
+        if (counted.length) {
+            summary.append(diffCount(counted.reduce((sum, item) => sum + item.added, 0),
+                counted.reduce((sum, item) => sum + item.removed, 0)));
+        }
+        if (counted.length !== files.length) summary.append(node('small', 'task-file-change-unavailable',
+            counted.length ? `已统计 ${counted.length}/${files.length}` : '行数未统计'));
+        header.append(summary);
+        const list = node('ul', 'task-file-change-list');
+        list.id = `task-file-list-${crypto.randomUUID()}`;
+        for (const item of files) {
+            const row = node('li', 'task-file-change-row'); row.dataset.itemId = item.id;
+            const title = node('div', 'task-file-change-name');
+            title.append(node('span', 'task-file-change-action',
+                { add: '新增', edit: '编辑', delete: '删除', observed: '写入' }[item.action] || '改动'));
+            const name = node('strong', '', item.name); name.title = item.path || item.name; title.append(name);
+            const count = hasDiffCount(item) ? diffCount(item.added, item.removed) :
+                node('small', 'task-file-change-unavailable', '行数未统计');
+            const actions = node('div', 'task-file-change-actions');
+            const view = button('查看改动', () => this.openFile(run, item));
+            view.setAttribute('aria-label', `查看 ${item.name} 的改动`); actions.append(view);
+            if (item.artifactRef) actions.append(...this.resources.actions(run, item));
+            row.append(title, count, actions); list.append(row);
+        }
+        group.append(header, list);
+        if (files.length > visibleLimit) {
+            const toggle = button('', () => setExpanded(!expanded));
+            toggle.classList.add('task-file-changes-toggle');
+            toggle.setAttribute('aria-controls', list.id);
+            const setExpanded = value => {
+                expanded = value; toggle.setAttribute('aria-expanded', String(expanded));
+                toggle.textContent = expanded ? '收起' : `展开剩余 ${files.length - visibleLimit} 个文件`;
+                [...list.children].forEach((row, index) => { row.hidden = !expanded && index >= visibleLimit; });
+            };
+            setExpanded(expanded); group.append(toggle);
+        }
+        return group;
     }
     async addImage(parent, run, ref, label) {
         if (!ref) return;

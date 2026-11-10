@@ -93,9 +93,14 @@ test('extraction is create-new, preserves hashes, strips developer scripts and n
     extract(target, { report, includeDist: false });
     const pkg = JSON.parse(fs.readFileSync(path.join(target, 'package.json'), 'utf8'));
     assert.equal(pkg.scripts, undefined); assert.equal(pkg.devDependencies, undefined);
+    const sourcePackage = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
+    assert.deepEqual(pkg, Object.fromEntries(['name', 'version', 'type', 'main', 'license', 'dependencies']
+        .filter(key => sourcePackage[key] !== undefined).map(key => [key, sourcePackage[key]])));
     assert.ok(!fs.existsSync(path.join(target, 'tests')));
     for (const file of report.files) {
         assert.ok(!fs.lstatSync(path.join(target, file)).isSymbolicLink());
+        // Extraction intentionally writes a runtime-only package, checked above.
+        if (file === 'package.json') continue;
         assert.deepEqual(fs.readFileSync(path.join(target, file)), fs.readFileSync(path.join(ROOT, file)));
     }
     assert.throws(() => extract(target, { report, includeDist: false }), /Refusing to overwrite/);

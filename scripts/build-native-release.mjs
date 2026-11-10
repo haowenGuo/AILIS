@@ -25,6 +25,7 @@ async function build() {
     const identity={version,commit:git('rev-parse','HEAD'),platform:process.platform,arch:process.arch,files:[]};
     const required=['electron/main.cjs','electron/ailis-gateway.cjs','electron/agent-loop/runner.cjs',
         'electron/ailis-runtime-budget.cjs',
+        'electron/ailis-hierarchical-user-memory.cjs','electron/ailis-memory-store.cjs',
         'electron/ailis-code-mode-runtime.cjs','electron/ailis-code-mode-worker.cjs','electron/codex-code-mode-protocol.cjs',
         'electron/ailis-platform-adapter.cjs','electron/ailis-local-patch.cjs','electron/local-asr-manager.cjs',
         'electron/voice-runtime-bootstrap.cjs','electron/desktop_asr_worker.py',
