@@ -5,6 +5,9 @@ const { pathToFileURL } = require('url');
 const { spawn } = require('child_process');
 const { pickContextBudgetSettings } = require('./ailis-runtime-budget.cjs');
 const HIERARCHICAL_MEMORY_TRIAL = require('../package.json').ailisHierarchicalMemoryTrial === true;
+// Hierarchical memory is a formal runtime capability in v1.5.0. The trial
+// flag remains only for backwards-compatible identity handling of old builds.
+const HIERARCHICAL_MEMORY_ENABLED = true;
 const {
     app,
     BrowserWindow,
@@ -3182,7 +3185,7 @@ function ensureAILISGateway() {
     );
     ailisGateway = new AILISGateway({
         app,
-        ...(HIERARCHICAL_MEMORY_TRIAL ? { hierarchicalMemoryEnabled: true, port: 19877 } : {}),
+        ...(HIERARCHICAL_MEMORY_ENABLED ? { hierarchicalMemoryEnabled: true } : {}),
         ...(taskInteractionPreview ? { port: 0 } : {}),
         ...(worldServiceOnly ? {
             toolAllowlist: [], mcpServers: [], disableBuiltinAilisResearchMcp: true,

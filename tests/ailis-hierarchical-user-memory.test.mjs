@@ -231,12 +231,12 @@ test('trial gateway scheduler bypasses old structured curator', async t => {
     assert.equal(gateway.memoryRuntime.state.blocks.user.value, '');
 });
 
-test('trial build has a distinct application and uninstall identity', () => {
-    const config = require('../electron-builder.memory-trial.cjs');
-    assert.equal(config.appId, 'com.ailis.desktop.memorytrial');
-    assert.equal(config.productName, 'AILIS Memory Trial');
-    assert.equal(config.nsis.deleteAppDataOnUninstall, false);
+test('formal build uses the normal AILIS identity while hierarchy stays enabled', () => {
+    const builder = fs.readFileSync(new URL('../electron-builder.yml', import.meta.url), 'utf8');
+    assert.match(builder, /appId:\s*com\.ailis\.desktop/);
+    assert.match(builder, /productName:\s*AILIS\s*$/m);
     const main = fs.readFileSync(new URL('../electron/main.cjs', import.meta.url), 'utf8');
-    assert.match(main, /app\.getPath\('appData'\), 'ailis-memory-trial'/);
-    assert.match(main, /hierarchicalMemoryEnabled: true, port: 19877/);
+    assert.match(main, /HIERARCHICAL_MEMORY_ENABLED\s*=\s*true/);
+    assert.match(main, /hierarchicalMemoryEnabled:\s*true/);
+    assert.doesNotMatch(main, /HIERARCHICAL_MEMORY_TRIAL\s*\?\s*\{\s*hierarchicalMemoryEnabled/);
 });

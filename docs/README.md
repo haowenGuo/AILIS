@@ -14,6 +14,7 @@ AILIS 是一个支持聊天、工具执行、持久上下文和角色交互的�
 - [系统组成](design/system.md)：进程、模块与通信。
 - [Agent 运行模型](design/agent-runtime.md)：请求、Session、循环、工具和交付。
 - [数据与上下文](design/data.md)：执行记录、长期背景、预算和工件。
+- [层级用户记忆](hierarchical-user-memory.md)：压缩摘要、用户理解层级、归并阈值与数据边界。
 - [工具系统](design/tool-system.md)：定义、注册、发现、执行与内容契约。
 - [语音、视觉和角色](design/media.md)：输入、播放、渲染与资源。
 
