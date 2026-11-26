@@ -2,6 +2,7 @@ const fsp = require('fs/promises');
 const fsSync = require('fs');
 const path = require('path');
 const { randomUUID } = require('crypto');
+const { SerialWriteQueue, requireSaved } = require('./ailis-async-writes.cjs');
 const { AILISMcpManager } = require('./ailis-mcp-session.cjs');
 const { AILISToolDoctor } = require('./ailis-tool-doctor.cjs');
 const { AILISCapabilityManager } = require('./ailis-capability-manager.cjs');
@@ -565,6 +566,7 @@ class AILISRuntime {
         this.agentExecutor = typeof options.agentExecutor === 'function' ? options.agentExecutor : null;
         this.platformAdapter = createAILISPlatformAdapter(options.platformAdapter || options.platform || {});
         this.runs = new Map();
+        this.transcriptWrites = new SerialWriteQueue();
         this.planState = new Map();
         this.permissionGrants = new Map();
         this.input_queue = new InputQueue();
@@ -879,25 +881,30 @@ class AILISRuntime {
             ...(item.status ? { status: item.status } : {}),
             payload: redactObject(item.payload || {})
         };
-        await fsp.mkdir(path.dirname(run.transcriptPath), { recursive: true });
-        await fsp.appendFile(run.transcriptPath, `${JSON.stringify(transcriptItem)}\n`, 'utf8');
-        try {
-            this.rawMemoryLedger?.recordRuntimeItem?.(transcriptItem);
-        } catch (error) {
-            this.emitGatewayEvent('raw_memory.error', {
+        return this.transcriptWrites.run(run.transcriptPath, async () => {
+            await fsp.mkdir(path.dirname(run.transcriptPath), { recursive: true });
+            await fsp.appendFile(run.transcriptPath, `${JSON.stringify(transcriptItem)}\n`, 'utf8');
+            try {
+                const ledger = this.rawMemoryLedger;
+                const write = ledger?.recordRuntimeItemAsync || ledger?.recordRuntimeItem;
+                requireSaved(await write?.call(ledger, transcriptItem), 'Raw memory transcript');
+            } catch (error) {
+                this.emitGatewayEvent('raw_memory.error', {
+                    runId: id,
+                    sessionId: transcriptItem.sessionId,
+                    error: error?.message || String(error)
+                });
+                throw error;
+            }
+            this.emitGatewayEvent('runtime.item', {
                 runId: id,
                 sessionId: transcriptItem.sessionId,
-                error: error?.message || String(error)
+                type: transcriptItem.type,
+                seq: transcriptItem.seq,
+                itemId: transcriptItem.id
             });
-        }
-        this.emitGatewayEvent('runtime.item', {
-            runId: id,
-            sessionId: transcriptItem.sessionId,
-            type: transcriptItem.type,
-            seq: transcriptItem.seq,
-            itemId: transcriptItem.id
+            return transcriptItem;
         });
-        return transcriptItem;
     }
 
     async appendContextCompaction(runId, {

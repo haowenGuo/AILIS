@@ -359,6 +359,20 @@ class ContextManager {
         return this.items.map(cloneJson);
     }
 
+    get itemCount() {
+        return this.items.length;
+    }
+
+    // Internal predicates inspect owned items without snapshotting the history.
+    // Callers that need an item receive a detached copy of the match.
+    findLastItem(test) {
+        return cloneJson(this.items.findLast(test));
+    }
+
+    anyItem(test) {
+        return this.items.some(test);
+    }
+
     replace(items = [], referenceContextItem = this.reference_context_item) {
         this.items = [];
         this.setTokenInfo(null);
@@ -416,7 +430,7 @@ class ContextManager {
 
     clone() {
         return new ContextManager({
-            items: this.rawItems(),
+            items: this.items,
             history_version: this.history_version,
             token_info: this.token_info,
             token_usage_anchor: this.token_usage_anchor,
@@ -822,29 +836,31 @@ class ContextManager {
     stripImagesWhenUnsupported() {
         this.items = this.items.map((item) => {
             if (item?.type === 'message') {
-                const content = (Array.isArray(item.content) ? item.content : [])
+                const parts = Array.isArray(item.content) ? item.content : [];
+                if (parts.length && parts.every((part) => part && part.type !== 'input_image')) return item;
+                const content = parts
                     .map((part) => part?.type === 'input_image'
                         ? ContentItem.inputText(IMAGE_CONTENT_OMITTED_PLACEHOLDER)
-                        : cloneJson(part))
+                        : part)
                     .filter(Boolean);
                 return {
-                    ...cloneJson(item),
+                    ...item,
                     content: content.length ? content : [ContentItem.inputText(IMAGE_CONTENT_OMITTED_PLACEHOLDER)].filter(Boolean)
                 };
             }
             if (item?.type === 'function_call_output' || item?.type === 'custom_tool_call_output') {
                 return {
-                    ...cloneJson(item),
+                    ...item,
                     output: stripImagesFromFunctionOutput(item.output)
                 };
             }
             if (item?.type === 'image_generation_call') {
                 return {
-                    ...cloneJson(item),
+                    ...item,
                     result: ''
                 };
             }
-            return cloneJson(item);
+            return item;
         });
     }
 

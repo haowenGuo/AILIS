@@ -1,6 +1,8 @@
 const fs = require('fs');
+const fsp = require('fs/promises');
 const path = require('path');
 const { randomUUID } = require('crypto');
+const { SerialWriteQueue, atomicWriteText } = require('./ailis-async-writes.cjs');
 const {
     MEMORY_RETRIEVAL_STRATEGY_ID,
     SESSION_REPEAT_PENALTY,
@@ -9,6 +11,7 @@ const {
 } = require('./ailis-memory-lexical-retriever.cjs');
 
 const MEMORY_STORE_VERSION = 2;
+const memoryWrites = new SerialWriteQueue();
 const DEFAULT_AFFINITY_SCORE = 50;
 const MAX_BLOCK_CHARS = 2200;
 const MAX_CONTEXT_CHARS = 20000;
@@ -630,9 +633,21 @@ class AILISMemoryRuntime {
     }
 
     persist(reason = 'update') {
-        if (!this.state) {
-            return;
+        if (!this.state) return;
+        this.refreshDerivedBlocks();
+        atomicWriteJsonSync(this.statePath, this.state);
+        this.writeCapsules(reason);
+    }
+
+    async persistTurnAsync() {
+        this.refreshDerivedBlocks();
+        await atomicWriteText(this.statePath, `${JSON.stringify(this.state, null, 2)}\n`);
+        for (const [filePath, content] of this.capsuleFiles()) {
+            await atomicWriteText(filePath, content);
         }
+    }
+
+    refreshDerivedBlocks() {
         this.state.updatedAt = nowIso();
         this.state.blocks.affinity = {
             ...this.state.blocks.affinity,
@@ -644,11 +659,9 @@ class AILISMemoryRuntime {
             value: this.buildSecretsIndexText(),
             updatedAt: this.state.updatedAt
         };
-        atomicWriteJsonSync(this.statePath, this.state);
-        this.writeCapsules(reason);
     }
 
-    writeCapsules(_reason = 'update') {
+    *capsuleFiles() {
         for (const [key, block] of Object.entries(this.state.blocks || {})) {
             const filePath = path.join(this.capsulesDir, `${safeFileName(key)}.md`);
             const content = [
@@ -660,8 +673,12 @@ class AILISMemoryRuntime {
                 '',
                 block.value || ''
             ].join('\n');
-            atomicWriteFileSync(filePath, `${content.trim()}\n`);
+            yield [filePath, `${content.trim()}\n`];
         }
+    }
+
+    writeCapsules() {
+        for (const [filePath, content] of this.capsuleFiles()) atomicWriteFileSync(filePath, content);
     }
 
     getStatus() {
@@ -841,23 +858,20 @@ class AILISMemoryRuntime {
         return rankMemoryEvents(this.state?.events || [], query, { limit });
     }
 
-    recordTurn({
+    buildTurnEvent({
         sessionId = 'main',
         userMessage = '',
         assistantMessage = '',
         source = 'agent',
         result = null,
-        messageHistory = [],
         attachments = []
     } = {}) {
         const userText = redactSecretLikeText(userMessage);
         const assistantText = redactSecretLikeText(assistantMessage || result?.displayText || result?.finalAnswer || '');
-        if (!userText && !assistantText) {
-            return { ok: false, status: 'empty_turn' };
-        }
+        if (!userText && !assistantText) return null;
 
         const ts = nowIso();
-        const event = {
+        return {
             id: randomUUID(),
             ts,
             sessionId: normalizeText(sessionId, 'main'),
@@ -883,20 +897,49 @@ class AILISMemoryRuntime {
             resultStatus: normalizeText(result?.status),
             resultIntent: normalizeText(result?.intent)
         };
+    }
 
+    addTurnToState(event) {
         this.state.events.push(event);
         this.state.events = this.state.events.slice(-MAX_STATE_EVENTS);
         this.state.stats.turnCount += 1;
+    }
+
+    recordTurn(turn = {}) {
+        const event = this.buildTurnEvent(turn);
+        if (!event) return { ok: false, status: 'empty_turn' };
+        this.addTurnToState(event);
         appendJsonlSync(this.eventsPath, event);
-        this.writeDailyNote(event, messageHistory);
+        this.writeDailyNote(event, turn.messageHistory);
         this.persist('record_turn');
         return { ok: true, event };
     }
 
-    writeDailyNote(event, messageHistory = []) {
-        const day = dateKeyFromIso(event.ts);
-        const filePath = path.join(this.dailyDir, `${day}.md`);
-        const existing = fs.existsSync(filePath) ? fs.readFileSync(filePath, 'utf8') : `# ${day}\n\n`;
+    withWriteLock(operation) {
+        return memoryWrites.run(this.rootDir, operation);
+    }
+
+    recordTurnAsync(turn = {}) {
+        return this.withWriteLock(async () => {
+            const event = this.buildTurnEvent(turn);
+            if (!event) return { ok: false, status: 'empty_turn' };
+            await fsp.mkdir(this.rootDir, { recursive: true });
+            await fsp.appendFile(this.eventsPath, `${JSON.stringify(event)}\n`, 'utf8');
+            const day = dateKeyFromIso(event.ts);
+            const filePath = path.join(this.dailyDir, `${day}.md`);
+            let existing;
+            try { existing = await fsp.readFile(filePath, 'utf8'); } catch (error) {
+                if (error.code !== 'ENOENT') throw error;
+                existing = `# ${day}\n\n`;
+            }
+            await atomicWriteText(filePath, this.formatDailyNote(event, turn.messageHistory, existing));
+            this.addTurnToState(event);
+            await this.persistTurnAsync();
+            return { ok: true, event };
+        });
+    }
+
+    formatDailyNote(event, messageHistory, existing) {
         const historyHint = Array.isArray(messageHistory) && messageHistory.length
             ? `\n- 上下文消息数：${messageHistory.length}`
             : '';
@@ -910,7 +953,14 @@ class AILISMemoryRuntime {
             '',
             event.summary
         ].filter(Boolean).join('\n');
-        atomicWriteFileSync(filePath, `${existing.trim()}\n\n${entry.trim()}\n`);
+        return `${existing.trim()}\n\n${entry.trim()}\n`;
+    }
+
+    writeDailyNote(event, messageHistory) {
+        const day = dateKeyFromIso(event.ts);
+        const filePath = path.join(this.dailyDir, `${day}.md`);
+        const existing = fs.existsSync(filePath) ? fs.readFileSync(filePath, 'utf8') : `# ${day}\n\n`;
+        atomicWriteFileSync(filePath, this.formatDailyNote(event, messageHistory, existing));
     }
 
     updateBlock(key, value) {

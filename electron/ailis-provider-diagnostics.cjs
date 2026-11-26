@@ -72,26 +72,30 @@ function createProviderRequestTrace(url, options, timeoutMs) {
     const base = { requestId: randomUUID(), endpointKind,
         method: options?.method === 'GET' ? 'GET' : 'POST', timeoutMs };
     let phase = 'awaiting_headers', httpStatus = null, serverRequestId = '', receivedBytes = 0;
+    let pending = Promise.resolve();
     const details = extra => sanitizeProviderDetails({ ...base, phase, httpStatus, serverRequestId,
         elapsedMs: Math.round(performance.now() - started), receivedBytes, ...extra }, secrets);
-    const emit = async (event, extra = {}) => {
+    const emit = (event, extra = {}) => {
         const value = details({ event, ...extra });
-        try { if (typeof onEvent === 'function') await onEvent(value); } catch {
-            // An audit/UI failure must not change the request outcome or cause a retry.
+        if (typeof onEvent === 'function') {
+            // These few stage records stay in order without delaying the response stream.
+            // Audit/UI failures must not turn a valid model response into a retry.
+            pending = pending.then(() => onEvent(value)).catch(() => {});
         }
         return value;
     };
     return {
         emit,
+        flush() { return pending; },
         setPhase(value) { phase = value; },
         addBytes(value) { receivedBytes += value; },
-        async headers(response) {
+        headers(response) {
             httpStatus = response.status;
             serverRequestId = safeText(response.headers?.get?.('x-request-id') || '', secrets, 128);
             phase = 'response_headers';
-            await emit('response_headers');
+            emit('response_headers');
         },
-        async fail(error, code, abortSource = '') {
+        fail(error, code, abortSource = '') {
             const causes = [];
             const seen = new Set();
             let current = error;

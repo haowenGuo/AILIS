@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const { createHash, randomUUID } = require('crypto');
+const { requireSaved } = require('../ailis-async-writes.cjs');
 const {
     AILIS_CLOUD_PROVIDER,
     callDesktopLlmProvider,
@@ -6781,14 +6782,20 @@ function parseResponseItemJson(item = {}) {
     }
 }
 
-function latestRuntimeEnvironmentFromContext(contextManager) {
+function findLastContextItem(contextManager, test) {
+    return typeof contextManager?.findLastItem === 'function'
+        ? contextManager.findLastItem(test)
+        : (contextManager?.rawItems?.() || []).findLast(test);
+}
+
+function findLastContextPayload(contextManager, test) {
     let latest = null;
-    for (const item of contextManager?.rawItems?.() || []) {
+    findLastContextItem(contextManager, (item) => {
         const payload = parseResponseItemJson(item);
-        if (payload?.runtime_environment && typeof payload.runtime_environment === 'object') {
-            latest = payload.runtime_environment;
-        }
-    }
+        if (!test(payload)) return false;
+        latest = payload;
+        return true;
+    });
     return latest;
 }
 
@@ -6801,7 +6808,8 @@ function appendRuntimeEnvironmentUpdate(contextManager, runtimeEnvironment = nul
     ) {
         return { appended: false, mode: 'unavailable' };
     }
-    const previous = latestRuntimeEnvironmentFromContext(contextManager);
+    const previous = findLastContextPayload(contextManager, (value) =>
+        value?.runtime_environment && typeof value.runtime_environment === 'object')?.runtime_environment;
     if (previous && canonicalJsonText(previous) === canonicalJsonText(runtimeEnvironment)) {
         return { appended: false, mode: 'unchanged' };
     }
@@ -7015,7 +7023,7 @@ function buildLlmAgentDirectToolPrompt({
     if (unifiedMode) {
         // New snapshots are appended, never spliced into the cached prefix.
         const memoryItem = buildMemoryDeveloperMessage(memoryContext);
-        const latestMemoryItem = [...activeContextManager.rawItems()].reverse().find((item) =>
+        const latestMemoryItem = findLastContextItem(activeContextManager, (item) =>
             item?.role === 'developer' && item?.content?.some((part) =>
                 String(part.text || '').startsWith('<memory_context>'))
         );
@@ -7023,17 +7031,17 @@ function buildLlmAgentDirectToolPrompt({
             activeContextManager.recordItems([memoryItem]);
         }
         const attachedFiles = getAttachedFilesPromptObject(fileAttachments);
-        const latestFiles = [...activeContextManager.rawItems()].reverse()
-            .map(parseResponseItemJson).find((value) => Array.isArray(value?.attached_files))?.attached_files;
-        if (attachedFiles.length && canonicalJsonText(attachedFiles) !== canonicalJsonText(latestFiles)) {
-            activeContextManager.recordItems([responseMessage('developer', JSON.stringify({
-                type: 'context', attached_files: attachedFiles
-            }))]);
+        if (attachedFiles.length) {
+            const latestFiles = findLastContextPayload(activeContextManager, (value) => Array.isArray(value?.attached_files))?.attached_files;
+            if (canonicalJsonText(attachedFiles) !== canonicalJsonText(latestFiles)) {
+                activeContextManager.recordItems([responseMessage('developer', JSON.stringify({
+                    type: 'context', attached_files: attachedFiles
+                }))]);
+            }
         }
         if (ephemeralDeveloperMessage) {
             const packet = { type: 'unified_turn_context', turn_id: turnId, text: ephemeralDeveloperMessage };
-            const latest = [...activeContextManager.rawItems()].reverse().map(parseResponseItemJson)
-                .find((value) => value?.type === 'unified_turn_context');
+            const latest = findLastContextPayload(activeContextManager, (value) => value?.type === 'unified_turn_context');
             if (canonicalJsonText(packet) !== canonicalJsonText(latest)) {
                 activeContextManager.recordItems([responseMessage('developer', JSON.stringify(packet))]);
             }
@@ -7049,12 +7057,14 @@ function buildLlmAgentDirectToolPrompt({
         current_request: normalizeText(message),
         delegated_task: normalizeText(message)
     } : null;
-    const contextHasImageInput = activeModelImageAttachments.length > 0 ||
-        (activeContextManager.rawItems?.() || []).some((item) => (
+    const hasImageInput = (item) => (
             item?.type === 'message' &&
             Array.isArray(item.content) &&
             item.content.some((part) => part?.type === 'input_image')
-        ) || responseItemOutputImages(item, { materializeLocalImages: false }).length > 0);
+        ) || responseItemOutputImages(item, { materializeLocalImages: false }).length > 0;
+    const contextHasImageInput = activeModelImageAttachments.length > 0 ||
+        (typeof activeContextManager.anyItem === 'function' ? activeContextManager.anyItem(hasImageInput) :
+            (activeContextManager.rawItems?.() || []).some(hasImageInput));
     const contextPackageOptions = {
         model,
         provider,
@@ -7130,9 +7140,7 @@ function buildLlmAgentDirectToolPrompt({
         toolOutputChars,
         stats: {
             input_items: requestPayload.input.length,
-            context_history_items: typeof activeContextManager.rawItems === 'function'
-                ? activeContextManager.rawItems().length
-                : requestPayload.input.length,
+            context_history_items: activeContextManager.itemCount ?? activeContextManager.rawItems?.().length ?? requestPayload.input.length,
             function_call_outputs: requestPayload.input.filter((item) => item?.type === 'function_call_output').length,
             tool_search_outputs: requestPayload.input.filter((item) => item?.type === 'tool_search_output').length,
             task_session_state_projection: null,
@@ -7150,9 +7158,8 @@ function appendUserInputToContextManager(contextManager, text = '') {
     if (!contextManager || !normalized || typeof contextManager.recordItems !== 'function') {
         return false;
     }
-    const latestConversationItem = [...(contextManager.rawItems?.() || [])]
-        .reverse()
-        .find((item) => item?.type === 'message' && ['user', 'assistant'].includes(item?.role));
+    const latestConversationItem = findLastContextItem(contextManager, (item) =>
+        item?.type === 'message' && ['user', 'assistant'].includes(item?.role));
     const latestUserText = latestConversationItem?.role === 'user'
         ? latestConversationItem.content
         ?.map((part) => normalizeText(part?.text || part?.content))
@@ -8240,13 +8247,14 @@ class AILISAgentRunner {
         }
     }
 
-    recordMemoryTurn({ request = {}, result = {}, message = '', sessionId = 'main', source = 'agent' } = {}) {
+    async recordMemoryTurn({ request = {}, result = {}, message = '', sessionId = 'main', source = 'agent' } = {}) {
+        const writeTurn = this.memoryRuntime?.recordTurnAsync || this.memoryRuntime?.recordTurn;
         if (
             request?.context?.unifiedGatewayOwnsFinalization === true ||
             request.classifyOnly === true ||
             request?.context?.personaDraft === true ||
             request?.context?.personaRenderOnly === true ||
-            !this.memoryRuntime?.recordTurn
+            !writeTurn
         ) {
             return;
         }
@@ -8264,7 +8272,7 @@ class AILISAgentRunner {
                 : Array.isArray(request.attachments)
                     ? request.attachments
                     : [];
-            const recorded = this.memoryRuntime.recordTurn({
+            const recorded = requireSaved(await writeTurn.call(this.memoryRuntime, {
                 sessionId,
                 userMessage: message,
                 assistantMessage: result.displayText || result.finalAnswer || result.error || '',
@@ -8272,9 +8280,11 @@ class AILISAgentRunner {
                 result,
                 messageHistory: history,
                 attachments
-            });
+            }), 'AILIS memory turn');
             if (recorded?.ok) {
-                this.gateway.rawMemoryLedger?.recordChatTurn?.({
+                const ledger = this.gateway.rawMemoryLedger;
+                const writeRawTurn = ledger?.recordChatTurnAsync || ledger?.recordChatTurn;
+                requireSaved(await writeRawTurn?.call(ledger, {
                     sessionId,
                     source,
                     requestPayload: {
@@ -8288,7 +8298,7 @@ class AILISAgentRunner {
                         content: result.displayText || result.finalAnswer || result.error || ''
                     },
                     durationMs: Number(result.durationMs) || null
-                });
+                }), 'Raw memory turn');
                 this.gateway.scheduleProfileCurationSoon?.('agent_turn_recorded');
                 this.gateway.emitGatewayEvent?.('agent.memory.recorded', {
                     sessionId,
@@ -8303,6 +8313,7 @@ class AILISAgentRunner {
                 sessionId,
                 error: error?.message || String(error)
             });
+            throw error;
         }
     }
 
@@ -11882,7 +11893,7 @@ class AILISAgentRunner {
                     context: requestContext,
                     resultPreview: summarize(result.displayText)
                 });
-                this.recordMemoryTurn({
+                await this.recordMemoryTurn({
                     request,
                     result,
                     message,
@@ -12051,7 +12062,7 @@ class AILISAgentRunner {
                     context: requestContext,
                     resultPreview: summarize(result.displayText)
                 });
-                this.recordMemoryTurn({
+                await this.recordMemoryTurn({
                     request,
                     result,
                     message,
@@ -12146,7 +12157,7 @@ class AILISAgentRunner {
                     context: llmRequestContext,
                     resultPreview: summarize(llmResult.displayText)
                 });
-                this.recordMemoryTurn({
+                await this.recordMemoryTurn({
                     request,
                     result: llmResult,
                     message,
@@ -12331,7 +12342,7 @@ class AILISAgentRunner {
                 context: requestContext,
                 resultPreview: summarize(displayText)
             });
-            this.recordMemoryTurn({
+            await this.recordMemoryTurn({
                 request,
                 result,
                 message,

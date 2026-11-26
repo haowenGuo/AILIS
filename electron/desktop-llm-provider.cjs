@@ -1050,26 +1050,26 @@ async function fetchJsonWithTimeout(url, requestOptions, timeoutMs, externalSign
         externalSignal.addEventListener('abort', onExternalAbort, { once: true });
     }
     try {
-        await trace.emit('request_started');
+        trace.emit('request_started');
         const response = await fetch(url, {
             ...requestOptions,
             signal: controller.signal
         });
-        await trace.headers(response);
+        trace.headers(response);
         trace.setPhase('response_body');
-        await trace.emit('body_read_started');
+        trace.emit('body_read_started');
         if (!response.ok) {
             const errorText = await readErrorBody(response);
             return {
                 ok: false,
                 status: response.status,
                 error: errorText || `模型接口请求失败，状态码：${response.status}`,
-                details: await trace.fail(null, 'http_error')
+                details: trace.fail(null, 'http_error')
             };
         }
         const data = await response.json();
         trace.setPhase('completed');
-        await trace.emit('request_completed');
+        trace.emit('request_completed');
         return {
             ok: true,
             data
@@ -1085,7 +1085,7 @@ async function fetchJsonWithTimeout(url, requestOptions, timeoutMs, externalSign
                     ? '模型请求已被用户中断。'
                     : `模型请求超时（${timeoutMs}ms）`
                 : failure.error,
-            details: await trace.fail(error, aborted ? (abortedByExternalSignal ? 'aborted' : 'timeout') : failure.code,
+            details: trace.fail(error, aborted ? (abortedByExternalSignal ? 'aborted' : 'timeout') : failure.code,
                 controller.signal.aborted ? (abortedByExternalSignal ? 'external' : 'deadline') : '')
         };
     } finally {
@@ -1093,6 +1093,7 @@ async function fetchJsonWithTimeout(url, requestOptions, timeoutMs, externalSign
         if (typeof externalSignal?.removeEventListener === 'function') {
             externalSignal.removeEventListener('abort', onExternalAbort);
         }
+        await trace.flush();
     }
 }
 
@@ -1118,21 +1119,21 @@ async function fetchSseWithTimeout(
     }
 
     try {
-        await trace.emit('request_started');
+        trace.emit('request_started');
         const response = await fetch(url, {
             ...requestOptions,
             signal: controller.signal
         });
-        await trace.headers(response);
+        trace.headers(response);
         trace.setPhase('response_body');
-        await trace.emit('body_read_started');
+        trace.emit('body_read_started');
         if (!response.ok) {
             const errorText = await readErrorBody(response);
             return {
                 ok: false,
                 status: response.status,
                 error: errorText || `模型接口请求失败，状态码：${response.status}`,
-                details: await trace.fail(null, 'http_error')
+                details: trace.fail(null, 'http_error')
             };
         }
         const contentType = normalizeString(response.headers.get('content-type')).toLowerCase();
@@ -1144,14 +1145,14 @@ async function fetchSseWithTimeout(
                     ok: false,
                     code: 'invalid_json_response',
                     error: '模型接口返回了无法解析的 JSON。',
-                    details: await trace.fail(null, 'invalid_json_response')
+                    details: trace.fail(null, 'invalid_json_response')
                 };
             }
             if (typeof onData === 'function') {
                 await onData(JSON.stringify(parsedJson));
             }
             trace.setPhase('completed');
-            await trace.emit('request_completed');
+            trace.emit('request_completed');
             return { ok: true, compatibilityMode: 'json' };
         }
         if (!response.body) {
@@ -1159,7 +1160,7 @@ async function fetchSseWithTimeout(
                 ok: false,
                 code: 'stream_unavailable',
                 error: '模型接口没有返回可读取的流。',
-                details: await trace.fail(null, 'stream_unavailable')
+                details: trace.fail(null, 'stream_unavailable')
             };
         }
 
@@ -1201,7 +1202,7 @@ async function fetchSseWithTimeout(
             trace.addBytes(value.byteLength);
             if (firstChunk) {
                 firstChunk = false;
-                await trace.emit('first_body_chunk');
+                trace.emit('first_body_chunk');
             }
             buffer += decoder.decode(value, { stream: true });
             const lines = buffer.split(/\r?\n/);
@@ -1221,7 +1222,7 @@ async function fetchSseWithTimeout(
             await flushEvent();
         }
         trace.setPhase('completed');
-        await trace.emit('request_completed');
+        trace.emit('request_completed');
         return { ok: true };
     } catch (error) {
         const aborted = error?.name === 'AbortError';
@@ -1234,7 +1235,7 @@ async function fetchSseWithTimeout(
                     ? '模型请求已被用户中断。'
                     : `模型请求超时（${timeoutMs}ms）`
                 : failure.error,
-            details: await trace.fail(error, aborted ? (abortedByExternalSignal ? 'aborted' : 'timeout') : failure.code,
+            details: trace.fail(error, aborted ? (abortedByExternalSignal ? 'aborted' : 'timeout') : failure.code,
                 controller.signal.aborted ? (abortedByExternalSignal ? 'external' : 'deadline') : '')
         };
     } finally {
@@ -1242,6 +1243,7 @@ async function fetchSseWithTimeout(
         if (typeof externalSignal?.removeEventListener === 'function') {
             externalSignal.removeEventListener('abort', onExternalAbort);
         }
+        await trace.flush();
     }
 }
 

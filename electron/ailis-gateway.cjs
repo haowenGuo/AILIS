@@ -1901,46 +1901,38 @@ class AILISGateway extends EventEmitter {
         };
     }
 
-    updateMemoryBlock(key, value) {
-        return this.memoryRuntime?.updateBlock?.(key, value) || {
+    async runMemoryMutation(method, ...args) {
+        const memory = this.memoryRuntime;
+        const mutate = () => memory?.[method]?.(...args);
+        const result = await (memory?.withWriteLock ? memory.withWriteLock(mutate) : mutate());
+        return result || {
             ok: false,
             status: 'memory_not_configured'
         };
+    }
+
+    updateMemoryBlock(key, value) {
+        return this.runMemoryMutation('updateBlock', key, value);
     }
 
     resetMemoryAffinity(score) {
-        return this.memoryRuntime?.resetAffinity?.(score) || {
-            ok: false,
-            status: 'memory_not_configured'
-        };
+        return this.runMemoryMutation('resetAffinity', score);
     }
 
     clearMemory(payload = {}) {
-        return this.memoryRuntime?.clearMemory?.(payload) || {
-            ok: false,
-            status: 'memory_not_configured'
-        };
+        return this.runMemoryMutation('clearMemory', payload);
     }
 
     forgetMemory(payload = {}) {
-        return this.memoryRuntime?.forgetMemory?.(payload) || {
-            ok: false,
-            status: 'memory_not_configured'
-        };
+        return this.runMemoryMutation('forgetMemory', payload);
     }
 
     saveMemorySecret(payload = {}) {
-        return this.memoryRuntime?.saveSecret?.(payload) || {
-            ok: false,
-            status: 'memory_not_configured'
-        };
+        return this.runMemoryMutation('saveSecret', payload);
     }
 
     deleteMemorySecret(name) {
-        return this.memoryRuntime?.deleteSecret?.(name) || {
-            ok: false,
-            status: 'memory_not_configured'
-        };
+        return this.runMemoryMutation('deleteSecret', name);
     }
 
     async analyzeSelfEvolution(payload = {}) {
@@ -3169,7 +3161,8 @@ class AILISGateway extends EventEmitter {
         return finalRenderedText;
     }
 
-    async runUnifiedAgentTurn({ input, context, sessionId, runId, llmSettings, finalize = async (result) => result }) {
+    async runUnifiedAgentTurn({ input, context, sessionId, runId, llmSettings,
+        finalize = async (result, saveCheckpoint) => { await saveCheckpoint(result); return result; } }) {
         const runner = this.ensureAgentRunner();
         const active = this.activeUnifiedTurns.get(sessionId);
         if (input.interactionStart && active) return { ok: false, status: 'session_busy', error: '此会话已由其他入口占用，未把消息转投过去' };
@@ -3211,40 +3204,35 @@ class AILISGateway extends EventEmitter {
             return this.runUnifiedAgentTurn({ input, context, sessionId, runId, llmSettings, finalize });
         }
 
-        const releaseSession = this.sessionContextStore.acquireSession(sessionId);
-        let checkpoint;
-        try {
-            checkpoint = this.sessionContextStore.getCheckpoint(sessionId);
+        const effectiveRunId = normalizeString(runId, `agent_${randomUUID()}`);
+        const record = { runId: effectiveRunId, promise: null, finalizing: false };
+        let releaseSession;
+        // Publish ownership before any asynchronous disk or model work.
+        this.activeUnifiedTurns.set(sessionId, record);
+        record.promise = Promise.resolve().then(async () => {
+            releaseSession = await this.sessionContextStore.acquireSessionAsync(sessionId);
+            let checkpoint = await this.sessionContextStore.getCheckpointAsync(sessionId);
             if (!checkpoint) {
                 // Import one execution history, not two independently rewritten
                 // histories. Old stores remain intact as read-only migration sources.
                 const legacyTask = this.taskAgentHarness?.getThread?.(sessionId);
                 checkpoint = legacyTask?.contextCheckpoint || this.getPersonaContextCheckpoint(sessionId);
                 if (checkpoint) {
-                    this.sessionContextStore.commitCheckpoint(sessionId, checkpoint, {
+                    await this.sessionContextStore.commitCheckpointAsync(sessionId, checkpoint, {
                         migratedFrom: legacyTask?.contextCheckpoint ? 'task-agent-harness' : 'persona-context'
                     });
                 }
             }
-        } catch (error) {
-            releaseSession();
-            throw error;
-        }
-        const effectiveRunId = normalizeString(runId, `agent_${randomUUID()}`);
-        const effectiveContext = {
-            ...context,
-            runId: effectiveRunId, sessionId, sessionKey: sessionId,
-            agentRole: 'unified_agent', contextMode: 'unified', unifiedAgent: true,
-            agentLoop: 'llm', planner: 'llm',
-            unifiedGatewayOwnsFinalization: true,
-            taskAgentRoutingOwned: false, taskAgentRoutePending: false,
-            personaRenderOnly: false, personaDraft: false,
-            initialContextManagerCheckpoint: checkpoint
-        };
-        const record = { runId: effectiveRunId, promise: null, finalizing: false };
-        // Publish ownership before starting asynchronous model work.
-        this.activeUnifiedTurns.set(sessionId, record);
-        record.promise = Promise.resolve().then(async () => {
+            const effectiveContext = {
+                ...context,
+                runId: effectiveRunId, sessionId, sessionKey: sessionId,
+                agentRole: 'unified_agent', contextMode: 'unified', unifiedAgent: true,
+                agentLoop: 'llm', planner: 'llm',
+                unifiedGatewayOwnsFinalization: true,
+                taskAgentRoutingOwned: false, taskAgentRoutePending: false,
+                personaRenderOnly: false, personaDraft: false,
+                initialContextManagerCheckpoint: checkpoint
+            };
             const result = await runner.runMessage({
                 ...input,
                 runId: effectiveRunId, sessionId,
@@ -3255,27 +3243,28 @@ class AILISGateway extends EventEmitter {
                 ...(llmSettings ? { llmSettings } : {}),
                 initialContextManagerCheckpoint: checkpoint,
                 onModelInputContextCheckpoint: async (next, metadata) => {
-                    this.sessionContextStore.commitCheckpoint(sessionId, next, { runId: effectiveRunId });
+                    await this.sessionContextStore.commitCheckpointAsync(sessionId, next, { runId: effectiveRunId });
                     await input.onModelInputContextCheckpoint?.(next, metadata);
                 },
                 context: effectiveContext
             });
             record.finalizing = true;
-            const delivered = await finalize(result);
-            const finalCheckpoint = this.extractPersonaResultCheckpoint(result);
-            if (finalCheckpoint && !input.abortSignal?.aborted) {
+            return await finalize(result, async (delivered) => {
+                const finalCheckpoint = this.extractPersonaResultCheckpoint(result);
+                if (!finalCheckpoint || input.abortSignal?.aborted) return;
                 if (delivered?.status === 'blocked' && result?.status !== 'blocked') {
                     finalCheckpoint.items.push({ type: 'message', role: 'developer', content: [{
                         type: 'input_text', text: 'The preceding final response was blocked by the output safety gate and was not delivered. Do not treat it as a successful answer or repeat it.'
                     }] });
                 }
-                this.sessionContextStore.commitCheckpoint(sessionId, finalCheckpoint, { runId: effectiveRunId });
+                await this.sessionContextStore.commitCheckpointAsync(sessionId, finalCheckpoint, { runId: effectiveRunId });
+            });
+        }).finally(async () => {
+            try {
+                await releaseSession?.();
+            } finally {
+                if (this.activeUnifiedTurns.get(sessionId) === record) this.activeUnifiedTurns.delete(sessionId);
             }
-            // No Persona model, TaskResult rewrite, or second visible answer.
-            return delivered;
-        }).finally(() => {
-            if (this.activeUnifiedTurns.get(sessionId) === record) this.activeUnifiedTurns.delete(sessionId);
-            releaseSession();
         });
         return record.promise;
     }
@@ -3335,7 +3324,7 @@ class AILISGateway extends EventEmitter {
             context.llm && typeof context.llm === 'object' ? context.llm :
             null
         );
-        const finalize = async (result) => {
+        const finalize = async (result, saveCheckpoint = async () => {}) => {
             // External transports may cancel before/after the runner registers its controller.
             // A late model answer must not be delivered or recorded as a successful memory.
             if (input.abortSignal?.aborted) {
@@ -3364,6 +3353,7 @@ class AILISGateway extends EventEmitter {
                 result?.message
             );
             if (!finalText) {
+                await saveCheckpoint(result);
                 emitControlledRunFinished(result || {});
                 return {
                     ...result,
@@ -3394,6 +3384,7 @@ class AILISGateway extends EventEmitter {
                     displayText: '最终回答已被 EMBER-Harness 阶段门控阻断，系统已回退到最近稳定阶段快照。',
                     speechText: '最终回答已被安全门控阻断。'
                 };
+                await saveCheckpoint(blockedResult);
                 emitControlledRunFinished(blockedResult);
                 return {
                     ...blockedResult,
@@ -3414,7 +3405,7 @@ class AILISGateway extends EventEmitter {
                 });
             }
             if (unifiedOwnsTurn) {
-                this.ensureAgentRunner().recordMemoryTurn?.({
+                await this.ensureAgentRunner().recordMemoryTurn?.({
                     request: { ...input, context: { ...context, agentRole: 'unified_agent',
                         unifiedAgent: true, personaRenderOnly: false, personaDraft: false,
                         unifiedGatewayOwnsFinalization: false } },
@@ -3422,6 +3413,9 @@ class AILISGateway extends EventEmitter {
                         ? '' : input.message || input.prompt || input.task || '', sessionId,
                     source: 'unified_agent'
                 });
+            }
+            await saveCheckpoint(result);
+            if (unifiedOwnsTurn) {
                 this.emitGatewayEvent('agent.message.completed', {
                     runId: result?.runId || runId, sessionId, status: result?.status,
                     ok: result?.ok === true, text: finalText, speechText: result?.speechText || finalText,

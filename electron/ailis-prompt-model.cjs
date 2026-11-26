@@ -51,7 +51,7 @@ const Prompt = Object.freeze({
         const normalized = this.create(prompt);
         const payload = {
             instructions: String(normalized.base_instructions.text || ''),
-            input: this.getFormattedInput(normalized),
+            input: includePromptObject ? this.getFormattedInput(normalized) : normalized.input,
             tools: normalized.tools,
             tool_choice: toolChoice,
             parallel_tool_calls: normalized.parallel_tool_calls

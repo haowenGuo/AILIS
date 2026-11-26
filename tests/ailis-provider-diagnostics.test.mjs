@@ -100,6 +100,40 @@ test('normal SSE and JSON-compatible streams record completion without per-token
     assert.ok(events.length<=10);
 });
 
+test('a slow diagnostic write does not hold the first delta, but is drained before completion', { timeout: 5000 }, async t => {
+    const events = [];
+    let entered, release, received;
+    const blocked = new Promise((resolve) => { entered = resolve; });
+    const unlocked = new Promise((resolve) => { release = resolve; });
+    const firstDelta = new Promise((resolve) => { received = resolve; });
+    t.mock.method(globalThis, 'fetch', async () => new Response(
+        'data: {"choices":[{"delta":{"content":"OK"}}]}\n\ndata: [DONE]\n\n',
+        { headers: { 'content-type': 'text/event-stream' } }
+    ));
+    let done = false;
+    const request = callDesktopLlmProvider(settings, {
+        messages,
+        onTextDelta: received,
+        onProviderRequestEvent: async ({ event }) => {
+            events.push(event);
+            if (event === 'first_body_chunk') {
+                entered();
+                await unlocked;
+            }
+        }
+    }).finally(() => { done = true; });
+    try {
+        await blocked;
+        assert.equal(await firstDelta, 'OK');
+        assert.equal(done, false);
+        assert.equal(events.at(-1), 'first_body_chunk');
+    } finally {
+        release();
+        assert.equal((await request).ok, true);
+    }
+    assert.deepEqual(events, ['request_started', 'response_headers', 'body_read_started', 'first_body_chunk', 'request_completed']);
+});
+
 test('caller cancellation remains aborted and records external abort source', async t => {
     const controller=new AbortController(),events=[];
     t.mock.method(globalThis,'fetch',async(_url,{signal})=>new Promise((_resolve,reject)=>{

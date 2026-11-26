@@ -96,14 +96,17 @@ test('compaction replaces canonical history and Sessions do not overwrite each o
     assert.deepEqual(restarted.getCheckpoint('a'), compacted);
     assert.match(JSON.stringify(restarted.getCheckpoint('b')), /other session/);
     assert.equal(restarted.getStatus().sessionCount, 2);
-    const release = store.acquireSession('a');
-    assert.throws(() => restarted.acquireSession('a'), { code: 'AILIS_SESSION_BUSY' });
-    release();
-    restarted.acquireSession('a')();
+    const release = await store.acquireSessionAsync('a');
+    await assert.rejects(restarted.acquireSessionAsync('a'), { code: 'AILIS_SESSION_BUSY' });
+    await release();
+    await (await restarted.acquireSessionAsync('a'))();
     const exited = spawnSync(process.execPath, ['-e', ''], { windowsHide: true });
     assert.equal(exited.status, 0);
     await fs.writeFile(`${store.sessionPath('a')}.lock`, JSON.stringify({ pid: exited.pid, token: 'dead-test-owner' }));
-    restarted.acquireSession('a')();
+    await (await restarted.acquireSessionAsync('a'))();
+    await fs.writeFile(`${store.sessionPath('a')}.lock`, '');
+    await assert.rejects(restarted.acquireSessionAsync('a'), { code: 'AILIS_SESSION_BUSY' });
+    assert.equal(await fs.readFile(`${store.sessionPath('a')}.lock`, 'utf8'), '');
     await fs.writeFile(store.sessionPath('bad'), '{invalid');
     assert.throws(() => restarted.getCheckpoint('bad'), SyntaxError);
 });
@@ -173,13 +176,104 @@ test('failure releases ownership but preserves the last durable checkpoint', asy
 test('checkpoint storage failure stops before a model call and clears runner ownership', async (t) => {
     const { gateway } = await fixture(t);
     const runner = gateway.ensureAgentRunner();
-    gateway.sessionContextStore.commitCheckpoint = () => { throw new Error('storage unavailable'); };
+    gateway.sessionContextStore.commitCheckpointAsync = async () => { throw new Error('storage unavailable'); };
     await assert.rejects(gateway.runAgent({ message: 'test', sessionId: 's', agentRole: 'unified_agent',
         llmSettings: { provider: 'openai-compatible', baseUrl: 'http://127.0.0.1:9/v1', apiKey: 'local-test', model: 'test-model' }
     }), /storage unavailable/);
     assert.equal(runner.activeRuns.size, 0);
     assert.equal(gateway.activeUnifiedTurns.size, 0);
     assert.equal(gateway.eventLog.some((e) => e.type === 'agent.llm_call.started'), false);
+});
+
+test('a blocked final write delays only its Session, without sending early completion', { timeout: 5000 }, async (t) => {
+    const { gateway } = await fixture(t);
+    const writing = deferred(), allowWrite = deferred();
+    const store = gateway.sessionContextStore;
+    const commit = store.commitCheckpointAsync.bind(store);
+    store.commitCheckpointAsync = async (sessionId, next, metadata) => {
+        if (metadata.runId === 'a1' && next.items.at(-1)?.role === 'assistant') {
+            writing.resolve();
+            await allowWrite.promise;
+        }
+        return commit(sessionId, next, metadata);
+    };
+    gateway.ensureAgentRunner = () => ({ runMessage: async (request) => {
+        const items = [...(request.initialContextManagerCheckpoint?.items || []), messageItem('user', request.message)];
+        await request.onModelInputContextCheckpoint(checkpoint(...items));
+        await request.onTextDelta(request.runId);
+        return completed(request, request.runId, checkpoint(...items, messageItem('assistant', request.runId)));
+    } });
+    const deltas = [];
+    const run = (id, sessionId) => gateway.runAgent({ message: id, runId: id, sessionId, agentRole: 'main',
+        onTextDelta: (text) => deltas.push(text) });
+    const terminal = () => gateway.eventLog.filter((event) => event.type === 'agent.run.finished' || event.type === 'agent.message.completed');
+    const a1 = run('a1', 'a');
+    let a2;
+    try {
+        await Promise.race([writing.promise, a1.then(() => { throw new Error('a1 completed before saving'); })]);
+        a2 = run('a2', 'a');
+        assert.equal((await run('b1', 'b')).ok, true);
+        assert.deepEqual(deltas, ['a1', 'b1']);
+        assert.ok(terminal().length > 0);
+        assert.equal(terminal().some((event) => event.payload.sessionId === 'a'), false);
+        assert.equal(store.getCheckpoint('a').items.at(-1).role, 'user');
+        assert.equal(store.getCheckpoint('b').items.at(-1).content[0].text, 'b1');
+    } finally {
+        allowWrite.resolve();
+        await Promise.all([a1, a2]);
+    }
+    assert.deepEqual(deltas, ['a1', 'b1', 'a2']);
+    assert.deepEqual(store.getCheckpoint('a').items.filter((item) => item.role === 'assistant')
+        .map((item) => item.content[0].text), ['a1', 'a2']);
+});
+
+test('a rejected final write does not report a completed reply', async (t) => {
+    const { gateway } = await fixture(t);
+    gateway.ensureAgentRunner = () => ({ runMessage: async (request) =>
+        completed(request, 'reply', checkpoint(messageItem('assistant', 'reply'))) });
+    gateway.sessionContextStore.commitCheckpointAsync = async () => { throw new Error('disk full'); };
+    await assert.rejects(gateway.runAgent({ message: 'hello', sessionId: 's', agentRole: 'main' }), /disk full/);
+    assert.equal(gateway.eventLog.some((event) => event.type === 'agent.message.completed' || event.type === 'agent.run.finished'), false);
+    assert.equal(gateway.activeUnifiedTurns.size, 0);
+});
+
+test('overlapping transcript writes and their raw mirrors preserve sequence', { timeout: 5000 }, async (t) => {
+    const { gateway } = await fixture(t);
+    const entered = deferred(), resume = deferred();
+    const raw = gateway.rawMemoryLedger;
+    const append = raw.recordRuntimeItemAsync.bind(raw);
+    raw.recordRuntimeItemAsync = async (item) => {
+        if (item.seq === 1) { entered.resolve(); await resume.promise; }
+        return append(item);
+    };
+    const report = (label) => gateway.runtime.appendItem('log-test', { sessionId: 's', type: 'test.log', payload: { label } });
+    const a = report('first');
+    const b = report('second');
+    const readItems = async () => (await fs.readFile(gateway.runtime.runs.get('log-test').transcriptPath, 'utf8'))
+        .trim().split('\n').map(JSON.parse);
+    try {
+        await Promise.race([entered.promise, a.then(() => { throw new Error('log emitted before raw mirror'); })]);
+        assert.deepEqual((await readItems()).map((item) => item.seq), [1]);
+        assert.equal(gateway.eventLog.some((event) => event.type === 'runtime.item'), false);
+    } finally {
+        resume.resolve();
+        await Promise.all([a, b]);
+    }
+    assert.deepEqual((await readItems()).map((item) => item.payload.label), ['first', 'second']);
+    assert.deepEqual(raw.replay({ runId: 'log-test' }).entries.map((entry) => entry.payload.seq).sort(), [1, 2]);
+});
+
+test('memory writes keep the journal and snapshot in order before reporting success', async (t) => {
+    const { gateway } = await fixture(t);
+    const memory = gateway.memoryRuntime;
+    const write = (userMessage) => memory.recordTurnAsync({ sessionId: 's', userMessage, assistantMessage: 'reply' });
+    const [a, b, edit] = await Promise.all([write('first'), write('second'), gateway.updateMemoryBlock('user', 'manual')]);
+    assert.equal(edit.ok, true);
+    const events = (await fs.readFile(memory.eventsPath, 'utf8')).trim().split('\n').map(JSON.parse);
+    const state = JSON.parse(await fs.readFile(memory.statePath, 'utf8'));
+    assert.deepEqual(events.map((event) => event.id), [a.event.id, b.event.id]);
+    assert.deepEqual(state.events.map((event) => event.userText), ['first', 'second']);
+    assert.equal(state.blocks.user.value, 'manual');
 });
 
 test('input gate stops before creating a unified writer or invoking an agent', async (t) => {

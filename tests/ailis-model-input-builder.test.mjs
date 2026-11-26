@@ -1153,6 +1153,30 @@ test('ContextManager records ResponseItems and normalizes orphan outputs before 
     assert.match(FunctionCallOutputPayload.toText(promptItems[1].output), /did not produce an output/);
 });
 
+test('targeted history reads and text projections keep the canonical checkpoint detached', () => {
+    const history = new ContextManager({ items: [
+        { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'first' }] },
+        { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'reply' }] },
+        { type: 'message', role: 'user', content: [
+            { type: 'input_text', text: 'inspect this' },
+            { type: 'input_image', image_url: 'data:image/png;base64,AA==' }
+        ] }
+    ] });
+    const before = history.toCheckpoint();
+    assert.equal(history.itemCount, 3);
+    assert.equal(history.anyItem((item) => item.role === 'assistant'), true);
+    const selected = history.findLastItem((item) => item.role === 'user');
+    assert.equal(selected.content[0].text, 'inspect this');
+    selected.content[0].text = 'changed selection';
+    const textOnly = history.forPromptPackage({ inputModalities: ['text'] }).recentResponseItems;
+    assert.deepEqual(textOnly.slice(0, 2), before.items.slice(0, 2));
+    assert.equal(textOnly.at(-1).content.some((part) => part.type === 'input_image'), false);
+    textOnly[0].content[0].text = 'changed projection';
+    const withImages = history.forPromptPackage({ inputModalities: ['text', 'image'] }).recentResponseItems;
+    assert.deepEqual(withImages, before.items);
+    assert.deepEqual(history.toCheckpoint(), before);
+});
+
 test('ContextManager checkpoint round-trips Codex ContextManager history', () => {
     const history = new ContextManager();
     history.recordItems(toolOutputToModelInputItems({
@@ -1423,6 +1447,18 @@ test('Prompt model preserves Codex-shaped request fields', () => {
     assert.equal(payload.input[0].type, 'message');
     assert.equal(payload.tools[0].name, 'artifact_tools');
     assert.deepEqual(payload.prompt, prompt);
+});
+
+test('a wire-only prompt has the same contents and does not share its source input', () => {
+    const prompt = Prompt.create({
+        input: [ResponseItem.message({ role: 'user', text: 'before' })]
+    });
+    const { prompt: includedPrompt, ...withPrompt } = Prompt.toRequestPayload(prompt, { includePromptObject: true });
+    const wire = Prompt.toRequestPayload(prompt);
+    assert.deepEqual(wire, withPrompt);
+    wire.input[0].content[0].text = 'changed';
+    assert.equal(prompt.input[0].content[0].text, 'before');
+    assert.equal(includedPrompt.input[0].content[0].text, 'before');
 });
 
 test('ContextManager installs CompactedItem replacement_history as canonical history', () => {

@@ -73,7 +73,9 @@ function permissionText(item) {
 function appendPermissionsUpdate(contextManager, context) {
     const item = buildPermissionsInstructionItem(context);
     if (!item || typeof contextManager?.recordItems !== 'function') return { appended: false, mode: 'unavailable' };
-    const previous = [...contextManager.rawItems()].reverse().find(entry => permissionText(entry));
+    const previous = typeof contextManager.findLastItem === 'function'
+        ? contextManager.findLastItem(permissionText)
+        : contextManager.rawItems().findLast(permissionText);
     if (permissionText(previous) === permissionText(item)) return { appended: false, mode: 'unchanged' };
     contextManager.recordItems([item]);
     return { appended: true, mode: previous ? 'update' : 'initial' };

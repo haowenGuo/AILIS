@@ -1,11 +1,16 @@
 const fs = require('fs');
+const fsp = require('fs/promises');
 const path = require('path');
 const { randomUUID } = require('crypto');
+const { SerialWriteQueue } = require('./ailis-async-writes.cjs');
 
 const RAW_MEMORY_LEDGER_VERSION = 1;
+const INDEX_CHECKPOINT_VERSION = 1;
+const INDEX_READ_CHUNK = 64 * 1024;
 const DEFAULT_REPLAY_LIMIT = 200;
 const MAX_REPLAY_LIMIT = 5000;
 const REDACTED = '__REDACTED__';
+const journalWrites = new SerialWriteQueue();
 
 function nowIso() {
     return new Date().toISOString();
@@ -73,9 +78,14 @@ function toJsonSafe(value, seen = new WeakSet()) {
 
 function atomicWriteJsonSync(filePath, value) {
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
-    const tmpPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
-    fs.writeFileSync(tmpPath, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
-    fs.renameSync(tmpPath, filePath);
+    const tmpPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
+    try {
+        fs.writeFileSync(tmpPath, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
+        fs.renameSync(tmpPath, filePath);
+    } catch (error) {
+        try { fs.unlinkSync(tmpPath); } catch {}
+        throw error;
+    }
 }
 
 function readJsonSync(filePath, fallback) {
@@ -112,6 +122,68 @@ function compareIso(a, b) {
     return String(a?.iso || a?.ts || '').localeCompare(String(b?.iso || b?.ts || ''));
 }
 
+function journalStamp(stat) {
+    return { identity: `${stat.dev}:${stat.ino}`, size: Number(stat.size), mtime: String(stat.mtimeNs) };
+}
+
+function scanJournalTail(filePath, start, stamp, onEntry) {
+    if (start === stamp.size) return start;
+    const fd = fs.openSync(filePath, 'r');
+    let position = start;
+    let committed = start;
+    let pieces = [];
+    try {
+        const opened = journalStamp(fs.fstatSync(fd, { bigint: true }));
+        if (opened.identity !== stamp.identity || opened.size < stamp.size) {
+            throw new Error('raw_memory_journal_changed_during_index_scan');
+        }
+        while (position < stamp.size) {
+            const buffer = Buffer.allocUnsafe(Math.min(INDEX_READ_CHUNK, stamp.size - position));
+            const length = fs.readSync(fd, buffer, 0, buffer.length, position);
+            if (!length) throw new Error('raw_memory_journal_changed_during_index_scan');
+            const bytes = buffer.subarray(0, length);
+            let begin = 0;
+            while (begin < length) {
+                const newline = bytes.indexOf(10, begin);
+                if (newline < 0) {
+                    pieces.push(bytes.subarray(begin));
+                    break;
+                }
+                const segment = bytes.subarray(begin, newline);
+                const line = pieces.length ? Buffer.concat([...pieces, segment]) : segment;
+                const entry = parseJsonLine(line.toString('utf8'));
+                if (entry && typeof entry.id === 'string' && typeof entry.iso === 'string') onEntry(entry);
+                pieces = [];
+                committed = position + newline + 1;
+                begin = newline + 1;
+            }
+            position += length;
+        }
+        return committed;
+    } finally {
+        fs.closeSync(fd);
+    }
+}
+
+function recoverableIndex(index, rootDir) {
+    const checkpoint = index?.indexCheckpoint;
+    if (index?.rootDir !== rootDir || checkpoint?.version !== INDEX_CHECKPOINT_VERSION
+            || checkpoint.entryCount !== index.entryCount || !checkpoint.files
+            || !index.days || !index.sessions || !index.runs) return null;
+    let entries = 0;
+    for (const file of Object.values(checkpoint.files)) {
+        if (!file || !Number.isSafeInteger(file.offset) || !Number.isSafeInteger(file.size)
+                || !Number.isSafeInteger(file.entries) || file.offset < 0 || file.offset > file.size || file.entries < 0
+                || typeof file.identity !== 'string' || typeof file.mtime !== 'string') return null;
+        entries += file.entries;
+    }
+    return entries === index.entryCount ? index : null;
+}
+
+function mapCopy(value) {
+    return Object.assign(Object.create(null), value);
+}
+
 class AILISRawMemoryLedger {
     constructor(options = {}) {
         this.workspaceRoot = path.resolve(options.workspaceRoot || process.cwd());
@@ -119,15 +191,14 @@ class AILISRawMemoryLedger {
         this.entriesDir = path.join(this.rootDir, 'entries');
         this.indexPath = path.join(this.rootDir, 'index.json');
         this.lastError = '';
+        this.lastIndexError = '';
+        this.index = null;
         this.initialize();
     }
 
     initialize() {
         try {
             fs.mkdirSync(this.entriesDir, { recursive: true });
-            if (!fs.existsSync(this.indexPath)) {
-                atomicWriteJsonSync(this.indexPath, createDefaultIndex(this.rootDir));
-            }
             this.loaded = true;
         } catch (error) {
             this.loaded = false;
@@ -140,27 +211,68 @@ class AILISRawMemoryLedger {
     }
 
     readIndex() {
-        const index = readJsonSync(this.indexPath, createDefaultIndex(this.rootDir));
-        return {
-            ...createDefaultIndex(this.rootDir),
-            ...index,
-            days: index.days && typeof index.days === 'object' ? index.days : {},
-            sessions: index.sessions && typeof index.sessions === 'object' ? index.sessions : {},
-            runs: index.runs && typeof index.runs === 'object' ? index.runs : {}
-        };
+        if (!this.loaded) return createDefaultIndex(this.rootDir);
+        try {
+            return this.refreshIndex();
+        } catch (error) {
+            this.lastIndexError = error?.message || String(error);
+            return this.index ?? createDefaultIndex(this.rootDir);
+        }
     }
 
     persistIndex(index) {
-        atomicWriteJsonSync(this.indexPath, {
-            ...index,
-            version: RAW_MEMORY_LEDGER_VERSION,
-            rootDir: this.rootDir,
-            updatedAt: nowIso()
-        });
+        try {
+            atomicWriteJsonSync(this.indexPath, index);
+            this.lastIndexError = '';
+        } catch (error) {
+            this.lastIndexError = error?.message || String(error);
+        }
     }
 
-    updateIndex(entry, day, entryPath) {
-        const index = this.readIndex();
+    refreshIndex() {
+        // Only complete journal lines are authoritative. Older snapshots may be discarded and rebuilt.
+        let saved = this.index ?? recoverableIndex(readJsonSync(this.indexPath, null), this.rootDir);
+        const files = new Map(this.listEntryFiles(true).map(filePath => [path.basename(filePath), {
+            filePath, ...journalStamp(fs.statSync(filePath, { bigint: true }))
+        }]));
+        let previous = saved?.indexCheckpoint.files ?? {};
+        if (saved && Object.keys(previous).some(name => {
+            const file = files.get(name);
+            const old = previous[name];
+            return !file || file.identity !== old.identity || file.size < old.size
+                || (file.size === old.size && file.mtime !== old.mtime);
+        })) {
+            saved = null;
+            previous = {};
+        }
+        if (saved && [...files].every(([name, file]) => previous[name]?.size === file.size)) {
+            this.index = saved;
+            if (this.lastIndexError) this.persistIndex(saved);
+            return saved;
+        }
+
+        const index = { ...createDefaultIndex(this.rootDir), ...saved,
+            days: mapCopy(saved?.days), sessions: mapCopy(saved?.sessions), runs: mapCopy(saved?.runs) };
+        const positions = mapCopy(previous);
+        for (const [name, stamp] of files) {
+            const old = previous[name];
+            if (old?.size === stamp.size) continue;
+            let entries = old?.entries ?? 0;
+            const offset = scanJournalTail(stamp.filePath, old?.offset ?? 0, stamp, entry => {
+                this.updateIndex(index, entry, entry.iso.slice(0, 10), stamp.filePath);
+                entries += 1;
+            });
+            const { identity, size, mtime } = stamp;
+            positions[name] = { identity, size, mtime, offset, entries };
+        }
+        index.indexCheckpoint = { version: INDEX_CHECKPOINT_VERSION, entryCount: index.entryCount, files: positions };
+        index.updatedAt = nowIso();
+        this.index = index;
+        this.persistIndex(index);
+        return index;
+    }
+
+    updateIndex(index, entry, day, entryPath) {
         index.entryCount = Number(index.entryCount || 0) + 1;
         index.days[day] = {
             day,
@@ -186,6 +298,7 @@ class AILISRawMemoryLedger {
                 lastIso: entry.iso
             };
         }
+        if (index.lastEntry && compareIso(entry, index.lastEntry) < 0) return;
         index.lastEntry = {
             id: entry.id,
             iso: entry.iso,
@@ -195,17 +308,11 @@ class AILISRawMemoryLedger {
             runId: entry.runId,
             path: entryPath
         };
-        this.persistIndex(index);
     }
 
-    appendEntry(entry = {}) {
-        if (!this.loaded) {
-            return { ok: false, status: 'not_loaded', error: this.lastError };
-        }
+    normalizeEntry(entry) {
         const iso = normalizeString(entry.iso || entry.ts, nowIso());
-        const day = iso.slice(0, 10);
-        const entryPath = this.getDayFile(day);
-        const normalized = {
+        return {
             id: normalizeString(entry.id, randomUUID()),
             version: RAW_MEMORY_LEDGER_VERSION,
             iso,
@@ -218,10 +325,23 @@ class AILISRawMemoryLedger {
             payload: toJsonSafe(entry.payload || {}),
             meta: toJsonSafe(entry.meta || {})
         };
+    }
+
+    appendEntry(entry = {}) {
+        if (!this.loaded) {
+            return { ok: false, status: 'not_loaded', error: this.lastError };
+        }
+        const normalized = this.normalizeEntry(entry);
+        const entryPath = this.getDayFile(normalized.iso.slice(0, 10));
         try {
-            fs.mkdirSync(path.dirname(entryPath), { recursive: true });
-            fs.appendFileSync(entryPath, `${JSON.stringify(normalized)}\n`, 'utf8');
-            this.updateIndex(normalized, day, entryPath);
+            const line = `${JSON.stringify(normalized)}\n`;
+            try {
+                fs.appendFileSync(entryPath, line, 'utf8');
+            } catch (error) {
+                if (error?.code !== 'ENOENT') throw error;
+                fs.mkdirSync(this.entriesDir, { recursive: true });
+                fs.appendFileSync(entryPath, line, 'utf8');
+            }
             return { ok: true, entry: normalized, path: entryPath };
         } catch (error) {
             this.lastError = error?.message || String(error);
@@ -229,7 +349,31 @@ class AILISRawMemoryLedger {
         }
     }
 
-    recordChatTurn({
+    async appendEntryAsync(entry = {}) {
+        if (!this.loaded) {
+            return { ok: false, status: 'not_loaded', error: this.lastError };
+        }
+        const normalized = this.normalizeEntry(entry);
+        const entryPath = this.getDayFile(normalized.iso.slice(0, 10));
+        const line = `${JSON.stringify(normalized)}\n`;
+        return journalWrites.run(entryPath, async () => {
+            try {
+                try {
+                    await fsp.appendFile(entryPath, line, 'utf8');
+                } catch (error) {
+                    if (error?.code !== 'ENOENT') throw error;
+                    await fsp.mkdir(this.entriesDir, { recursive: true });
+                    await fsp.appendFile(entryPath, line, 'utf8');
+                }
+                return { ok: true, entry: normalized, path: entryPath };
+            } catch (error) {
+                this.lastError = error?.message || String(error);
+                return { ok: false, status: 'append_failed', error: this.lastError };
+            }
+        });
+    }
+
+    buildChatTurnEntry({
         sessionId = 'main',
         source = 'direct_llm',
         requestPayload = {},
@@ -237,7 +381,7 @@ class AILISRawMemoryLedger {
         result = {},
         durationMs = null
     } = {}) {
-        return this.appendEntry({
+        return {
             type: 'chat.llm_turn',
             source,
             sessionId,
@@ -250,27 +394,44 @@ class AILISRawMemoryLedger {
             meta: {
                 durationMs
             }
-        });
+        };
     }
 
-    recordRuntimeItem(transcriptItem = {}) {
-        return this.appendEntry({
+    recordChatTurn(turn) {
+        return this.appendEntry(this.buildChatTurnEntry(turn));
+    }
+
+    recordChatTurnAsync(turn) {
+        return this.appendEntryAsync(this.buildChatTurnEntry(turn));
+    }
+
+    buildRuntimeItemEntry(transcriptItem = {}) {
+        return {
             type: 'agent.transcript.item',
             source: 'agent_runtime',
             sessionId: transcriptItem.sessionId || 'main',
             runId: transcriptItem.runId || '',
             category: 'agent',
             payload: transcriptItem
-        });
+        };
     }
 
-    listEntryFiles() {
+    recordRuntimeItem(transcriptItem) {
+        return this.appendEntry(this.buildRuntimeItemEntry(transcriptItem));
+    }
+
+    recordRuntimeItemAsync(transcriptItem) {
+        return this.appendEntryAsync(this.buildRuntimeItemEntry(transcriptItem));
+    }
+
+    listEntryFiles(strict = false) {
         try {
             return fs.readdirSync(this.entriesDir, { withFileTypes: true })
                 .filter((entry) => entry.isFile() && /\.jsonl$/i.test(entry.name))
                 .map((entry) => path.join(this.entriesDir, entry.name))
                 .sort();
-        } catch {
+        } catch (error) {
+            if (strict) throw error;
             return [];
         }
     }
@@ -379,7 +540,8 @@ class AILISRawMemoryLedger {
             sessionCount: Object.keys(index.sessions || {}).length,
             runCount: Object.keys(index.runs || {}).length,
             lastEntry: index.lastEntry || null,
-            lastError: this.lastError
+            lastError: this.lastError,
+            indexError: this.lastIndexError
         };
     }
 

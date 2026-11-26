@@ -554,7 +554,8 @@ class AilisSelfEvolutionRuntime {
         if (!nextValue) {
             return { status: 'invalid_proposal', reason: 'missing next memory value' };
         }
-        const update = this.memoryRuntime.updateBlock(blockKey, nextValue);
+        const mutate = () => this.memoryRuntime.updateBlock(blockKey, nextValue);
+        const update = await (this.memoryRuntime.withWriteLock ? this.memoryRuntime.withWriteLock(mutate) : mutate());
         return {
             status: update?.ok === false ? 'failed' : 'completed',
             blockKey,
